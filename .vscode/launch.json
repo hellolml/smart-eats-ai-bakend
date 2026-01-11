@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI (Uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--reload",
+        "--log-level",
+        "debug"
+      ],
+      "envFile": "${workspaceFolder}/.env",
+      "jinja": true
+    },
+    {
+      "name": "FastAPI (Uvicorn, no reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--log-level",
+        "debug"
+      ],
+      "envFile": "${workspaceFolder}/.env",
+      "jinja": true
+    }
+  ]
+}

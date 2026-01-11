@@ -1,0 +1,960 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart Eats Chat</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap");
+
+      :root {
+        color-scheme: light;
+        --bg: #f4f1ed;
+        --paper: #ffffff;
+        --ink: #151515;
+        --muted: #6c6c6c;
+        --accent: #1c1b1a;
+        --line: #e6e1dc;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: radial-gradient(circle at top left, #ffffff 0%, #f4f1ed 55%, #ece7e1 100%);
+        color: var(--ink);
+        font-family: "Crimson Pro", "Times New Roman", serif;
+      }
+
+      header {
+        padding: 20px 28px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+        position: sticky;
+        top: 0;
+        backdrop-filter: blur(6px);
+      }
+
+      header strong {
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 16px;
+        letter-spacing: 0.04em;
+      }
+
+      header .status {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .layout {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 24px 24px 32px;
+        display: grid;
+        gap: 18px;
+        grid-template-columns: 280px minmax(0, 1fr);
+        min-height: calc(100vh - 80px);
+      }
+
+      .sidebar {
+        background: #fbfaf8;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .sidebar h3 {
+        margin: 0;
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 13px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .panel {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-height: 200px;
+      }
+
+      .panel h2 {
+        margin: 0;
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.2em;
+        color: var(--muted);
+      }
+
+      .messages {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        min-height: 360px;
+        max-height: 420px;
+        overflow-y: auto;
+        padding-right: 6px;
+      }
+
+      .bubble {
+        padding: 14px 16px;
+        border-radius: 16px;
+        line-height: 1.45;
+        font-size: 16px;
+        white-space: pre-wrap;
+        max-width: 75%;
+      }
+
+      .bubble.user {
+        align-self: flex-end;
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .bubble.ai {
+        align-self: flex-start;
+        background: #f2efe9;
+        color: var(--ink);
+      }
+
+      .composer {
+        display: grid;
+        gap: 10px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 90px;
+        resize: vertical;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 14px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .more-menu {
+        position: relative;
+        display: inline-flex;
+      }
+
+      .more-button {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: #fff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        cursor: pointer;
+        color: var(--ink);
+      }
+
+      .more-panel {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 10px;
+        box-shadow: 0 20px 40px rgba(18, 18, 18, 0.08);
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 180px;
+        z-index: 20;
+      }
+
+      .more-panel.open {
+        display: flex;
+      }
+
+      .more-panel button {
+        width: 100%;
+        text-align: left;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #f8f5f1;
+        color: var(--ink);
+        text-transform: none;
+        letter-spacing: 0.02em;
+        font-size: 12px;
+      }
+
+      .checkpoint-controls {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .checkpoint-controls select,
+      .checkpoint-controls button {
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 12px;
+        border-radius: 10px;
+      }
+
+      .checkpoint-controls select {
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        min-width: 200px;
+      }
+
+      button {
+        border-radius: 10px;
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+        padding: 10px 14px;
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #fff;
+        color: var(--accent);
+      }
+
+      .stream-box,
+      .log-box {
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 12px;
+        background: #111010;
+        color: #f0eee9;
+        border-radius: 12px;
+        padding: 12px;
+        min-height: 160px;
+        white-space: pre-wrap;
+        overflow-y: auto;
+      }
+
+      .log-box {
+        background: #1a1918;
+      }
+
+      .meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .model-picker {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        position: relative;
+        max-width: 320px;
+      }
+
+      .history {
+        display: grid;
+        gap: 8px;
+      }
+
+      .history-list {
+        display: grid;
+        gap: 6px;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .history-item {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 8px 10px;
+        cursor: pointer;
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 12px;
+        color: var(--ink);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .history-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .history-actions button {
+        padding: 4px 6px;
+        font-size: 10px;
+        letter-spacing: 0.06em;
+      }
+
+      .history-item small {
+        color: var(--muted);
+      }
+
+      .history-item.active {
+        background: #f6f2ed;
+        border-color: #e1d7cd;
+      }
+
+      .history-footer {
+        display: flex;
+        justify-content: flex-start;
+      }
+
+      .history-search input {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px;
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 12px;
+      }
+
+      .model-label {
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .picker-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: #fff;
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+        font-size: 14px;
+        color: var(--ink);
+        cursor: pointer;
+      }
+
+      .picker-button span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .picker-chevron {
+        width: 10px;
+        height: 10px;
+        border-right: 1.6px solid var(--muted);
+        border-bottom: 1.6px solid var(--muted);
+        transform: rotate(45deg);
+        margin-top: -2px;
+      }
+
+      .picker-menu {
+        position: absolute;
+        top: calc(100% + 8px);
+        left: 0;
+        width: 100%;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        box-shadow: 0 20px 40px rgba(18, 18, 18, 0.08);
+        padding: 8px;
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+        z-index: 10;
+      }
+
+      .picker-menu.open {
+        display: flex;
+      }
+
+      .picker-item {
+        border-radius: 12px;
+        padding: 10px 12px;
+        cursor: pointer;
+        display: grid;
+        gap: 4px;
+        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      }
+
+      .picker-item:hover {
+        background: #f6f2ed;
+      }
+
+      .picker-item strong {
+        font-size: 14px;
+        color: var(--ink);
+      }
+
+      .picker-item small {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .picker-item.active {
+        background: #f0ebe3;
+        border: 1px solid #e1d7cd;
+      }
+
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Smart Eats Chat</strong>
+      <div class="status" id="status">Idle</div>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <button id="new-session-sidebar" class="secondary" type="button">New Chat</button>
+        <div class="history-search">
+          <input id="history-search" placeholder="Search chat titles" />
+        </div>
+        <div class="history">
+          <h3>Your Chats</h3>
+          <div class="history-list" id="history-list"></div>
+          <div class="history-footer">
+            <button id="load-more" class="secondary" type="button">Load More</button>
+          </div>
+        </div>
+      </aside>
+      <div class="content">
+        <section class="panel">
+          <h2>Chat</h2>
+          <div class="model-picker" id="model-picker">
+            <div class="model-label">Model</div>
+            <button class="picker-button" id="picker-button" type="button">
+              <span id="picker-label">Auto</span>
+              <span class="picker-chevron"></span>
+            </button>
+            <div class="picker-menu" id="picker-menu"></div>
+          </div>
+          <div class="messages" id="messages"></div>
+          <div class="composer">
+            <textarea id="message" placeholder="Ask about dinner ideas"></textarea>
+            <div class="actions">
+              <button id="send">Send</button>
+              <button id="stop" class="secondary">Stop</button>
+              <div class="more-menu">
+                <button id="more-button" class="more-button" type="button">⋯</button>
+                <div class="more-panel" id="more-panel">
+                  <button id="pause" type="button">Pause</button>
+                  <button id="resume" type="button">Resume</button>
+                  <button id="replay" type="button">Replay</button>
+                  <button id="new-session" type="button">New Session</button>
+                  <button id="clear" type="button">Clear</button>
+                </div>
+              </div>
+            </div>
+            <div class="checkpoint-controls">
+              <select id="checkpoint-select">
+                <option value="">No checkpoint</option>
+              </select>
+              <button id="refresh-checkpoints" class="secondary" type="button">Refresh</button>
+            </div>
+          </div>
+          <div class="meta" id="session">Session: -</div>
+        </section>
+        <section class="panel">
+          <h2>Stream</h2>
+          <div class="stream-box" id="stream"></div>
+          <h2>Log</h2>
+          <div class="log-box" id="log"></div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const messagesEl = document.getElementById("messages");
+      const logEl = document.getElementById("log");
+      const streamEl = document.getElementById("stream");
+      const statusEl = document.getElementById("status");
+      const messageEl = document.getElementById("message");
+      const pickerButton = document.getElementById("picker-button");
+      const pickerMenu = document.getElementById("picker-menu");
+      const pickerLabel = document.getElementById("picker-label");
+      const historyListEl = document.getElementById("history-list");
+      const loadMoreBtn = document.getElementById("load-more");
+      const historySearchEl = document.getElementById("history-search");
+      const newSessionSidebarBtn = document.getElementById("new-session-sidebar");
+      const sendBtn = document.getElementById("send");
+      const stopBtn = document.getElementById("stop");
+      const moreBtn = document.getElementById("more-button");
+      const morePanel = document.getElementById("more-panel");
+      const pauseBtn = document.getElementById("pause");
+      const resumeBtn = document.getElementById("resume");
+      const replayBtn = document.getElementById("replay");
+      const newSessionBtn = document.getElementById("new-session");
+      const clearBtn = document.getElementById("clear");
+      const sessionEl = document.getElementById("session");
+      const checkpointSelect = document.getElementById("checkpoint-select");
+      const refreshCheckpointsBtn = document.getElementById("refresh-checkpoints");
+
+      let sessionId = null;
+      let abortController = null;
+      let selectedProvider = null;
+      let historyOffset = 0;
+      const historyLimit = 10;
+      let historyQuery = "";
+      let resumeNext = false;
+
+      function addMessage(role, text) {
+        const div = document.createElement("div");
+        div.className = `bubble ${role}`;
+        div.textContent = text;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
+      }
+
+      function log(line) {
+        logEl.textContent += line + "\n";
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function stream(line) {
+        streamEl.textContent += line;
+        streamEl.scrollTop = streamEl.scrollHeight;
+      }
+
+      async function createSession() {
+        const resp = await fetch("/api/v1/chat/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        const payload = await resp.json();
+        sessionId = payload.data.session_id;
+        sessionEl.textContent = `Session: ${sessionId}`;
+        historyOffset = 0;
+        await loadHistory(true);
+        await loadCheckpoints(sessionId);
+        return sessionId;
+      }
+
+      async function streamChat(options = {}) {
+        if (!sessionId) {
+          await createSession();
+        }
+
+        abortController = new AbortController();
+        statusEl.textContent = `Streaming ${sessionId}`;
+
+        const userText = messageEl.value.trim();
+        if (userText) {
+          addMessage("user", userText);
+        }
+        messageEl.value = "";
+        const aiBubble = addMessage("ai", "");
+        streamEl.textContent = "";
+
+        const resumeFlag = options.resume ?? resumeNext;
+        const replayFlag = options.replay ?? false;
+        const checkpointId = options.checkpointId ?? (replayFlag ? checkpointSelect.value : "");
+        const resumePayload = resumeFlag
+          ? {
+              message: userText || undefined,
+            }
+          : null;
+
+        const resp = await fetch(`/api/v1/chat/sessions/${sessionId}/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: userText,
+            provider: selectedProvider,
+            resume: resumeFlag,
+            checkpoint_id: checkpointId || null,
+            replay: replayFlag,
+            resume_payload: resumePayload,
+          }),
+          signal: abortController.signal,
+        });
+        resumeNext = false;
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop();
+          for (const part of parts) {
+            const lines = part.split("\n");
+            let event = "message";
+            let data = "";
+            for (const line of lines) {
+              if (line.startsWith("event:")) event = line.slice(6).trim();
+              if (line.startsWith("data:")) data = line.slice(5).trim();
+            }
+
+            if (event === "delta") {
+              let text = data;
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed && typeof parsed.token === "string") {
+                  text = parsed.token;
+                }
+              } catch (err) {
+                text = data.replace(/^\"|\"$/g, "");
+              }
+              aiBubble.textContent += text;
+              stream(text);
+            } else if (event === "paused") {
+              statusEl.textContent = "Paused";
+              log(`[paused] ${data}`);
+            } else if (event === "final") {
+              statusEl.textContent = "Completed";
+              try {
+                const parsed = JSON.parse(data);
+                const isFallback = parsed?.answer?.recommendations?.some(
+                  (item) => item?.reason === "fallback"
+                );
+                if (isFallback) {
+                  log("[final][fallback] request used fallback response");
+                }
+              } catch (err) {
+                // ignore parse errors
+              }
+              log(`[final] ${data}`);
+            } else {
+              log(`[${event}] ${data}`);
+            }
+          }
+        }
+        await loadHistory(true);
+        await loadCheckpoints(sessionId);
+      }
+
+      async function stopChat() {
+        if (!sessionId) return;
+        await fetch(`/api/v1/chat/sessions/${sessionId}/stop`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        statusEl.textContent = "Stop requested";
+        if (abortController) abortController.abort();
+      }
+
+      async function pauseChat() {
+        if (!sessionId) return;
+        await fetch(`/api/v1/chat/sessions/${sessionId}/pause`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        statusEl.textContent = "Pause requested";
+        if (abortController) abortController.abort();
+      }
+
+      sendBtn.addEventListener("click", async () => {
+        try {
+          await streamChat();
+        } catch (err) {
+          log(`error: ${err}`);
+          statusEl.textContent = "Error";
+        }
+      });
+
+      messageEl.addEventListener("keydown", async (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          try {
+            await streamChat();
+          } catch (err) {
+            log(`error: ${err}`);
+            statusEl.textContent = "Error";
+          }
+        }
+      });
+
+      stopBtn.addEventListener("click", async () => {
+        await stopChat();
+      });
+
+      moreBtn.addEventListener("click", () => {
+        morePanel.classList.toggle("open");
+      });
+
+      document.addEventListener("click", (event) => {
+        if (!moreBtn.contains(event.target) && !morePanel.contains(event.target)) {
+          morePanel.classList.remove("open");
+        }
+      });
+
+      pauseBtn.addEventListener("click", async () => {
+        await pauseChat();
+        morePanel.classList.remove("open");
+      });
+
+      resumeBtn.addEventListener("click", async () => {
+        try {
+          await streamChat({ resume: true });
+        } catch (err) {
+          log(`error: ${err}`);
+          statusEl.textContent = "Error";
+        }
+        morePanel.classList.remove("open");
+      });
+
+      replayBtn.addEventListener("click", async () => {
+        try {
+          if (!checkpointSelect.value) {
+            log("Please pick a checkpoint to replay.");
+            return;
+          }
+          await streamChat({ replay: true });
+        } catch (err) {
+          log(`error: ${err}`);
+          statusEl.textContent = "Error";
+        }
+        morePanel.classList.remove("open");
+      });
+
+      newSessionBtn.addEventListener("click", async () => {
+        sessionId = null;
+        sessionEl.textContent = "Session: -";
+        statusEl.textContent = "Idle";
+        messagesEl.textContent = "";
+        resumeNext = false;
+        await loadCheckpoints(null);
+        morePanel.classList.remove("open");
+      });
+
+      newSessionSidebarBtn.addEventListener("click", async () => {
+        sessionId = null;
+        sessionEl.textContent = "Session: -";
+        statusEl.textContent = "Idle";
+        messagesEl.textContent = "";
+        resumeNext = false;
+        await loadCheckpoints(null);
+      });
+
+      clearBtn.addEventListener("click", () => {
+        messagesEl.textContent = "";
+        logEl.textContent = "";
+        streamEl.textContent = "";
+        morePanel.classList.remove("open");
+      });
+
+      async function loadProviders() {
+        try {
+          const resp = await fetch("/api/v1/chat/providers");
+          const data = await resp.json();
+          const providers = data?.data?.providers || [];
+          const options = [
+            { value: "qwen", label: "Auto", hint: "Default: Qwen" },
+            ...providers.map((name) => {
+              const label = name === "openai" ? "OpenAI" : name === "deepseek" ? "DeepSeek" : name === "qwen" ? "Qwen" : name;
+              return { value: name, label, hint: `Provider: ${name}` };
+            }),
+          ];
+
+          pickerMenu.innerHTML = "";
+          options.forEach((item) => {
+            const entry = document.createElement("div");
+            entry.className = "picker-item";
+            entry.dataset.value = item.value ?? "";
+            entry.innerHTML = `<strong>${item.label}</strong><small>${item.hint}</small>`;
+            entry.addEventListener("click", () => {
+              selectedProvider = item.value;
+              pickerLabel.textContent = item.label;
+              document.querySelectorAll(".picker-item").forEach((node) => {
+                node.classList.toggle("active", node === entry);
+              });
+              pickerMenu.classList.remove("open");
+            });
+            pickerMenu.appendChild(entry);
+          });
+          if (!selectedProvider) {
+            selectedProvider = "qwen";
+            pickerLabel.textContent = "Auto";
+          }
+          pickerMenu.firstChild?.classList.add("active");
+        } catch (err) {
+          log(`error: ${err}`);
+        }
+      }
+
+      pickerButton.addEventListener("click", () => {
+        pickerMenu.classList.toggle("open");
+      });
+
+      document.addEventListener("click", (event) => {
+        if (!pickerButton.contains(event.target) && !pickerMenu.contains(event.target)) {
+          pickerMenu.classList.remove("open");
+        }
+      });
+
+      function formatTime(value) {
+        if (!value) return "";
+        if (value.includes("T")) {
+          const core = value.split(/[.+Z]/)[0];
+          return core.replace("T", " ");
+        }
+        return value;
+      }
+
+      async function loadHistory(reset = false) {
+        try {
+          if (reset) {
+            historyOffset = 0;
+            historyListEl.innerHTML = "";
+          }
+          const query = historyQuery ? `&q=${encodeURIComponent(historyQuery)}` : "";
+          const resp = await fetch(`/api/v1/chat/sessions?limit=${historyLimit}&offset=${historyOffset}${query}`);
+          const data = await resp.json();
+          const sessions = data?.data?.sessions || [];
+          sessions.forEach((item) => {
+            const entry = document.createElement("div");
+            entry.className = "history-item";
+            const title = item.title || "新会话";
+            entry.innerHTML = `
+              <div>${title}</div>
+              <small>${formatTime(item.created_at)}</small>
+              <div class="history-actions">
+                <button class="secondary" data-action="rename">Rename</button>
+                <button class="secondary" data-action="delete">Delete</button>
+              </div>
+            `;
+            entry.addEventListener("click", async () => {
+              sessionId = item.session_id;
+              sessionEl.textContent = `Session: ${sessionId}`;
+              resumeNext = true;
+              document.querySelectorAll(".history-item").forEach((node) => {
+                node.classList.toggle("active", node === entry);
+              });
+              await loadMessages(sessionId);
+              await loadCheckpoints(sessionId);
+            });
+            entry.querySelector("[data-action=\"rename\"]").addEventListener("click", async (event) => {
+              event.stopPropagation();
+              const title = prompt("New title", item.title || "");
+              if (title === null) return;
+              await renameSession(item.session_id, title);
+              historyOffset = 0;
+              historyListEl.innerHTML = "";
+              await loadHistory(true);
+            });
+            entry.querySelector("[data-action=\"delete\"]").addEventListener("click", async (event) => {
+              event.stopPropagation();
+              const ok = confirm("Delete this session?");
+              if (!ok) return;
+              await deleteSession(item.session_id);
+              if (sessionId === item.session_id) {
+                sessionId = null;
+                sessionEl.textContent = "Session: -";
+                messagesEl.textContent = "";
+              }
+              historyOffset = 0;
+              historyListEl.innerHTML = "";
+              await loadHistory(true);
+            });
+            historyListEl.appendChild(entry);
+          });
+          historyOffset += sessions.length;
+        } catch (err) {
+          log(`error: ${err}`);
+        }
+      }
+
+      async function loadMessages(id) {
+        try {
+          const resp = await fetch(`/api/v1/chat/sessions/${id}/messages?limit=100&offset=0`);
+          const data = await resp.json();
+          const messages = data?.data?.messages || [];
+          messagesEl.textContent = "";
+          messages.forEach((msg) => {
+            if (!msg.content) return;
+            const role = msg.role === "assistant" ? "ai" : "user";
+            addMessage(role, msg.content);
+          });
+        } catch (err) {
+          log(`error: ${err}`);
+        }
+      }
+
+      async function loadCheckpoints(id) {
+        if (!id) {
+          checkpointSelect.innerHTML = `<option value="">No checkpoint</option>`;
+          return;
+        }
+        try {
+          const resp = await fetch(`/api/v1/chat/sessions/${id}/checkpoints`);
+          const data = await resp.json();
+          const items = data?.data?.checkpoints || [];
+          checkpointSelect.innerHTML = `<option value="">Latest checkpoint</option>`;
+          items.forEach((item) => {
+            if (!item.checkpoint_id) return;
+            const option = document.createElement("option");
+            option.value = item.checkpoint_id;
+            option.textContent = `${item.checkpoint_id.slice(0, 8)} • ${formatTime(
+              item.created_at || ""
+            )}`;
+            checkpointSelect.appendChild(option);
+          });
+        } catch (err) {
+          log(`error: ${err}`);
+        }
+      }
+
+      async function renameSession(id, title) {
+        await fetch(`/api/v1/chat/sessions/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title }),
+        });
+      }
+
+      async function deleteSession(id) {
+        await fetch(`/api/v1/chat/sessions/${id}`, {
+          method: "DELETE",
+        });
+      }
+
+      loadMoreBtn.addEventListener("click", async () => {
+        await loadHistory();
+      });
+
+      historySearchEl.addEventListener("input", async () => {
+        historyQuery = historySearchEl.value.trim();
+        await loadHistory(true);
+      });
+
+      refreshCheckpointsBtn.addEventListener("click", async () => {
+        await loadCheckpoints(sessionId);
+      });
+
+      loadHistory(true);
+      loadProviders();
+    </script>
+  </body>
+</html>
