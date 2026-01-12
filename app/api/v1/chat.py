@@ -9,11 +9,9 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agent.checkpoint import checkpointer_context
-from app.agent.factory import build_agent_graph
 from app.agent.graph import run_chat_stream
-from app.agent.agent_registry import get_agent_config
 from app.agent.state import ChatState
+from app.agent import memory
 from app.api.deps import db_dep, get_optional_user_id, redis_dep
 from app.common.config import settings
 from app.common.errors import envelope
@@ -30,20 +28,10 @@ class ChatStreamRequest(BaseModel):
     client_context_overrides: dict[str, Any] | None = None
     provider: str | None = None
     agent_type: str | None = None
-    resume: bool = False
-    checkpoint_id: str | None = None
-    replay: bool = False
-    resume_payload: dict[str, Any] | None = None
 
 
 class SessionUpdateRequest(BaseModel):
     title: str | None = None
-
-
-class UpdateStateRequest(BaseModel):
-    values: dict[str, Any]
-    as_node: str | None = None
-    checkpoint_id: str | None = None
 
 
 @router.get("/providers")
@@ -155,6 +143,7 @@ async def delete_session(
     session_id: str,
     request: Request,
     db: db_dep,
+    redis: redis_dep,
 ):
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     result = await db.execute(stmt)
@@ -164,6 +153,7 @@ async def delete_session(
         return envelope({"deleted": False}, trace_id, code=40401, message="not found")
     session.deleted_at = datetime.utcnow()
     await db.commit()
+    await memory.clear_session_cache(redis, session_id)
     trace_id = getattr(request.state, "trace_id", "")
     return envelope({"deleted": True}, trace_id)
 
@@ -208,129 +198,6 @@ async def stop_session(session_id: str, request: Request, redis: redis_dep):
     return envelope({"stopped": True}, trace_id)
 
 
-@router.post("/sessions/{session_id}/pause")
-async def pause_session(session_id: str, request: Request, redis: redis_dep):
-    key = f"chat:pause:{session_id}"
-    await redis.setex(key, settings.CHAT_PAUSE_TTL, "1")
-    trace_id = getattr(request.state, "trace_id", "")
-    return envelope({"paused": True}, trace_id)
-
-
-@router.get("/sessions/{session_id}/checkpoints")
-async def list_checkpoints(
-    session_id: str,
-    request: Request,
-    db: db_dep,
-    redis: redis_dep,
-    provider: str | None = Query(None),
-    agent_type: str | None = Query(None),
-):
-    async with checkpointer_context() as checkpointer:
-        if not checkpointer:
-            trace_id = getattr(request.state, "trace_id", "")
-            return envelope({"checkpoints": []}, trace_id)
-        agent_config = get_agent_config(agent_type)
-        graph = build_agent_graph(
-            db=db,
-            redis_client=redis,
-            agent_config=agent_config,
-            provider=provider,
-        ).compile(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": session_id}}
-        if hasattr(graph, "aget_state_history"):
-            history = [item async for item in graph.aget_state_history(config)]
-        else:
-            history = list(graph.get_state_history(config))
-    data = []
-    for item in history:
-        created_at = getattr(item, "created_at", None)
-        if created_at is not None and not hasattr(created_at, "isoformat"):
-            created_at = str(created_at)
-        created_at_value = created_at.isoformat() if hasattr(created_at, "isoformat") else created_at
-        checkpoint_id = item.config.get("configurable", {}).get("checkpoint_id")
-        data.append(
-            {
-                "checkpoint_id": checkpoint_id,
-                "created_at": created_at_value,
-                "next": list(item.next) if getattr(item, "next", None) is not None else [],
-                "metadata": item.metadata,
-            }
-        )
-    trace_id = getattr(request.state, "trace_id", "")
-    return envelope({"checkpoints": data}, trace_id)
-
-
-@router.get("/sessions/{session_id}/state")
-async def get_checkpoint_state(
-    session_id: str,
-    request: Request,
-    db: db_dep,
-    redis: redis_dep,
-    provider: str | None = Query(None),
-    agent_type: str | None = Query(None),
-    checkpoint_id: str | None = Query(None),
-):
-    async with checkpointer_context() as checkpointer:
-        if not checkpointer:
-            trace_id = getattr(request.state, "trace_id", "")
-            return envelope({"state": None}, trace_id)
-        agent_config = get_agent_config(agent_type)
-        graph = build_agent_graph(
-            db=db,
-            redis_client=redis,
-            agent_config=agent_config,
-            provider=provider,
-        ).compile(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": session_id}}
-        if checkpoint_id:
-            config["configurable"]["checkpoint_id"] = checkpoint_id
-        if hasattr(graph, "aget_state"):
-            snapshot = await graph.aget_state(config)
-        else:
-            snapshot = graph.get_state(config)
-    payload = {
-        "values": snapshot.values if snapshot else None,
-        "next": list(snapshot.next) if snapshot and snapshot.next else [],
-        "checkpoint_id": snapshot.config.get("configurable", {}).get("checkpoint_id")
-        if snapshot
-        else None,
-        "metadata": snapshot.metadata if snapshot else None,
-    }
-    trace_id = getattr(request.state, "trace_id", "")
-    return envelope({"state": payload}, trace_id)
-
-
-@router.post("/sessions/{session_id}/state")
-async def update_checkpoint_state(
-    session_id: str,
-    request: Request,
-    payload: UpdateStateRequest,
-    db: db_dep,
-    redis: redis_dep,
-    provider: str | None = Query(None),
-    agent_type: str | None = Query(None),
-):
-    async with checkpointer_context() as checkpointer:
-        if not checkpointer:
-            trace_id = getattr(request.state, "trace_id", "")
-            return envelope({"updated": False}, trace_id)
-        agent_config = get_agent_config(agent_type)
-        graph = build_agent_graph(
-            db=db,
-            redis_client=redis,
-            agent_config=agent_config,
-            provider=provider,
-        ).compile(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": session_id}}
-        if payload.checkpoint_id:
-            config["configurable"]["checkpoint_id"] = payload.checkpoint_id
-        result = graph.update_state(config, payload.values, as_node=payload.as_node)
-        if hasattr(result, "__await__"):
-            await result
-    trace_id = getattr(request.state, "trace_id", "")
-    return envelope({"updated": True}, trace_id)
-
-
 @router.post("/sessions/{session_id}/stream")
 async def stream_session(
     session_id: str,
@@ -357,10 +224,6 @@ async def stream_session(
         context_overrides=payload.client_context_overrides,
         provider=payload.provider,
         agent_type=payload.agent_type,
-        resume_from_checkpoint=payload.resume,
-        checkpoint_ref=payload.checkpoint_id,
-        replay_from_checkpoint=payload.replay,
-        resume_payload=payload.resume_payload,
     )
 
     async def event_stream() -> AsyncGenerator[str, None]:

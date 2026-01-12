@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_TTL_SECONDS: int = 7 * 24 * 60 * 60
 
     CHAT_CANCEL_TTL: int = 600
+    CHAT_HISTORY_LIMIT: int = 30
+    CHAT_HISTORY_CACHE_LIMIT: int = 120
+    CHAT_HISTORY_CACHE_TTL_SECONDS: int = 300
+    CHAT_HISTORY_LOCAL_CACHE_SIZE: int = 256
+    CHAT_HISTORY_LOCAL_CACHE_TTL_SECONDS: int = 30
+    CHAT_HISTORY_CACHE_MODE: str = "local_validate"
+    CHAT_SUMMARY_TRIGGER: int = 24
+    CHAT_SUMMARY_TAIL: int = 8
+    CHAT_SUMMARY_TTL_SECONDS: int = 3600
+    CHAT_SUMMARY_QUEUE: str = "queue:chat_summary"
     CONTEXT_SNAPSHOT_TTL_SECONDS: int = 600
     MINIO_BUCKET: str = "smart-eats"
     MINIO_BASE_PATH: str = ".minio_stub"
@@ -50,6 +60,7 @@ class Settings(BaseSettings):
     AGENT_MAX_STEPS: int = 4
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"
+    LANGGRAPH_CHECKPOINT_BACKEND: str = "sqlite"
     CHAT_PAUSE_TTL: int = 600
 
 

@@ -154,77 +154,8 @@
         align-items: center;
       }
 
-      .more-menu {
-        position: relative;
-        display: inline-flex;
-      }
-
-      .more-button {
-        width: 40px;
-        height: 40px;
-        border-radius: 12px;
-        border: 1px solid var(--line);
-        background: #fff;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 18px;
-        cursor: pointer;
-        color: var(--ink);
-      }
-
-      .more-panel {
-        position: absolute;
-        top: calc(100% + 8px);
-        right: 0;
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 10px;
-        box-shadow: 0 20px 40px rgba(18, 18, 18, 0.08);
-        display: none;
-        flex-direction: column;
-        gap: 8px;
-        min-width: 180px;
-        z-index: 20;
-      }
-
-      .more-panel.open {
-        display: flex;
-      }
-
-      .more-panel button {
-        width: 100%;
-        text-align: left;
+      .secondary.small {
         padding: 8px 10px;
-        border-radius: 10px;
-        border: 1px solid var(--line);
-        background: #f8f5f1;
-        color: var(--ink);
-        text-transform: none;
-        letter-spacing: 0.02em;
-        font-size: 12px;
-      }
-
-      .checkpoint-controls {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-
-      .checkpoint-controls select,
-      .checkpoint-controls button {
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 12px;
-        border-radius: 10px;
-      }
-
-      .checkpoint-controls select {
-        padding: 8px 10px;
-        border: 1px solid var(--line);
-        background: #fff;
-        min-width: 200px;
       }
 
       button {
@@ -462,22 +393,8 @@
             <div class="actions">
               <button id="send">Send</button>
               <button id="stop" class="secondary">Stop</button>
-              <div class="more-menu">
-                <button id="more-button" class="more-button" type="button">⋯</button>
-                <div class="more-panel" id="more-panel">
-                  <button id="pause" type="button">Pause</button>
-                  <button id="resume" type="button">Resume</button>
-                  <button id="replay" type="button">Replay</button>
-                  <button id="new-session" type="button">New Session</button>
-                  <button id="clear" type="button">Clear</button>
-                </div>
-              </div>
-            </div>
-            <div class="checkpoint-controls">
-              <select id="checkpoint-select">
-                <option value="">No checkpoint</option>
-              </select>
-              <button id="refresh-checkpoints" class="secondary" type="button">Refresh</button>
+              <button id="new-session" class="secondary small" type="button">New Session</button>
+              <button id="clear" class="secondary small" type="button">Clear</button>
             </div>
           </div>
           <div class="meta" id="session">Session: -</div>
@@ -506,16 +423,9 @@
       const newSessionSidebarBtn = document.getElementById("new-session-sidebar");
       const sendBtn = document.getElementById("send");
       const stopBtn = document.getElementById("stop");
-      const moreBtn = document.getElementById("more-button");
-      const morePanel = document.getElementById("more-panel");
-      const pauseBtn = document.getElementById("pause");
-      const resumeBtn = document.getElementById("resume");
-      const replayBtn = document.getElementById("replay");
       const newSessionBtn = document.getElementById("new-session");
       const clearBtn = document.getElementById("clear");
       const sessionEl = document.getElementById("session");
-      const checkpointSelect = document.getElementById("checkpoint-select");
-      const refreshCheckpointsBtn = document.getElementById("refresh-checkpoints");
 
       let sessionId = null;
       let abortController = null;
@@ -523,7 +433,6 @@
       let historyOffset = 0;
       const historyLimit = 10;
       let historyQuery = "";
-      let resumeNext = false;
 
       function addMessage(role, text) {
         const div = document.createElement("div");
@@ -554,11 +463,10 @@
         sessionEl.textContent = `Session: ${sessionId}`;
         historyOffset = 0;
         await loadHistory(true);
-        await loadCheckpoints(sessionId);
         return sessionId;
       }
 
-      async function streamChat(options = {}) {
+      async function streamChat() {
         if (!sessionId) {
           await createSession();
         }
@@ -574,29 +482,15 @@
         const aiBubble = addMessage("ai", "");
         streamEl.textContent = "";
 
-        const resumeFlag = options.resume ?? resumeNext;
-        const replayFlag = options.replay ?? false;
-        const checkpointId = options.checkpointId ?? (replayFlag ? checkpointSelect.value : "");
-        const resumePayload = resumeFlag
-          ? {
-              message: userText || undefined,
-            }
-          : null;
-
         const resp = await fetch(`/api/v1/chat/sessions/${sessionId}/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message: userText,
             provider: selectedProvider,
-            resume: resumeFlag,
-            checkpoint_id: checkpointId || null,
-            replay: replayFlag,
-            resume_payload: resumePayload,
           }),
           signal: abortController.signal,
         });
-        resumeNext = false;
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder("utf-8");
@@ -629,9 +523,6 @@
               }
               aiBubble.textContent += text;
               stream(text);
-            } else if (event === "paused") {
-              statusEl.textContent = "Paused";
-              log(`[paused] ${data}`);
             } else if (event === "final") {
               statusEl.textContent = "Completed";
               try {
@@ -652,7 +543,6 @@
           }
         }
         await loadHistory(true);
-        await loadCheckpoints(sessionId);
       }
 
       async function stopChat() {
@@ -662,16 +552,6 @@
           headers: { "Content-Type": "application/json" },
         });
         statusEl.textContent = "Stop requested";
-        if (abortController) abortController.abort();
-      }
-
-      async function pauseChat() {
-        if (!sessionId) return;
-        await fetch(`/api/v1/chat/sessions/${sessionId}/pause`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
-        statusEl.textContent = "Pause requested";
         if (abortController) abortController.abort();
       }
 
@@ -700,53 +580,11 @@
         await stopChat();
       });
 
-      moreBtn.addEventListener("click", () => {
-        morePanel.classList.toggle("open");
-      });
-
-      document.addEventListener("click", (event) => {
-        if (!moreBtn.contains(event.target) && !morePanel.contains(event.target)) {
-          morePanel.classList.remove("open");
-        }
-      });
-
-      pauseBtn.addEventListener("click", async () => {
-        await pauseChat();
-        morePanel.classList.remove("open");
-      });
-
-      resumeBtn.addEventListener("click", async () => {
-        try {
-          await streamChat({ resume: true });
-        } catch (err) {
-          log(`error: ${err}`);
-          statusEl.textContent = "Error";
-        }
-        morePanel.classList.remove("open");
-      });
-
-      replayBtn.addEventListener("click", async () => {
-        try {
-          if (!checkpointSelect.value) {
-            log("Please pick a checkpoint to replay.");
-            return;
-          }
-          await streamChat({ replay: true });
-        } catch (err) {
-          log(`error: ${err}`);
-          statusEl.textContent = "Error";
-        }
-        morePanel.classList.remove("open");
-      });
-
       newSessionBtn.addEventListener("click", async () => {
         sessionId = null;
         sessionEl.textContent = "Session: -";
         statusEl.textContent = "Idle";
         messagesEl.textContent = "";
-        resumeNext = false;
-        await loadCheckpoints(null);
-        morePanel.classList.remove("open");
       });
 
       newSessionSidebarBtn.addEventListener("click", async () => {
@@ -754,15 +592,12 @@
         sessionEl.textContent = "Session: -";
         statusEl.textContent = "Idle";
         messagesEl.textContent = "";
-        resumeNext = false;
-        await loadCheckpoints(null);
       });
 
       clearBtn.addEventListener("click", () => {
         messagesEl.textContent = "";
         logEl.textContent = "";
         streamEl.textContent = "";
-        morePanel.classList.remove("open");
       });
 
       async function loadProviders() {
@@ -848,12 +683,10 @@
             entry.addEventListener("click", async () => {
               sessionId = item.session_id;
               sessionEl.textContent = `Session: ${sessionId}`;
-              resumeNext = true;
               document.querySelectorAll(".history-item").forEach((node) => {
                 node.classList.toggle("active", node === entry);
               });
               await loadMessages(sessionId);
-              await loadCheckpoints(sessionId);
             });
             entry.querySelector("[data-action=\"rename\"]").addEventListener("click", async (event) => {
               event.stopPropagation();
@@ -902,30 +735,6 @@
         }
       }
 
-      async function loadCheckpoints(id) {
-        if (!id) {
-          checkpointSelect.innerHTML = `<option value="">No checkpoint</option>`;
-          return;
-        }
-        try {
-          const resp = await fetch(`/api/v1/chat/sessions/${id}/checkpoints`);
-          const data = await resp.json();
-          const items = data?.data?.checkpoints || [];
-          checkpointSelect.innerHTML = `<option value="">Latest checkpoint</option>`;
-          items.forEach((item) => {
-            if (!item.checkpoint_id) return;
-            const option = document.createElement("option");
-            option.value = item.checkpoint_id;
-            option.textContent = `${item.checkpoint_id.slice(0, 8)} • ${formatTime(
-              item.created_at || ""
-            )}`;
-            checkpointSelect.appendChild(option);
-          });
-        } catch (err) {
-          log(`error: ${err}`);
-        }
-      }
-
       async function renameSession(id, title) {
         await fetch(`/api/v1/chat/sessions/${id}`, {
           method: "PATCH",
@@ -947,10 +756,6 @@
       historySearchEl.addEventListener("input", async () => {
         historyQuery = historySearchEl.value.trim();
         await loadHistory(true);
-      });
-
-      refreshCheckpointsBtn.addEventListener("click", async () => {
-        await loadCheckpoints(sessionId);
       });
 
       loadHistory(true);
