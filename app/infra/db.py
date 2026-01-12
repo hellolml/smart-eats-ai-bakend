@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import StaticPool, NullPool
+from sqlalchemy import event
 
 from app.common.config import settings
 from app.infra.models.base import Base
@@ -18,7 +19,26 @@ def _create_engine():
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+    if url.startswith("sqlite+aiosqlite"):
+        engine = create_async_engine(
+            url,
+            pool_pre_ping=True,
+            echo=False,
+            connect_args={"timeout": 30},
+            poolclass=NullPool,
+        )
+        _register_sqlite_pragmas(engine)
+        return engine
     return create_async_engine(url, pool_pre_ping=True, echo=False)
+
+
+def _register_sqlite_pragmas(engine) -> None:
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA busy_timeout=30000;")
+        cursor.close()
 
 
 engine = _create_engine()

@@ -28,4 +28,7 @@ class ChatState:
     checkpoint_ref: str | None = None
     replay_from_checkpoint: bool = False
     resume_payload: dict[str, Any] | None = None
+    last_user_message: str | None = None
+    user_message_logged: bool = False
+    history: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)

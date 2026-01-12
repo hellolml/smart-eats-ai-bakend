@@ -32,6 +32,7 @@ from app.agent.tools_registry import get_tool, list_tools, preview_result
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
 from app.domain.context.service import ContextService
+from app.agent import memory
 from app.infra.models.chat import ChatMessage, ChatSession
 
 logger = logging.getLogger("agent")
@@ -146,9 +147,41 @@ def build_langgraph(
             )
             state.context = _build_context(state)
             state.steps_left = agent_config.max_steps
-            await _ensure_chat_session(db, state)
-            await _log_user_message(db, state)
             state.events.append({"event": "context", "data": state.context})
+
+        await _ensure_chat_session(db, state)
+        if state.message:
+            should_log = not state.user_message_logged or state.last_user_message != state.message
+            if should_log:
+                await memory.save_user_message(
+                    db,
+                    redis_client,
+                    state.session_id,
+                    state.message,
+                )
+                state.user_message_logged = True
+                state.last_user_message = state.message
+
+        state.history = await memory.load_history(
+            db,
+            redis_client,
+            state.session_id,
+            settings.CHAT_HISTORY_LIMIT,
+            state.message,
+        )
+        state.history, summary = await memory.maybe_compress_history(
+            redis_client,
+            state.provider or settings.LLM_PROVIDER,
+            state.session_id,
+            state.history,
+        )
+        state.context = state.context or _build_context(state)
+        state.context["history"] = state.history
+        if summary:
+            state.context["history_summary"] = summary
+        memories = memory.search_memories(state.user_id, state.message or "")
+        if memories:
+            state.context["memories"] = memories
 
         pause_key = f"chat:pause:{state.session_id}"
         if await redis_client.get(pause_key):
@@ -177,6 +210,7 @@ def build_langgraph(
                 "context": state.context,
                 "tools": list_tools(allowed_tools),
                 "observations": state.observations,
+                "history": state.history,
             }
         )
         user = state.message or ""
@@ -222,6 +256,8 @@ def build_langgraph(
             final = action.answer
             state.final_json = final.model_dump() if isinstance(final, FinalAnswer) else final
             state.action_type = "final"
+            if user.strip().startswith("记住"):
+                memory.store_memory(state.user_id, user.strip())
             await _log_plan_event(
                 db,
                 state,
@@ -349,7 +385,18 @@ def build_langgraph(
             tool_name,
             latency_ms,
         )
-        await _log_tool_call(db, state, tool_name, args, latency_ms, result)
+        await memory.save_tool_message(
+            db,
+            redis_client,
+            state.session_id,
+            tool_name,
+            {
+                "args": args,
+                "latency_ms": latency_ms,
+                "result": result,
+                "result_preview": preview_result(result),
+            },
+        )
 
         state.events.append(
             {
@@ -419,6 +466,8 @@ async def run_chat_stream(
         state.scene = agent_config.scene
 
     trace_id = state.trace_id or ""
+    history_cache = memory.create_history_cache()
+    memory.set_current_cache(history_cache)
     try:
         async with checkpointer_context() as checkpointer:
             graph = build_agent_graph(
@@ -432,7 +481,31 @@ async def run_chat_stream(
             if state.checkpoint_ref:
                 config["configurable"]["checkpoint_id"] = state.checkpoint_ref
 
-            if state.resume_from_checkpoint and checkpointer and Command:
+            user_message = (state.message or "").strip()
+            snapshot = None
+            if checkpointer:
+                if hasattr(graph, "aget_state"):
+                    snapshot = await graph.aget_state(config)
+                else:
+                    snapshot = graph.get_state(config)
+            has_pending = bool(snapshot and getattr(snapshot, "next", None))
+
+            if has_pending and checkpointer:
+                resume_payload: dict[str, Any] = {}
+                if user_message:
+                    resume_payload["message"] = user_message
+                if state.context_overrides:
+                    resume_payload["context_overrides"] = state.context_overrides
+                if Command and resume_payload:
+                    input_payload = Command(resume=resume_payload)
+                else:
+                    input_payload = None
+                logger.info(
+                    "agent_auto_resume session_id=%s trace_id=%s",
+                    state.session_id,
+                    trace_id,
+                )
+            elif state.resume_from_checkpoint and checkpointer and Command:
                 resume_payload = state.resume_payload or {}
                 if state.message:
                     resume_payload.setdefault("message", state.message)
@@ -448,11 +521,6 @@ async def run_chat_stream(
                 input_payload = state.__dict__
 
             if input_payload is None:
-                snapshot = None
-                if hasattr(graph, "aget_state"):
-                    snapshot = await graph.aget_state(config)
-                else:
-                    snapshot = graph.get_state(config)
                 if not snapshot or not getattr(snapshot, "values", None):
                     input_payload = state.__dict__
 
@@ -520,9 +588,22 @@ async def run_chat_stream(
             yield {"event": "delta", "data": {"token": delta}}
 
         if isinstance(latest_state, ChatState):
-            await _log_assistant_message(db, latest_state, "".join(assistant_chunks))
+            await memory.save_assistant_message(
+                db,
+                redis_client,
+                latest_state.session_id,
+                "".join(assistant_chunks),
+                latest_state.final_json,
+            )
         else:
-            await _log_assistant_message(db, ChatState(**latest_state), "".join(assistant_chunks))
+            temp_state = ChatState(**latest_state)
+            await memory.save_assistant_message(
+                db,
+                redis_client,
+                temp_state.session_id,
+                "".join(assistant_chunks),
+                temp_state.final_json,
+            )
         yield {"event": "final", "data": {"stopped": False, "answer": final_json}}
     except Exception as exc:
         if GraphInterrupt and isinstance(exc, GraphInterrupt):
@@ -539,6 +620,10 @@ async def run_chat_stream(
             "data": envelope(None, trace_id, code=LLM_UPSTREAM_ERROR, message=str(exc)),
         }
         return
+    finally:
+        if history_cache:
+            history_cache.close()
+        memory.clear_current_cache()
 
 
 async def _ensure_chat_session(db: AsyncSession, state: ChatState) -> None:
@@ -552,61 +637,6 @@ async def _ensure_chat_session(db: AsyncSession, state: ChatState) -> None:
         )
         db.add(session)
         await db.commit()
-
-
-async def _log_user_message(db: AsyncSession, state: ChatState) -> None:
-    if not state.message:
-        return
-    result = await db.execute(select(ChatSession).where(ChatSession.id == state.session_id))
-    session = result.scalar_one_or_none()
-    if session and (not session.title or session.title == "新会话"):
-        title = state.message.strip().replace("\n", " ")
-        session.title = title[:24] if len(title) > 24 else title
-    msg = ChatMessage(
-        id=str(uuid4()),
-        session_id=state.session_id,
-        role="user",
-        content=state.message,
-    )
-    db.add(msg)
-    await db.commit()
-
-
-async def _log_tool_call(
-    db: AsyncSession,
-    state: ChatState,
-    tool_name: str,
-    args: dict[str, Any],
-    latency_ms: int,
-    result: Any,
-) -> None:
-    payload = {
-        "args": args,
-        "latency_ms": latency_ms,
-        "result_preview": preview_result(result),
-    }
-    msg = ChatMessage(
-        id=str(uuid4()),
-        session_id=state.session_id,
-        role="tool",
-        tool_name=tool_name,
-        tool_payload_json=payload,
-    )
-    db.add(msg)
-    await db.commit()
-
-
-async def _log_assistant_message(db: AsyncSession, state: ChatState, content: str) -> None:
-    payload = {"answer": state.final_json}
-    msg = ChatMessage(
-        id=str(uuid4()),
-        session_id=state.session_id,
-        role="assistant",
-        content=content,
-        tool_payload_json=payload,
-    )
-    db.add(msg)
-    await db.commit()
 
 
 async def _log_plan_event(
