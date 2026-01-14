@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     LANGGRAPH_DURABILITY: str = "async"
     LANGGRAPH_CHECKPOINT_BACKEND: str = "sqlite"
     CHAT_PAUSE_TTL: int = 600
+    SEED_DEMO_USER_ID: str | None = None
 
 
 settings = Settings()

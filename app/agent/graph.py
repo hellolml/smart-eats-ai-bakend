@@ -32,7 +32,7 @@ from app.agent.tools_registry import get_tool, list_tools, preview_result
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
 from app.domain.context.service import ContextService
-from app.agent import memory
+from app.agent import history, memory
 from app.infra.models.chat import ChatMessage, ChatSession
 
 logger = logging.getLogger("agent")
@@ -153,7 +153,7 @@ def build_langgraph(
         if state.message:
             should_log = not state.user_message_logged or state.last_user_message != state.message
             if should_log:
-                await memory.save_user_message(
+                await history.save_user_message(
                     db,
                     redis_client,
                     state.session_id,
@@ -162,14 +162,14 @@ def build_langgraph(
                 state.user_message_logged = True
                 state.last_user_message = state.message
 
-        state.history = await memory.load_history(
+        state.history = await history.load_history(
             db,
             redis_client,
             state.session_id,
             settings.CHAT_HISTORY_LIMIT,
             state.message,
         )
-        state.history, summary = await memory.maybe_compress_history(
+        state.history, summary = await history.maybe_compress_history(
             redis_client,
             state.provider or settings.LLM_PROVIDER,
             state.session_id,
@@ -179,7 +179,7 @@ def build_langgraph(
         state.context["history"] = state.history
         if summary:
             state.context["history_summary"] = summary
-        memories = memory.search_memories(state.user_id, state.message or "")
+        memories = await memory.search_memories(db, state.user_id, state.message or "")
         if memories:
             state.context["memories"] = memories
 
@@ -214,21 +214,6 @@ def build_langgraph(
             }
         )
         user = state.message or ""
-        if user.strip() in {"hi", "hello", "你好", "您好", "嗨", "hey"}:
-            state.final_json = FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "note",
-                        "title": "你好！想吃点什么？",
-                        "reason": "你可以说说口味、预算或就餐方式。",
-                    }
-                ],
-                followups=["更想在家做还是出去吃？", "有没有忌口或过敏？"],
-                warnings=[],
-            ).model_dump()
-            state.action_type = "final"
-            return state
-
         try:
             action = await asyncio.wait_for(
                 planner.plan(system, user, action_normalizer=agent_config.action_normalizer),
@@ -257,7 +242,7 @@ def build_langgraph(
             state.final_json = final.model_dump() if isinstance(final, FinalAnswer) else final
             state.action_type = "final"
             if user.strip().startswith("记住"):
-                memory.store_memory(state.user_id, user.strip())
+                await memory.store_memory(db, state.user_id, user.strip())
             await _log_plan_event(
                 db,
                 state,
@@ -385,7 +370,7 @@ def build_langgraph(
             tool_name,
             latency_ms,
         )
-        await memory.save_tool_message(
+        await history.save_tool_message(
             db,
             redis_client,
             state.session_id,
@@ -466,8 +451,8 @@ async def run_chat_stream(
         state.scene = agent_config.scene
 
     trace_id = state.trace_id or ""
-    history_cache = memory.create_history_cache()
-    memory.set_current_cache(history_cache)
+    history_cache = history.create_history_cache()
+    history.set_current_cache(history_cache)
     try:
         async with checkpointer_context() as checkpointer:
             graph = build_agent_graph(
@@ -588,7 +573,7 @@ async def run_chat_stream(
             yield {"event": "delta", "data": {"token": delta}}
 
         if isinstance(latest_state, ChatState):
-            await memory.save_assistant_message(
+            await history.save_assistant_message(
                 db,
                 redis_client,
                 latest_state.session_id,
@@ -597,7 +582,7 @@ async def run_chat_stream(
             )
         else:
             temp_state = ChatState(**latest_state)
-            await memory.save_assistant_message(
+            await history.save_assistant_message(
                 db,
                 redis_client,
                 temp_state.session_id,
@@ -623,7 +608,7 @@ async def run_chat_stream(
     finally:
         if history_cache:
             history_cache.close()
-        memory.clear_current_cache()
+        history.clear_current_cache()
 
 
 async def _ensure_chat_session(db: AsyncSession, state: ChatState) -> None:

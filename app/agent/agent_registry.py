@@ -71,7 +71,7 @@ def get_agent_config(agent_type: str | None) -> AgentConfig:
         load_agents()
     if agent_type and agent_type in AGENTS:
         return AGENTS[agent_type]
-    return AGENTS["chat"]
+    return AGENTS["smart_eats"]
 
 def load_agents() -> None:
     package_name = "app.agent.agents"

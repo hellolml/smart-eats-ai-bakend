@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.agent.graph import run_chat_stream
 from app.agent.state import ChatState
-from app.agent import memory
+from app.agent import history
 from app.api.deps import db_dep, get_optional_user_id, redis_dep
 from app.common.config import settings
 from app.common.errors import envelope
@@ -34,6 +34,14 @@ class SessionUpdateRequest(BaseModel):
     title: str | None = None
 
 
+def _resolve_user_id(user_id: str | None) -> str | None:
+    if user_id:
+        return user_id
+    if settings.ENV == "production":
+        return None
+    return settings.SEED_DEMO_USER_ID
+
+
 @router.get("/providers")
 async def list_providers(request: Request):
     raw = settings.LLM_PROVIDERS or ""
@@ -48,6 +56,7 @@ async def create_session(
     db: db_dep,
     user_id: str | None = Depends(get_optional_user_id),
 ):
+    user_id = _resolve_user_id(user_id)
     session_id = str(uuid4())
     session = ChatSession(
         id=session_id,
@@ -70,6 +79,7 @@ async def list_sessions(
     offset: int = Query(0, ge=0),
     q: str | None = Query(None),
 ):
+    user_id = _resolve_user_id(user_id)
     tz = timezone(timedelta(hours=8))
     stmt = (
         select(ChatSession)
@@ -124,13 +134,18 @@ async def rename_session(
     request: Request,
     payload: SessionUpdateRequest,
     db: db_dep,
+    user_id: str | None = Depends(get_optional_user_id),
 ):
+    user_id = _resolve_user_id(user_id)
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
     if not session:
         trace_id = getattr(request.state, "trace_id", "")
         return envelope({"updated": False}, trace_id, code=40401, message="not found")
+    if user_id and session.user_id != user_id:
+        trace_id = getattr(request.state, "trace_id", "")
+        return envelope({"updated": False}, trace_id, code=40301, message="forbidden")
     if payload.title is not None:
         session.title = payload.title
     await db.commit()
@@ -144,16 +159,21 @@ async def delete_session(
     request: Request,
     db: db_dep,
     redis: redis_dep,
+    user_id: str | None = Depends(get_optional_user_id),
 ):
+    user_id = _resolve_user_id(user_id)
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
     if not session:
         trace_id = getattr(request.state, "trace_id", "")
         return envelope({"deleted": False}, trace_id, code=40401, message="not found")
+    if user_id and session.user_id != user_id:
+        trace_id = getattr(request.state, "trace_id", "")
+        return envelope({"deleted": False}, trace_id, code=40301, message="forbidden")
     session.deleted_at = datetime.utcnow()
     await db.commit()
-    await memory.clear_session_cache(redis, session_id)
+    await history.clear_session_cache(redis, session_id)
     trace_id = getattr(request.state, "trace_id", "")
     return envelope({"deleted": True}, trace_id)
 
@@ -163,9 +183,11 @@ async def list_messages(
     session_id: str,
     request: Request,
     db: db_dep,
+    user_id: str | None = Depends(get_optional_user_id),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
+    user_id = _resolve_user_id(user_id)
     stmt = (
         select(ChatMessage)
         .where(ChatMessage.session_id == session_id)
@@ -173,6 +195,13 @@ async def list_messages(
         .offset(offset)
         .limit(limit)
     )
+    if user_id:
+        session_stmt = select(ChatSession).where(ChatSession.id == session_id)
+        session_result = await db.execute(session_stmt)
+        session = session_result.scalar_one_or_none()
+        if session and session.user_id != user_id:
+            trace_id = getattr(request.state, "trace_id", "")
+            return envelope({"messages": [], "offset": offset, "limit": limit}, trace_id)
     result = await db.execute(stmt)
     rows = result.scalars().all()
     data = [
@@ -208,6 +237,7 @@ async def stream_session(
     user_id: str | None = Depends(get_optional_user_id),
 ):
     payload = payload or ChatStreamRequest()
+    user_id = _resolve_user_id(user_id)
     client_ip = request.client.host if request.client else "unknown"
     await ensure_rate_limit(
         redis,

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.agent.graph import run_chat_stream
 from app.agent.state import ChatState
 from app.api.deps import db_dep, get_current_user_id, redis_dep
+from app.common.config import settings
 from app.common.errors import envelope
 from app.common.sse import sse_event
 from app.domain.context.service import ContextService
@@ -62,6 +63,8 @@ async def decision_stream(
     user_id: str = Depends(get_current_user_id),
 ):
     payload = payload or TodayDecisionRequest()
+    if not user_id and settings.ENV != "production":
+        user_id = settings.SEED_DEMO_USER_ID
     overrides = {
         "environment": {"location": payload.location} if payload.location else {},
         "constraints": {"budget": payload.budget} if payload.budget else {},
@@ -75,7 +78,7 @@ async def decision_stream(
         trace_id=getattr(request.state, "trace_id", None),
         context_overrides=overrides,
         provider=payload.provider,
-        agent_type=payload.agent_type or "today",
+        agent_type=payload.agent_type or "smart_eats",
         scene="today_decision",
     )
 

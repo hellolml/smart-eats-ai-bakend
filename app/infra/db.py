@@ -57,6 +57,7 @@ async def init_db() -> None:
         context,
         fridge,
         game,
+        memory,
         preference,
         recipe,
         restaurant,
