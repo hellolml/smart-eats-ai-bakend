@@ -24,6 +24,7 @@ class ChatState:
     action_type: str | None = None
     provider: str | None = None
     agent_type: str | None = None
+    client_ip: str | None = None
     resume_from_checkpoint: bool = False
     checkpoint_ref: str | None = None
     replay_from_checkpoint: bool = False

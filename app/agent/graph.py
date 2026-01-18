@@ -353,6 +353,11 @@ def build_langgraph(
         tool_args["redis_client"] = redis_client
         tool_args["db"] = db
         tool_args["user_id"] = state.user_id
+        tool_args["context"] = state.context
+        tool_args["session_id"] = state.session_id
+        tool_args["client_ip"] = state.client_ip
+        tool_args["last_user_message"] = state.last_user_message or state.message
+        tool_args["servers_path"] = settings.MCP_SERVERS_CONFIG_PATH
         start = time.perf_counter()
         try:
             result = await asyncio.wait_for(tool.func(tool_args), timeout=15)

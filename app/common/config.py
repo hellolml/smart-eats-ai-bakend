@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     LANGGRAPH_CHECKPOINT_BACKEND: str = "sqlite"
     CHAT_PAUSE_TTL: int = 600
     SEED_DEMO_USER_ID: str | None = None
+    AMAP_SEARCH_CACHE_TTL_SECONDS: int = 180
+    RESTAURANT_DETAIL_CACHE_TTL_SECONDS: int = 300
+    MCP_SERVERS_CONFIG_PATH: str | None = "mcp_servers.json"
 
 
 settings = Settings()
