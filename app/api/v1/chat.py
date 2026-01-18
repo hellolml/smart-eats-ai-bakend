@@ -238,7 +238,11 @@ async def stream_session(
 ):
     payload = payload or ChatStreamRequest()
     user_id = _resolve_user_id(user_id)
-    client_ip = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "unknown"
     await ensure_rate_limit(
         redis,
         key=f"rl:chat:{client_ip}",
@@ -254,6 +258,7 @@ async def stream_session(
         context_overrides=payload.client_context_overrides,
         provider=payload.provider,
         agent_type=payload.agent_type,
+        client_ip=client_ip,
     )
 
     async def event_stream() -> AsyncGenerator[str, None]:

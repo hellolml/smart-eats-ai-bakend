@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agent.tools_registry import register_tool
+from app.infra.external.amap import amap
 
 
 @register_tool(
@@ -16,4 +17,4 @@ from app.agent.tools_registry import register_tool
 )
 async def get_weather(args: dict[str, Any]) -> dict[str, Any]:
     city = args.get("city") or "unknown"
-    return {"city": city, "status": "sunny", "temperature_c": 26}
+    return await amap.get_weather(city, servers_path=args.get("servers_path"))

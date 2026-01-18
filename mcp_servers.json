@@ -1,0 +1,6 @@
+{
+  "amap": {
+    "transport": "sse",
+    "url": "https://mcp.amap.com/sse?key=${AMAP_API_KEY}"
+  }
+}

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.api.deps import db_dep, get_optional_user_id, redis_dep
+from app.api.deps import db_dep, redis_dep
 from app.common.errors import envelope
 from app.domain.restaurant.service import RestaurantService
 
@@ -12,16 +12,14 @@ router = APIRouter()
 @router.get("/search")
 async def search_restaurants(
     request: Request,
-    db: db_dep,
     redis: redis_dep,
     q: str | None = None,
     sort: str | None = None,
     tag: str | None = None,
     lat: float | None = None,
     lng: float | None = None,
-    user_id: str | None = Depends(get_optional_user_id),
 ):
-    results = await RestaurantService.search(db, redis, user_id, q, tag, lat, lng, sort)
+    results = await RestaurantService.search(redis, q, tag, lat, lng, sort)
     trace_id = getattr(request.state, "trace_id", "")
     return envelope(results, trace_id)
 
