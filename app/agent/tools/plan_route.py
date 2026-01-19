@@ -8,8 +8,14 @@ from app.infra.external.amap import amap
 
 @register_tool(
     name="plan_route",
-    description="Plan a route between origin and destination",
-    args_schema={
+    description=(
+        "Plan a route between origin and destination. "
+        "Input: {origin?:string,destination?:string,origin_lat?:number,origin_lng?:number,"
+        "destination_lat?:number,destination_lng?:number,mode?:string,city?:string,strategy?:string}. "
+        "Output: {distance_m,duration_s,steps,origin,destination,mode} or {error:string}. "
+        "Example input: {\"origin\":\"岳麓区\",\"destination\":\"长沙站\",\"mode\":\"driving\"}."
+    ),
+    input_schema={
         "type": "object",
         "properties": {
             "origin": {"type": "string"},
@@ -23,6 +29,18 @@ from app.infra.external.amap import amap
             "city": {"type": "string"},
         },
         "required": [],
+    },
+    output_schema={
+        "type": "object",
+        "properties": {
+            "distance_m": {"type": ["number", "string", "null"]},
+            "duration_s": {"type": ["number", "string", "null"]},
+            "steps": {"type": "array", "items": {"type": "string"}},
+            "origin": {"type": "object"},
+            "destination": {"type": "object"},
+            "mode": {"type": "string"},
+            "error": {"type": "string"},
+        },
     },
 )
 async def plan_route(args: dict[str, Any]) -> dict[str, Any]:

@@ -5,31 +5,37 @@ import importlib
 import pkgutil
 from typing import Any, Awaitable, Callable
 import builtins
+import logging
 
 
 @dataclass
 class ToolSpec:
     name: str
     description: str
-    args_schema: dict
+    input_schema: dict
+    output_schema: dict
     func: Callable[[dict[str, Any]], Awaitable[Any]]
 
 
 TOOLS: dict[str, ToolSpec] = {}
+logger = logging.getLogger("agent.tools")
 
 
 def register_tool(
     name: str,
     description: str,
-    args_schema: dict,
+    input_schema: dict,
+    output_schema: dict,
 ):
     def decorator(func: Callable[[dict[str, Any]], Awaitable[Any]]):
         TOOLS[name] = ToolSpec(
             name=name,
             description=description,
-            args_schema=args_schema,
+            input_schema=input_schema,
+            output_schema=output_schema,
             func=func,
         )
+        logger.info("tool_registered name=%s", name)
         return func
 
     return decorator
@@ -40,6 +46,7 @@ def load_tools() -> None:
     package = importlib.import_module(package_name)
     for module in pkgutil.iter_modules(package.__path__):
         importlib.import_module(f"{package_name}.{module.name}")
+    logger.info("tools_loaded count=%s", len(TOOLS))
 
 
 def list_tools(allowlist: list[str] | None = None) -> list[dict[str, Any]]:
@@ -47,7 +54,12 @@ def list_tools(allowlist: list[str] | None = None) -> list[dict[str, Any]]:
         load_tools()
     names = set(allowlist or [])
     return [
-        {"name": tool.name, "description": tool.description, "args_schema": tool.args_schema}
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.input_schema,
+            "output_schema": tool.output_schema,
+        }
         for name, tool in TOOLS.items()
         if not allowlist or name in names
     ]

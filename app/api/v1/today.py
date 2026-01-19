@@ -31,12 +31,10 @@ class TodayDecisionRequest(BaseModel):
 async def overview(
     request: Request,
     db: db_dep,
-    redis: redis_dep,
     user_id: str = Depends(get_current_user_id),
 ):
     snapshot = await ContextService.build(
         db=db,
-        redis_client=redis,
         user_id=user_id,
         scene="today_decision",
     )

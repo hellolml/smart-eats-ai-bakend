@@ -23,11 +23,29 @@ async def _get_redis_client(args: dict[str, Any]) -> redis.Redis:
 
 @register_tool(
     name="search_recipes",
-    description="Search recipes by keyword",
-    args_schema={
+    description=(
+        "Search recipes by keyword. Input: {query:string}. "
+        "Output: list of recipes {id,title,image_url,cook_time_min,calories,tags}. "
+        "Example input: {\"query\":\"番茄\"}."
+    ),
+    input_schema={
         "type": "object",
         "properties": {"query": {"type": "string"}},
         "required": ["query"],
+    },
+    output_schema={
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "title": {"type": "string"},
+                "image_url": {"type": ["string", "null"]},
+                "cook_time_min": {"type": ["integer", "number", "null"]},
+                "calories": {"type": ["integer", "number", "null"]},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+        },
     },
 )
 async def search_recipes(args: dict[str, Any]) -> list[dict[str, Any]]:

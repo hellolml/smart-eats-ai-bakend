@@ -11,14 +11,29 @@ from app.infra.external.amap import amap
 
 @register_tool(
     name="geocode_location",
-    description="Resolve a place name to coordinates",
-    args_schema={
+    description=(
+        "Geocode a place name to coordinates. "
+        "Input: {query:string, city?:string}. "
+        "Output: {lat:number,lng:number,city?:string,query:string} or {error:string}. "
+        "Example input: {\"query\":\"长沙岳麓区黄鹤小区\"}."
+    ),
+    input_schema={
         "type": "object",
         "properties": {
             "query": {"type": "string"},
             "city": {"type": "string"},
         },
         "required": ["query"],
+    },
+    output_schema={
+        "type": "object",
+        "properties": {
+            "lat": {"type": "number"},
+            "lng": {"type": "number"},
+            "city": {"type": "string"},
+            "query": {"type": "string"},
+            "error": {"type": "string"},
+        },
     },
 )
 async def geocode_location(args: dict[str, Any]) -> dict[str, Any]:

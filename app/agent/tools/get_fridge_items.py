@@ -23,11 +23,23 @@ async def _get_redis_client(args: dict[str, Any]) -> redis.Redis | None:
 
 @register_tool(
     name="get_fridge_items",
-    description="Fetch the user's fridge items",
-    args_schema={
+    description=(
+        "Fetch the user's fridge items and optional recipe suggestions. "
+        "Input: {}. Output: {items:[...],recipes:[...],query:string}. "
+        "Example input: {}."
+    ),
+    input_schema={
         "type": "object",
         "properties": {},
         "required": [],
+    },
+    output_schema={
+        "type": "object",
+        "properties": {
+            "items": {"type": "array", "items": {"type": "object"}},
+            "recipes": {"type": "array", "items": {"type": "object"}},
+            "query": {"type": "string"},
+        },
     },
 )
 async def get_fridge_items(args: dict[str, Any]) -> dict[str, Any]:

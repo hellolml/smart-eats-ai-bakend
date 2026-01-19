@@ -18,6 +18,7 @@ def smart_system_prompt(payload: dict) -> str:
         "当用户想外出用餐时，若用户提供了城市/地标/门店名称，应先调用 geocode_location 获取坐标，"
         "再调用 search_restaurants；若用户仅说“出去吃”且无位置，先调用 get_ip_location，"
         "若仍无位置再追问城市/地标。"
+        "当需要用户状态/偏好/环境信息时，调用 get_user_info 获取。"
         "仅当用户明确询问天气/出行天气，或确实需要天气辅助决策时才调用 get_weather，且同一会话只调用一次；"
         "严禁重复调用同一工具与相同参数。"
         "如果已经拿到天气信息，下一步应继续完成主要任务（如餐厅推荐），不要再次调用天气。"
@@ -277,6 +278,7 @@ def _smart_eats_agent() -> AgentConfig:
             "plan_route",
             "get_ip_location",
             "geocode_location",
+            "get_user_info",
         ],
         max_steps=4,
         system_prompt_builder=smart_system_prompt,

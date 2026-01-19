@@ -12,11 +12,24 @@ from app.infra.external.amap import amap
 
 @register_tool(
     name="get_ip_location",
-    description="Resolve IP address to location",
-    args_schema={
+    description=(
+        "Resolve IP address to location. Input: {ip:string?}. "
+        "Output: {lat:number,lng:number,city:string} or {error:string}. "
+        "Example input: {\"ip\":\"8.8.8.8\"}."
+    ),
+    input_schema={
         "type": "object",
         "properties": {"ip": {"type": "string"}},
         "required": [],
+    },
+    output_schema={
+        "type": "object",
+        "properties": {
+            "lat": {"type": "number"},
+            "lng": {"type": "number"},
+            "city": {"type": "string"},
+            "error": {"type": "string"},
+        },
     },
 )
 async def get_ip_location(args: dict[str, Any]) -> dict[str, Any]:

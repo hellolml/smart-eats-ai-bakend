@@ -31,23 +31,79 @@ from app.agent.state import ChatState
 from app.agent.tools_registry import get_tool, list_tools, preview_result
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
-from app.domain.context.service import ContextService
 from app.agent import history, memory
 from app.infra.models.chat import ChatMessage, ChatSession
 
 logger = logging.getLogger("agent")
 
 
-def _build_context(state: ChatState) -> dict[str, Any]:
-    if state.snapshot:
-        return state.snapshot
-    return {
-        "user": {"nickname": None, "goal": None, "current_state": None},
-        "preferences": {"tastes": [], "avoid": [], "allergens": []},
-        "fridge": {"top_items": []},
-        "environment": {"location": None},
-        "ui_scene": state.scene or "chat",
+def _build_observation_context(
+    state: ChatState,
+    agent_config: AgentConfig,
+    summary: str | None,
+    memories: list[str],
+) -> dict[str, Any]:
+    context = {"ui_scene": state.scene or "chat"}
+    context["user_message"] = state.message or ""
+    context["history"] = state.history
+    if summary:
+        context["history_summary"] = summary
+    if memories:
+        context["memories"] = memories
+    context["observations"] = list(state.observations)
+    context["checkpoint"] = {
+        "resume_from_checkpoint": state.resume_from_checkpoint,
+        "checkpoint_ref": state.checkpoint_ref,
+        "replay_from_checkpoint": state.replay_from_checkpoint,
     }
+    context["system_prompt"] = agent_config.system_prompt_builder({"context": context})
+    return context
+
+
+async def _refresh_observation_context(
+    db: AsyncSession,
+    redis_client: redis.Redis,
+    state: ChatState,
+    agent_config: AgentConfig,
+) -> None:
+    if state.message:
+        should_log = not state.user_message_logged or state.last_user_message != state.message
+        if should_log:
+            await history.save_user_message(
+                db,
+                redis_client,
+                state.session_id,
+                state.message,
+            )
+            state.user_message_logged = True
+            state.last_user_message = state.message
+
+    state.history = await history.load_history(
+        db,
+        redis_client,
+        state.session_id,
+        settings.CHAT_HISTORY_LIMIT,
+        state.message,
+    )
+    state.history, summary = await history.maybe_compress_history(
+        redis_client,
+        state.provider or settings.LLM_PROVIDER,
+        state.session_id,
+        state.history,
+    )
+    memories = await memory.search_memories(db, state.user_id, state.message or "")
+    state.context = _build_observation_context(
+        state,
+        agent_config,
+        summary,
+        memories,
+    )
+    logger.info(
+        "context_snapshot session_id=%s keys=%s",
+        state.session_id,
+        sorted(state.context.keys()),
+    )
+    state.events.append({"event": "context", "data": state.context})
 
 
 def _fallback_final() -> dict[str, Any]:
@@ -64,12 +120,15 @@ def _fallback_final() -> dict[str, Any]:
     ).model_dump()
 
 
-def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    if args_schema.get("type") != "object":
+def _validate_args(
+    input_schema: dict[str, Any],
+    args: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    if input_schema.get("type") != "object":
         return False, {"planner_error": "invalid_schema"}
 
-    properties = args_schema.get("properties", {})
-    required = args_schema.get("required", [])
+    properties = input_schema.get("properties", {})
+    required = input_schema.get("required", [])
     missing = [key for key in required if key not in args]
     if missing:
         return False, {
@@ -77,7 +136,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
             "missing": missing,
             "allowed_properties": list(properties.keys()),
             "received_args": args,
-            "expected_schema": args_schema,
+            "expected_schema": input_schema,
         }
 
     for key, value in args.items():
@@ -91,7 +150,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
                 "expected": expected,
                 "received": type(value).__name__,
                 "allowed_properties": list(properties.keys()),
-                "expected_schema": args_schema,
+                "expected_schema": input_schema,
             }
         if expected == "number" and not isinstance(value, (int, float)):
             return False, {
@@ -100,7 +159,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
                 "expected": expected,
                 "received": type(value).__name__,
                 "allowed_properties": list(properties.keys()),
-                "expected_schema": args_schema,
+                "expected_schema": input_schema,
             }
         if expected == "integer" and not isinstance(value, int):
             return False, {
@@ -109,7 +168,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
                 "expected": expected,
                 "received": type(value).__name__,
                 "allowed_properties": list(properties.keys()),
-                "expected_schema": args_schema,
+                "expected_schema": input_schema,
             }
         if expected == "boolean" and not isinstance(value, bool):
             return False, {
@@ -118,7 +177,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
                 "expected": expected,
                 "received": type(value).__name__,
                 "allowed_properties": list(properties.keys()),
-                "expected_schema": args_schema,
+                "expected_schema": input_schema,
             }
 
     return True, {}
@@ -135,53 +194,10 @@ def build_langgraph(
     allowed_tools = agent_config.tool_names
 
     async def observe_node(state: ChatState) -> ChatState:
-        if state.snapshot is None:
-            state.snapshot = await ContextService.build(
-                db=db,
-                redis_client=redis_client,
-                user_id=state.user_id,
-                scene=state.scene,
-                session_id=state.session_id,
-                overrides=state.context_overrides,
-                force_refresh=bool(state.context_overrides),
-            )
-            state.context = _build_context(state)
+        if state.steps_left <= 0 and not state.tool_calls and not state.observations:
             state.steps_left = agent_config.max_steps
-            state.events.append({"event": "context", "data": state.context})
-
         await _ensure_chat_session(db, state)
-        if state.message:
-            should_log = not state.user_message_logged or state.last_user_message != state.message
-            if should_log:
-                await history.save_user_message(
-                    db,
-                    redis_client,
-                    state.session_id,
-                    state.message,
-                )
-                state.user_message_logged = True
-                state.last_user_message = state.message
-
-        state.history = await history.load_history(
-            db,
-            redis_client,
-            state.session_id,
-            settings.CHAT_HISTORY_LIMIT,
-            state.message,
-        )
-        state.history, summary = await history.maybe_compress_history(
-            redis_client,
-            state.provider or settings.LLM_PROVIDER,
-            state.session_id,
-            state.history,
-        )
-        state.context = state.context or _build_context(state)
-        state.context["history"] = state.history
-        if summary:
-            state.context["history_summary"] = summary
-        memories = await memory.search_memories(db, state.user_id, state.message or "")
-        if memories:
-            state.context["memories"] = memories
+        await _refresh_observation_context(db, redis_client, state, agent_config)
 
         pause_key = f"chat:pause:{state.session_id}"
         if await redis_client.get(pause_key):
@@ -205,14 +221,11 @@ def build_langgraph(
         return state
 
     async def think_node(state: ChatState) -> ChatState:
-        system = agent_config.system_prompt_builder(
-            {
-                "context": state.context,
-                "tools": list_tools(allowed_tools),
-                "observations": state.observations,
-                "history": state.history,
-            }
-        )
+        system = None
+        if state.context:
+            system = state.context.get("system_prompt")
+        if not system:
+            system = agent_config.system_prompt_builder({"context": state.context})
         user = state.message or ""
         try:
             action = await asyncio.wait_for(
@@ -294,7 +307,7 @@ def build_langgraph(
                 state.action_type = "retry"
             return state
 
-        valid, error_obs = _validate_args(tool.args_schema, args)
+        valid, error_obs = _validate_args(tool.input_schema, args)
         if not valid:
             state.planner_retry_count += 1
             state.observations.append(error_obs)
