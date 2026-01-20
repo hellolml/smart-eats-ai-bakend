@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     QWEN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     QWEN_MODEL_PLANNER: str = "qwen-plus"
     QWEN_MODEL_WRITER: str = "qwen-plus"
+    LLM_REQUEST_LOG: str = "none"
     AGENT_MAX_STEPS: int = 4
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"

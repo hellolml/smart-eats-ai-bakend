@@ -104,9 +104,14 @@ def _coerce_location(lat: Any, lng: Any) -> dict[str, float] | None:
     if lat is None or lng is None:
         return None
     try:
-        return {"lat": float(lat), "lng": float(lng)}
+        lat_value = float(lat)
+        lng_value = float(lng)
     except (TypeError, ValueError):
         return None
+    # Swap obvious lat/lng inversion (lat must be within [-90, 90]).
+    if abs(lat_value) > 90 and abs(lng_value) <= 90:
+        lat_value, lng_value = lng_value, lat_value
+    return {"lat": lat_value, "lng": lng_value}
 
 
 def _parse_location_value(value: Any) -> dict[str, float] | None:

@@ -16,6 +16,8 @@ class ChatState:
     context: dict[str, Any] | None = None
     thought: str | None = None
     steps_left: int = 0
+    turn_index: int = 0
+    step_index: int = 0
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     observations: list[dict[str, Any]] = field(default_factory=list)
     final_json: dict[str, Any] | None = None

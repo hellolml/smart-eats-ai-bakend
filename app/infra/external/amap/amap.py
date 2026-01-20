@@ -113,6 +113,16 @@ def _route_tool_key(mode: str | None) -> str:
     return "maps_direction_driving"
 
 
+def _normalize_coord_pair(value: dict[str, float]) -> dict[str, float]:
+    lat = value.get("lat")
+    lng = value.get("lng")
+    if lat is None or lng is None:
+        return value
+    if abs(lat) > 90 and abs(lng) <= 90:
+        return {"lat": lng, "lng": lat}
+    return value
+
+
 def _extract_route(payload: Any) -> dict[str, Any] | None:
     payload = _parse_json_payload(payload)
     route = payload
@@ -329,6 +339,8 @@ async def get_route(
     servers_path: str | None,
 ) -> dict[str, Any] | None:
     tool_key = _route_tool_key(mode)
+    origin = _normalize_coord_pair(origin)
+    destination = _normalize_coord_pair(destination)
     args = {
         "origin": f"{origin.get('lng')},{origin.get('lat')}",
         "destination": f"{destination.get('lng')},{destination.get('lat')}",
