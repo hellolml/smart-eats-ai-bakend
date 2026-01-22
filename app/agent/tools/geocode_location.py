@@ -44,8 +44,10 @@ async def geocode_location(args: dict[str, Any]) -> dict[str, Any]:
     query = args.get("query") or ""
     if not query.strip():
         return {"error": "missing_query"}
-    city = args.get("city")
-    location = await amap.geocode_address(query.strip(), city, servers_path=args.get("servers_path"))
+    context = args.get("context") if isinstance(args.get("context"), dict) else {}
+    city = args.get("city") or _extract_city(context)
+    query, city = _normalize_query_city(query, city)
+    location = await amap.geocode_address(query, city, servers_path=args.get("servers_path"))
     if not location:
         return {"error": "not_found"}
     await cache_location(redis_client, session_id, location.get("lat"), location.get("lng"), city)
@@ -53,5 +55,32 @@ async def geocode_location(args: dict[str, Any]) -> dict[str, Any]:
         "lat": location.get("lat"),
         "lng": location.get("lng"),
         "city": city,
-        "query": query.strip(),
+        "query": query,
     }
+
+
+def _normalize_query_city(query: str, city: str | None) -> tuple[str, str | None]:
+    query = query.strip()
+    if not query:
+        return query, city
+    for sep in (",", "，"):
+        if sep not in query:
+            continue
+        parts = [part.strip() for part in query.split(sep) if part.strip()]
+        if not parts:
+            return query, city
+        if city is None and len(parts) > 1:
+            city = parts[-1]
+        query = parts[0]
+        return query, city
+    return query, city
+
+
+def _extract_city(context: dict[str, Any]) -> str | None:
+    env = context.get("environment") if isinstance(context.get("environment"), dict) else {}
+    location = env.get("location") or context.get("location")
+    if isinstance(location, dict):
+        return location.get("city") or location.get("name")
+    if isinstance(location, str):
+        return location
+    return None

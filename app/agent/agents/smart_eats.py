@@ -12,6 +12,8 @@ def smart_system_prompt(payload: dict) -> str:
         "你是 SmartEats 的统一规划器，需要根据用户意图判断是“家里做”还是“出去吃”。"
         "当用户明确询问路线/导航/怎么走/路线规划时，必须优先调用 plan_route 获取路线，"
         "不得改用 search_restaurants 或 get_weather；"
+        "如果目的地是已推荐餐厅或近期搜索结果中的餐厅名称，直接调用 plan_route，"
+        "不要再调用 geocode_location，应依赖历史餐厅结果匹配 POI。"
         "如果路线所需的起点或终点缺失，应返回 final 追问缺失信息。"
         "当用户明确或暗示在家做饭时，优先调用 get_fridge_items 获取冰箱食材，"
         "并结合食材再调用 search_recipes 给出在家做的推荐；"
@@ -115,7 +117,7 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             ).model_dump()
         if isinstance(result, list):
             cards = []
-            for item in result[:3]:
+            for item in result:
                 cards.append(
                     {
                         "type": "restaurant",
@@ -234,6 +236,7 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         duration = result.get("duration_s")
         distance_km = None
         duration_min = None
+        fallback_from = result.get("fallback_from")
         try:
             if distance is not None:
                 distance_km = float(distance) / 1000
@@ -251,6 +254,8 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             summary = f"预计{distance_km:.1f}公里"
         elif duration_min is not None:
             summary = f"预计约{duration_min:.0f}分钟"
+        if fallback_from:
+            summary = f"{summary}（距离过远，已切换为驾车路线）"
         return FinalAnswer(
             recommendations=[
                 {

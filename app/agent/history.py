@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.config import settings
 from app.infra.models.chat import ChatMessage, ChatSession
-from app.tasks import context_summarize
+from app.agent.chat_history_compactor import compact_history
 
 _DEFAULT_LOCAL_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _CURRENT_CACHE: ContextVar["_HistoryCache | None"] = ContextVar("chat_history_cache", default=None)
@@ -102,10 +102,14 @@ def _format_tool_payload(payload: dict[str, Any] | None) -> str:
     if not payload:
         return ""
     if "result_preview" in payload:
-        return json.dumps(payload.get("result_preview"), ensure_ascii=True)
+        return json.dumps(payload.get("result_preview"), ensure_ascii=False)
     if "result" in payload:
-        return json.dumps(payload.get("result"), ensure_ascii=True)
-    return json.dumps(payload, ensure_ascii=True)
+        result = payload.get("result")
+        if isinstance(result, dict) and result.get("steps"):
+            result = dict(result)
+            result["steps"] = []
+        return json.dumps(result, ensure_ascii=False)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _history_signature(history: list[dict[str, Any]]) -> str:
@@ -267,38 +271,7 @@ async def maybe_compress_history(
     session_id: str,
     history: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], str | None]:
-    if len(history) < settings.CHAT_SUMMARY_TRIGGER:
-        return history, None
-
-    signature = _history_signature(history)
-    summary_key = f"chat:summary:{session_id}"
-    pending_key = f"chat:summary:{session_id}:pending"
-    sig_key = f"chat:summary:{session_id}:sig"
-    cached_sig = await redis_client.get(sig_key)
-    cached_summary = await redis_client.get(summary_key)
-    summary = cached_summary if cached_sig == signature else None
-
-    if not summary:
-        enqueue = await redis_client.set(
-            pending_key,
-            signature,
-            nx=True,
-            ex=settings.CHAT_SUMMARY_TTL_SECONDS,
-        )
-        if enqueue:
-            await context_summarize.enqueue_summary(
-                redis_client,
-                provider,
-                session_id,
-                history,
-            )
-            await redis_client.set(sig_key, signature, ex=settings.CHAT_SUMMARY_TTL_SECONDS)
-        tail = history[-settings.CHAT_SUMMARY_TAIL :]
-        return tail, None
-
-    tail = history[-settings.CHAT_SUMMARY_TAIL :]
-    compressed = [{"role": "system", "content": f"对话摘要：{summary}"}] + tail
-    return compressed, summary
+    return await compact_history(provider, history)
 
 
 async def clear_session_cache(
@@ -384,12 +357,13 @@ async def save_tool_message(
     last_msg = last_result.scalar_one_or_none()
     if last_msg and last_msg.tool_payload_json == payload:
         return
+    content = _format_tool_payload(payload)
     msg = ChatMessage(
         id=str(uuid4()),
         session_id=session_id,
         role="tool",
         tool_name=tool_name,
-        content=None,
+        content=content or None,
         tool_payload_json=payload,
     )
     db.add(msg)
@@ -400,7 +374,7 @@ async def save_tool_message(
         {
             "role": "tool",
             "name": tool_name,
-            "content": "",
+            "content": content or "",
         },
     )
 

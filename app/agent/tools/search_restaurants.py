@@ -8,6 +8,7 @@ import logging
 from app.agent.tools_registry import register_tool
 from app.domain.restaurant.service import RestaurantService
 from app.agent.tools.location_cache import load_cached_location
+from app.agent.tools.restaurant_cache import cache_restaurants
 
 logger = logging.getLogger("amap.mcp")
 
@@ -74,7 +75,7 @@ async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dic
         query = tag or "美食"
     if isinstance(query, str) and query.strip() in _GENERIC_QUERIES:
         query = "美食"
-    return await RestaurantService.search(
+    results = await RestaurantService.search(
         redis_client,
         query,
         tag,
@@ -82,6 +83,8 @@ async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dic
         lng,
         args.get("sort"),
     )
+    await cache_restaurants(redis_client, session_id, results)
+    return results
 
 
 def _normalize_coord(value: Any) -> float | None:

@@ -37,6 +37,7 @@ def default_writer_prompt(final_json: dict[str, Any]) -> str:
     return (
         f"You are a friendly assistant. Respond in {settings.DEFAULT_LANGUAGE}. "
         "Convert the JSON answer into a short reply. "
+        "If recommendations is a list, mention every item in order and do not omit any. "
         f"Answer JSON: {final_json}"
     )
 

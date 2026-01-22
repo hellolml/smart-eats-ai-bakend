@@ -438,6 +438,17 @@ def build_langgraph(
             result = {"error": str(exc)}
         latency_ms = int((time.perf_counter() - start) * 1000)
 
+        result_preview = preview_result(result)
+        if tool_name == "plan_route" and isinstance(result, dict):
+            result_preview = {
+                "distance_m": result.get("distance_m"),
+                "duration_s": result.get("duration_s"),
+                "origin": result.get("origin"),
+                "destination": result.get("destination"),
+                "mode": result.get("mode"),
+                "fallback_from": result.get("fallback_from"),
+                "error": result.get("error"),
+            }
         state.tool_calls.append({"name": tool_name, "args": args, "latency_ms": latency_ms})
         state.observations.append({"tool": tool_name, "result": result})
         state.steps_left -= 1
@@ -452,7 +463,7 @@ def build_langgraph(
             "tool_result session_id=%s tool=%s result_preview=%s",
             state.session_id,
             tool_name,
-            preview_result(result),
+            result_preview,
         )
         await history.save_tool_message(
             db,
@@ -463,7 +474,7 @@ def build_langgraph(
                 "args": args,
                 "latency_ms": latency_ms,
                 "result": result,
-                "result_preview": preview_result(result),
+                "result_preview": result_preview,
             },
         )
 

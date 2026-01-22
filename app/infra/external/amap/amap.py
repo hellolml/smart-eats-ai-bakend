@@ -349,6 +349,23 @@ async def get_route(
         args["strategy"] = strategy
     payload = await _fetch_tool_payload(tool_key, args, servers_path)
     if payload is None:
+        normalized_mode = (mode or "driving").strip().lower()
+        if normalized_mode in {"walk", "walking", "bike", "bicycling", "cycling"}:
+            fallback_payload = await _fetch_tool_payload(
+                "maps_direction_driving",
+                args,
+                servers_path,
+            )
+            if fallback_payload is None:
+                return None
+            route = _extract_route(fallback_payload)
+            if not route:
+                return None
+            route["origin"] = origin
+            route["destination"] = destination
+            route["mode"] = "driving"
+            route["fallback_from"] = normalized_mode
+            return route
         return None
     route = _extract_route(payload)
     if not route:
