@@ -35,10 +35,10 @@ class Settings(BaseSettings):
     CHAT_HISTORY_LOCAL_CACHE_SIZE: int = 256
     CHAT_HISTORY_LOCAL_CACHE_TTL_SECONDS: int = 30
     CHAT_HISTORY_CACHE_MODE: str = "local_validate"
-    CHAT_SUMMARY_TRIGGER: int = 24
-    CHAT_SUMMARY_TAIL: int = 8
-    CHAT_SUMMARY_TTL_SECONDS: int = 3600
-    CHAT_SUMMARY_QUEUE: str = "queue:chat_summary"
+    CHAT_COMPACT_MIN_MESSAGES: int = 3
+    CHAT_COMPACT_TRIGGER_RATIO: float = 0.9
+    CHAT_COMPACT_TAIL_RATIO: float = 0.2
+    LLM_MODEL_CONTEXT_SIZE: int = 8192
     CONTEXT_SNAPSHOT_TTL_SECONDS: int = 600
     MINIO_BUCKET: str = "smart-eats"
     MINIO_BASE_PATH: str = ".minio_stub"
@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     QWEN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     QWEN_MODEL_PLANNER: str = "qwen-plus"
     QWEN_MODEL_WRITER: str = "qwen-plus"
+    LLM_REQUEST_LOG: str = "none"
     AGENT_MAX_STEPS: int = 4
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"

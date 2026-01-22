@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-import redis.asyncio as redis
-
-from app.common.config import settings
 from app.infra.models.context import ContextSnapshot
 from app.infra.models.fridge import FridgeItem
 from app.infra.models.preference import UserPreference, UserProfile
@@ -19,19 +15,11 @@ class ContextService:
     @staticmethod
     async def build(
         db: AsyncSession,
-        redis_client: redis.Redis,
         user_id: str | None,
         scene: str,
         session_id: str | None = None,
         overrides: dict[str, Any] | None = None,
-        force_refresh: bool = False,
     ) -> dict[str, Any]:
-        cache_key = f"context:user:{user_id}:{scene}" if user_id else None
-        if cache_key:
-            cached = await redis_client.get(cache_key)
-            if cached and not force_refresh and not overrides:
-                return json.loads(cached)
-
         user = None
         profile = None
         preferences = None
@@ -108,11 +96,6 @@ class ContextService:
 
         if overrides:
             snapshot = _merge_overrides(snapshot, overrides)
-
-        if cache_key:
-            await redis_client.setex(
-                cache_key, settings.CONTEXT_SNAPSHOT_TTL_SECONDS, json.dumps(snapshot)
-            )
 
         if user_id:
             db.add(

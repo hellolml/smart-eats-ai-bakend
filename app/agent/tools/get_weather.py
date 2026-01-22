@@ -8,11 +8,24 @@ from app.infra.external.amap import amap
 
 @register_tool(
     name="get_weather",
-    description="Get weather by city name",
-    args_schema={
+    description=(
+        "Get weather by city name. Input: {city:string}. "
+        "Output: {city,status,temperature_c,raw}. "
+        "Example input: {\"city\":\"长沙\"}."
+    ),
+    input_schema={
         "type": "object",
         "properties": {"city": {"type": "string"}},
         "required": ["city"],
+    },
+    output_schema={
+        "type": "object",
+        "properties": {
+            "city": {"type": "string"},
+            "status": {"type": "string"},
+            "temperature_c": {"type": ["number", "null"]},
+            "raw": {},
+        },
     },
 )
 async def get_weather(args: dict[str, Any]) -> dict[str, Any]:

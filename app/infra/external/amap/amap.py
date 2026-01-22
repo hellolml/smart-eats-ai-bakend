@@ -113,6 +113,16 @@ def _route_tool_key(mode: str | None) -> str:
     return "maps_direction_driving"
 
 
+def _normalize_coord_pair(value: dict[str, float]) -> dict[str, float]:
+    lat = value.get("lat")
+    lng = value.get("lng")
+    if lat is None or lng is None:
+        return value
+    if abs(lat) > 90 and abs(lng) <= 90:
+        return {"lat": lng, "lng": lat}
+    return value
+
+
 def _extract_route(payload: Any) -> dict[str, Any] | None:
     payload = _parse_json_payload(payload)
     route = payload
@@ -329,6 +339,8 @@ async def get_route(
     servers_path: str | None,
 ) -> dict[str, Any] | None:
     tool_key = _route_tool_key(mode)
+    origin = _normalize_coord_pair(origin)
+    destination = _normalize_coord_pair(destination)
     args = {
         "origin": f"{origin.get('lng')},{origin.get('lat')}",
         "destination": f"{destination.get('lng')},{destination.get('lat')}",
@@ -337,6 +349,23 @@ async def get_route(
         args["strategy"] = strategy
     payload = await _fetch_tool_payload(tool_key, args, servers_path)
     if payload is None:
+        normalized_mode = (mode or "driving").strip().lower()
+        if normalized_mode in {"walk", "walking", "bike", "bicycling", "cycling"}:
+            fallback_payload = await _fetch_tool_payload(
+                "maps_direction_driving",
+                args,
+                servers_path,
+            )
+            if fallback_payload is None:
+                return None
+            route = _extract_route(fallback_payload)
+            if not route:
+                return None
+            route["origin"] = origin
+            route["destination"] = destination
+            route["mode"] = "driving"
+            route["fallback_from"] = normalized_mode
+            return route
         return None
     route = _extract_route(payload)
     if not route:

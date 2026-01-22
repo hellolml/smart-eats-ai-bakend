@@ -12,12 +12,15 @@ def smart_system_prompt(payload: dict) -> str:
         "你是 SmartEats 的统一规划器，需要根据用户意图判断是“家里做”还是“出去吃”。"
         "当用户明确询问路线/导航/怎么走/路线规划时，必须优先调用 plan_route 获取路线，"
         "不得改用 search_restaurants 或 get_weather；"
+        "如果目的地是已推荐餐厅或近期搜索结果中的餐厅名称，直接调用 plan_route，"
+        "不要再调用 geocode_location，应依赖历史餐厅结果匹配 POI。"
         "如果路线所需的起点或终点缺失，应返回 final 追问缺失信息。"
         "当用户明确或暗示在家做饭时，优先调用 get_fridge_items 获取冰箱食材，"
         "并结合食材再调用 search_recipes 给出在家做的推荐；"
         "当用户想外出用餐时，若用户提供了城市/地标/门店名称，应先调用 geocode_location 获取坐标，"
         "再调用 search_restaurants；若用户仅说“出去吃”且无位置，先调用 get_ip_location，"
         "若仍无位置再追问城市/地标。"
+        "当需要用户状态/偏好/环境信息时，调用 get_user_info 获取。"
         "仅当用户明确询问天气/出行天气，或确实需要天气辅助决策时才调用 get_weather，且同一会话只调用一次；"
         "严禁重复调用同一工具与相同参数。"
         "如果已经拿到天气信息，下一步应继续完成主要任务（如餐厅推荐），不要再次调用天气。"
@@ -114,7 +117,7 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             ).model_dump()
         if isinstance(result, list):
             cards = []
-            for item in result[:3]:
+            for item in result:
                 cards.append(
                     {
                         "type": "restaurant",
@@ -233,6 +236,7 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         duration = result.get("duration_s")
         distance_km = None
         duration_min = None
+        fallback_from = result.get("fallback_from")
         try:
             if distance is not None:
                 distance_km = float(distance) / 1000
@@ -250,6 +254,8 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             summary = f"预计{distance_km:.1f}公里"
         elif duration_min is not None:
             summary = f"预计约{duration_min:.0f}分钟"
+        if fallback_from:
+            summary = f"{summary}（距离过远，已切换为驾车路线）"
         return FinalAnswer(
             recommendations=[
                 {
@@ -277,6 +283,7 @@ def _smart_eats_agent() -> AgentConfig:
             "plan_route",
             "get_ip_location",
             "geocode_location",
+            "get_user_info",
         ],
         max_steps=4,
         system_prompt_builder=smart_system_prompt,

@@ -23,7 +23,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.checkpoint import checkpointer_context
-from app.agent.llm_adapters import OpenAIPlanner, OpenAIWriter
+from app.agent.llm_adapters import (
+    OpenAIPlanner,
+    OpenAIWriter,
+    set_llm_log_context,
+    reset_llm_log_context,
+)
 from app.agent.factory import build_agent_graph
 from app.agent.agent_registry import AgentConfig, get_agent_config
 from app.agent.schemas import FinalAction, FinalAnswer, ToolAction
@@ -31,23 +36,86 @@ from app.agent.state import ChatState
 from app.agent.tools_registry import get_tool, list_tools, preview_result
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
-from app.domain.context.service import ContextService
 from app.agent import history, memory
 from app.infra.models.chat import ChatMessage, ChatSession
 
 logger = logging.getLogger("agent")
 
 
-def _build_context(state: ChatState) -> dict[str, Any]:
-    if state.snapshot:
-        return state.snapshot
-    return {
-        "user": {"nickname": None, "goal": None, "current_state": None},
-        "preferences": {"tastes": [], "avoid": [], "allergens": []},
-        "fridge": {"top_items": []},
-        "environment": {"location": None},
-        "ui_scene": state.scene or "chat",
+def _build_observation_context(
+    state: ChatState,
+    agent_config: AgentConfig,
+    summary: str | None,
+    memories: list[str],
+) -> dict[str, Any]:
+    context = {"ui_scene": state.scene or "chat"}
+    context["user_message"] = state.message or ""
+    context["history"] = state.history
+    if summary:
+        context["history_summary"] = summary
+    if memories:
+        context["memories"] = memories
+    context["observations"] = list(state.observations)
+    context["checkpoint"] = {
+        "resume_from_checkpoint": state.resume_from_checkpoint,
+        "checkpoint_ref": state.checkpoint_ref,
+        "replay_from_checkpoint": state.replay_from_checkpoint,
     }
+    context["system_prompt"] = agent_config.system_prompt_builder({"context": context})
+    return context
+
+
+def _count_user_turns(history_items: list[dict[str, Any]]) -> int:
+    return sum(1 for item in history_items if item.get("role") == "user")
+
+
+async def _refresh_observation_context(
+    db: AsyncSession,
+    redis_client: redis.Redis,
+    state: ChatState,
+    agent_config: AgentConfig,
+    emit_context_event: bool = True,
+) -> None:
+    if state.message:
+        should_log = not state.user_message_logged or state.last_user_message != state.message
+        if should_log:
+            await history.save_user_message(
+                db,
+                redis_client,
+                state.session_id,
+                state.message,
+            )
+            state.user_message_logged = True
+            state.last_user_message = state.message
+
+    state.history = await history.load_history(
+        db,
+        redis_client,
+        state.session_id,
+        settings.CHAT_HISTORY_LIMIT,
+        state.message,
+    )
+    state.history, summary = await history.maybe_compress_history(
+        redis_client,
+        state.provider or settings.LLM_PROVIDER,
+        state.session_id,
+        state.history,
+    )
+    state.turn_index = _count_user_turns(state.history) + (1 if state.message else 0)
+    memories = await memory.search_memories(db, state.user_id, state.message or "")
+    state.context = _build_observation_context(
+        state,
+        agent_config,
+        summary,
+        memories,
+    )
+    if emit_context_event:
+        logger.info(
+            "context_snapshot session_id=%s keys=%s",
+            state.session_id,
+            sorted(state.context.keys()),
+        )
+        state.events.append({"event": "context", "data": state.context})
 
 
 def _fallback_final() -> dict[str, Any]:
@@ -64,12 +132,15 @@ def _fallback_final() -> dict[str, Any]:
     ).model_dump()
 
 
-def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    if args_schema.get("type") != "object":
+def _validate_args(
+    input_schema: dict[str, Any],
+    args: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    if input_schema.get("type") != "object":
         return False, {"planner_error": "invalid_schema"}
 
-    properties = args_schema.get("properties", {})
-    required = args_schema.get("required", [])
+    properties = input_schema.get("properties", {})
+    required = input_schema.get("required", [])
     missing = [key for key in required if key not in args]
     if missing:
         return False, {
@@ -77,7 +148,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
             "missing": missing,
             "allowed_properties": list(properties.keys()),
             "received_args": args,
-            "expected_schema": args_schema,
+            "expected_schema": input_schema,
         }
 
     for key, value in args.items():
@@ -91,7 +162,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
                 "expected": expected,
                 "received": type(value).__name__,
                 "allowed_properties": list(properties.keys()),
-                "expected_schema": args_schema,
+                "expected_schema": input_schema,
             }
         if expected == "number" and not isinstance(value, (int, float)):
             return False, {
@@ -100,7 +171,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
                 "expected": expected,
                 "received": type(value).__name__,
                 "allowed_properties": list(properties.keys()),
-                "expected_schema": args_schema,
+                "expected_schema": input_schema,
             }
         if expected == "integer" and not isinstance(value, int):
             return False, {
@@ -109,7 +180,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
                 "expected": expected,
                 "received": type(value).__name__,
                 "allowed_properties": list(properties.keys()),
-                "expected_schema": args_schema,
+                "expected_schema": input_schema,
             }
         if expected == "boolean" and not isinstance(value, bool):
             return False, {
@@ -118,7 +189,7 @@ def _validate_args(args_schema: dict[str, Any], args: dict[str, Any]) -> tuple[b
                 "expected": expected,
                 "received": type(value).__name__,
                 "allowed_properties": list(properties.keys()),
-                "expected_schema": args_schema,
+                "expected_schema": input_schema,
             }
 
     return True, {}
@@ -135,53 +206,24 @@ def build_langgraph(
     allowed_tools = agent_config.tool_names
 
     async def observe_node(state: ChatState) -> ChatState:
-        if state.snapshot is None:
-            state.snapshot = await ContextService.build(
-                db=db,
-                redis_client=redis_client,
-                user_id=state.user_id,
-                scene=state.scene,
-                session_id=state.session_id,
-                overrides=state.context_overrides,
-                force_refresh=bool(state.context_overrides),
-            )
-            state.context = _build_context(state)
+        first_round = state.steps_left <= 0 and not state.tool_calls and not state.observations
+        if first_round:
             state.steps_left = agent_config.max_steps
-            state.events.append({"event": "context", "data": state.context})
-
         await _ensure_chat_session(db, state)
-        if state.message:
-            should_log = not state.user_message_logged or state.last_user_message != state.message
-            if should_log:
-                await history.save_user_message(
-                    db,
-                    redis_client,
-                    state.session_id,
-                    state.message,
-                )
-                state.user_message_logged = True
-                state.last_user_message = state.message
-
-        state.history = await history.load_history(
+        await _refresh_observation_context(
             db,
             redis_client,
-            state.session_id,
-            settings.CHAT_HISTORY_LIMIT,
-            state.message,
+            state,
+            agent_config,
+            emit_context_event=first_round,
         )
-        state.history, summary = await history.maybe_compress_history(
-            redis_client,
-            state.provider or settings.LLM_PROVIDER,
+        logger.info(
+            "agent_observe session_id=%s history_count=%s observations_count=%s steps_left=%s",
             state.session_id,
-            state.history,
+            len(state.history),
+            len(state.observations),
+            state.steps_left,
         )
-        state.context = state.context or _build_context(state)
-        state.context["history"] = state.history
-        if summary:
-            state.context["history_summary"] = summary
-        memories = await memory.search_memories(db, state.user_id, state.message or "")
-        if memories:
-            state.context["memories"] = memories
 
         pause_key = f"chat:pause:{state.session_id}"
         if await redis_client.get(pause_key):
@@ -205,15 +247,20 @@ def build_langgraph(
         return state
 
     async def think_node(state: ChatState) -> ChatState:
-        system = agent_config.system_prompt_builder(
+        system = None
+        if state.context:
+            system = state.context.get("system_prompt")
+        if not system:
+            system = agent_config.system_prompt_builder({"context": state.context})
+        user = state.message or ""
+        state.step_index = agent_config.max_steps - state.steps_left + 1
+        token = set_llm_log_context(
             {
-                "context": state.context,
-                "tools": list_tools(allowed_tools),
-                "observations": state.observations,
-                "history": state.history,
+                "session_id": state.session_id,
+                "turn": state.turn_index,
+                "step": state.step_index,
             }
         )
-        user = state.message or ""
         try:
             action = await asyncio.wait_for(
                 planner.plan(system, user, action_normalizer=agent_config.action_normalizer),
@@ -236,6 +283,8 @@ def build_langgraph(
                 {"detail": str(exc)},
             )
             return state
+        finally:
+            reset_llm_log_context(token)
 
         if isinstance(action, FinalAction) or getattr(action, "type", None) == "final":
             final = action.answer
@@ -249,6 +298,10 @@ def build_langgraph(
                 "plan_final",
                 {"summary": "planner returned final"},
             )
+            logger.info(
+                "agent_decision session_id=%s action_type=final",
+                state.session_id,
+            )
             return state
 
         if not isinstance(action, ToolAction):
@@ -260,6 +313,10 @@ def build_langgraph(
                 state,
                 "plan_invalid_action",
                 {"action_type": str(getattr(action, "type", None))},
+            )
+            logger.info(
+                "agent_decision session_id=%s action_type=invalid",
+                state.session_id,
             )
             return state
 
@@ -287,6 +344,11 @@ def build_langgraph(
                 "plan_unknown_tool",
                 {"tool": tool_name},
             )
+            logger.info(
+                "agent_decision session_id=%s action_type=unknown_tool tool=%s",
+                state.session_id,
+                tool_name,
+            )
             if state.planner_retry_count >= 2:
                 state.final_json = _fallback_final()
                 state.action_type = "final"
@@ -294,7 +356,7 @@ def build_langgraph(
                 state.action_type = "retry"
             return state
 
-        valid, error_obs = _validate_args(tool.args_schema, args)
+        valid, error_obs = _validate_args(tool.input_schema, args)
         if not valid:
             state.planner_retry_count += 1
             state.observations.append(error_obs)
@@ -309,6 +371,11 @@ def build_langgraph(
                 state,
                 "plan_invalid_args",
                 error_obs,
+            )
+            logger.info(
+                "agent_decision session_id=%s action_type=invalid_args tool=%s",
+                state.session_id,
+                tool_name,
             )
             if state.planner_retry_count >= 2:
                 state.final_json = _fallback_final()
@@ -331,6 +398,12 @@ def build_langgraph(
             state,
             "plan_tool",
             {"tool": tool_name, "args": args},
+        )
+        logger.info(
+            "agent_decision session_id=%s action_type=tool tool=%s args=%s",
+            state.session_id,
+            tool_name,
+            args,
         )
         return state
 
@@ -365,6 +438,17 @@ def build_langgraph(
             result = {"error": str(exc)}
         latency_ms = int((time.perf_counter() - start) * 1000)
 
+        result_preview = preview_result(result)
+        if tool_name == "plan_route" and isinstance(result, dict):
+            result_preview = {
+                "distance_m": result.get("distance_m"),
+                "duration_s": result.get("duration_s"),
+                "origin": result.get("origin"),
+                "destination": result.get("destination"),
+                "mode": result.get("mode"),
+                "fallback_from": result.get("fallback_from"),
+                "error": result.get("error"),
+            }
         state.tool_calls.append({"name": tool_name, "args": args, "latency_ms": latency_ms})
         state.observations.append({"tool": tool_name, "result": result})
         state.steps_left -= 1
@@ -375,6 +459,12 @@ def build_langgraph(
             tool_name,
             latency_ms,
         )
+        logger.info(
+            "tool_result session_id=%s tool=%s result_preview=%s",
+            state.session_id,
+            tool_name,
+            result_preview,
+        )
         await history.save_tool_message(
             db,
             redis_client,
@@ -384,7 +474,7 @@ def build_langgraph(
                 "args": args,
                 "latency_ms": latency_ms,
                 "result": result,
-                "result_preview": preview_result(result),
+                "result_preview": result_preview,
             },
         )
 
@@ -405,13 +495,26 @@ def build_langgraph(
             if handled:
                 state.final_json = handled
                 state.action_type = "final"
+                logger.info(
+                    "agent_decision session_id=%s action_type=final tool=%s",
+                    state.session_id,
+                    tool_name,
+                )
                 return state
 
         if state.steps_left <= 0:
             state.final_json = _fallback_final()
             state.action_type = "final"
+            logger.info(
+                "agent_decision session_id=%s action_type=final reason=steps_exhausted",
+                state.session_id,
+            )
         else:
             state.action_type = "plan"
+            logger.info(
+                "agent_decision session_id=%s action_type=plan",
+                state.session_id,
+            )
         return state
 
     graph = StateGraph(ChatState)
@@ -467,6 +570,7 @@ async def run_chat_stream(
                 provider=provider,
             ).compile(checkpointer=checkpointer)
             latest_state = state
+            last_final_json: dict[str, Any] | None = None
             config = {"configurable": {"thread_id": state.session_id}}
             if state.checkpoint_ref:
                 config["configurable"]["checkpoint_id"] = state.checkpoint_ref
@@ -546,6 +650,12 @@ async def run_chat_stream(
                     yield {"event": "final", "data": {"stopped": True}}
                     return
                 latest_state = updated
+                if isinstance(updated, ChatState):
+                    if updated.final_json:
+                        last_final_json = updated.final_json
+                elif isinstance(updated, dict):
+                    if updated.get("final_json"):
+                        last_final_json = updated.get("final_json")
                 events = updated.events if hasattr(updated, "events") else updated.get("events", [])
                 for item in events:
                     yield item
@@ -560,6 +670,8 @@ async def run_chat_stream(
             else latest_state.get("final_json")
         )
         if not final_json:
+            final_json = last_final_json
+        if not final_json:
             final_json = _fallback_final()
             if hasattr(latest_state, "final_json"):
                 latest_state.final_json = final_json
@@ -567,15 +679,31 @@ async def run_chat_stream(
                 latest_state["final_json"] = final_json
 
         writer_prompt = agent_config.writer_prompt_builder(final_json)
+        if isinstance(latest_state, ChatState):
+            writer_state = latest_state
+        elif isinstance(latest_state, dict):
+            writer_state = ChatState(**latest_state)
+        else:
+            writer_state = state
+        token = set_llm_log_context(
+            {
+                "session_id": writer_state.session_id,
+                "turn": writer_state.turn_index,
+                "step": "final",
+            }
+        )
         assistant_chunks: list[str] = []
-        async for delta in writer.stream("You are a helpful assistant.", writer_prompt):
-            if await request.is_disconnected():
-                return
-            if await redis_client.get(cancel_key):
-                yield {"event": "final", "data": {"stopped": True}}
-                return
-            assistant_chunks.append(delta)
-            yield {"event": "delta", "data": {"token": delta}}
+        try:
+            async for delta in writer.stream("You are a helpful assistant.", writer_prompt):
+                if await request.is_disconnected():
+                    return
+                if await redis_client.get(cancel_key):
+                    yield {"event": "final", "data": {"stopped": True}}
+                    return
+                assistant_chunks.append(delta)
+                yield {"event": "delta", "data": {"token": delta}}
+        finally:
+            reset_llm_log_context(token)
 
         if isinstance(latest_state, ChatState):
             await history.save_assistant_message(

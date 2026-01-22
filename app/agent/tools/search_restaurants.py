@@ -8,13 +8,19 @@ import logging
 from app.agent.tools_registry import register_tool
 from app.domain.restaurant.service import RestaurantService
 from app.agent.tools.location_cache import load_cached_location
+from app.agent.tools.restaurant_cache import cache_restaurants
 
 logger = logging.getLogger("amap.mcp")
 
 @register_tool(
     name="search_restaurants",
-    description="Search restaurants by keyword and location",
-    args_schema={
+    description=(
+        "Search restaurants by keyword and coordinates. "
+        "Input: {query?:string,tag?:string,lat:number,lng:number,sort?:string}. "
+        "Output: list of restaurants or {error:string}. "
+        "Example input: {\"query\":\"火锅\",\"lat\":28.17,\"lng\":112.93}."
+    ),
+    input_schema={
         "type": "object",
         "properties": {
             "query": {"type": "string"},
@@ -24,6 +30,27 @@ logger = logging.getLogger("amap.mcp")
             "sort": {"type": "string"},
         },
         "required": [],
+    },
+    output_schema={
+        "oneOf": [
+            {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "provider": {"type": "string"},
+                        "provider_id": {"type": "string"},
+                        "name": {"type": "string"},
+                        "geo": {"type": "object"},
+                        "rating": {"type": ["number", "null"]},
+                        "price": {"type": ["number", "null"]},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
+            {"type": "object", "properties": {"error": {"type": "string"}}},
+        ]
     },
 )
 async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
@@ -48,7 +75,7 @@ async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dic
         query = tag or "美食"
     if isinstance(query, str) and query.strip() in _GENERIC_QUERIES:
         query = "美食"
-    return await RestaurantService.search(
+    results = await RestaurantService.search(
         redis_client,
         query,
         tag,
@@ -56,6 +83,8 @@ async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dic
         lng,
         args.get("sort"),
     )
+    await cache_restaurants(redis_client, session_id, results)
+    return results
 
 
 def _normalize_coord(value: Any) -> float | None:

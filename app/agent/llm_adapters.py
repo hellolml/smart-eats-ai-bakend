@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 import logging
 import os
@@ -12,6 +13,37 @@ from app.agent.schemas import AgentAction, AgentActionModel, ToolAction
 from app.common.config import settings
 
 logger = logging.getLogger("llm")
+_LLM_LOG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("llm_log_context", default={})
+
+
+def set_llm_log_context(values: dict[str, Any]) -> Token:
+    return _LLM_LOG_CONTEXT.set(values)
+
+
+def reset_llm_log_context(token: Token) -> None:
+    _LLM_LOG_CONTEXT.reset(token)
+
+
+def _log_context() -> dict[str, Any]:
+    data = _LLM_LOG_CONTEXT.get() or {}
+    return {
+        "session_id": data.get("session_id"),
+        "turn": data.get("turn"),
+        "step": data.get("step"),
+    }
+
+
+def _request_log_mode() -> str:
+    return (settings.LLM_REQUEST_LOG or "none").lower()
+
+
+def _should_log_request(kind: str) -> bool:
+    mode = _request_log_mode()
+    if mode in {"none", "off", "disabled"}:
+        return False
+    if mode == "both":
+        return True
+    return mode == kind
 
 @dataclass(frozen=True)
 class ProviderConfig:
@@ -70,6 +102,27 @@ class OpenAIPlanner:
     ) -> AgentAction:
         if not self.client:
             raise RuntimeError("LLM provider is not configured")
+        context = _log_context()
+        if _should_log_request("system"):
+            logger.info(
+                "planner request provider=%s model=%s session_id=%s turn=%s step=%s system=%s",
+                self.config.name,
+                self.config.model_planner,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                system,
+            )
+        if _should_log_request("user"):
+            logger.info(
+                "planner request provider=%s model=%s session_id=%s turn=%s step=%s user=%s",
+                self.config.name,
+                self.config.model_planner,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                user,
+            )
 
         if hasattr(self.client, "responses"):
             response = await self.client.responses.parse(
@@ -80,8 +133,15 @@ class OpenAIPlanner:
                 ],
                 text_format=AgentActionModel,
             )
-            if settings.DEBUG:
-                logger.info("planner response parsed=%s", response.output_parsed)
+            logger.info(
+                "planner response provider=%s model=%s session_id=%s turn=%s step=%s parsed=%s",
+                self.config.name,
+                self.config.model_planner,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                response.output_parsed,
+            )
             return response.output_parsed.root
 
         response = await self.client.chat.completions.create(
@@ -93,8 +153,15 @@ class OpenAIPlanner:
             response_format={"type": "json_object"},
         )
         content = response.choices[0].message.content or "{}"
-        if settings.DEBUG:
-            logger.info("planner response raw=%s", content)
+        logger.info(
+            "planner response provider=%s model=%s session_id=%s turn=%s step=%s raw=%s",
+            self.config.name,
+            self.config.model_planner,
+            context.get("session_id"),
+            context.get("turn"),
+            context.get("step"),
+            content,
+        )
         if action_normalizer:
             mapped = action_normalizer(content)
             if mapped:
@@ -116,6 +183,27 @@ class OpenAIWriter:
     async def stream(self, system: str, user: str) -> AsyncGenerator[str, None]:
         if not self.client:
             raise RuntimeError("LLM provider is not configured")
+        context = _log_context()
+        if _should_log_request("system"):
+            logger.info(
+                "writer request provider=%s model=%s session_id=%s turn=%s step=%s system=%s",
+                self.config.name,
+                self.config.model_writer,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                system,
+            )
+        if _should_log_request("user"):
+            logger.info(
+                "writer request provider=%s model=%s session_id=%s turn=%s step=%s user=%s",
+                self.config.name,
+                self.config.model_writer,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                user,
+            )
 
         if hasattr(self.client, "responses"):
             stream = await self.client.responses.create(
@@ -135,8 +223,15 @@ class OpenAIWriter:
                     break
                 elif event.type == "response.failed":
                     raise RuntimeError("writer response failed")
-            if settings.DEBUG:
-                logger.info("writer response text=%s", "".join(chunks))
+            logger.info(
+                "writer response provider=%s model=%s session_id=%s turn=%s step=%s text=%s",
+                self.config.name,
+                self.config.model_writer,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                "".join(chunks),
+            )
             return
 
         stream = await self.client.chat.completions.create(
@@ -153,5 +248,12 @@ class OpenAIWriter:
             if delta:
                 chunks.append(delta)
                 yield delta
-        if settings.DEBUG:
-            logger.info("writer response text=%s", "".join(chunks))
+        logger.info(
+            "writer response provider=%s model=%s session_id=%s turn=%s step=%s text=%s",
+            self.config.name,
+            self.config.model_writer,
+            context.get("session_id"),
+            context.get("turn"),
+            context.get("step"),
+            "".join(chunks),
+        )
