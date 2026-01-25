@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 
 import redis.asyncio as redis
 import logging
 
 from app.agent.tools_registry import register_tool
 from app.domain.restaurant.service import RestaurantService
-from app.agent.tools.location_cache import load_cached_location
+from app.agent.tools.location_cache import cache_location, load_cached_location
 from app.agent.tools.restaurant_cache import cache_restaurants
+from app.infra.external.amap import amap
 
 logger = logging.getLogger("amap.mcp")
 
@@ -62,15 +64,34 @@ async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dic
     tag = args.get("tag")
     lat = _normalize_coord(args.get("lat"))
     lng = _normalize_coord(args.get("lng"))
+    last_user_message = args.get("last_user_message")
+    context = args.get("context") if isinstance(args.get("context"), dict) else {}
+    servers_path = args.get("servers_path")
     if isinstance(query, str) and not query.strip():
         query = None
-    if (lat is None or lng is None) and isinstance(session_id, str):
+    if _looks_like_address(last_user_message):
+        city = _extract_city_from_text(last_user_message) or _extract_city_from_context(context)
+        location = await amap.geocode_address(
+            _normalize_address_text(last_user_message),
+            city,
+            servers_path=servers_path,
+        )
+        if location:
+            lat = location.get("lat")
+            lng = location.get("lng")
+            await cache_location(redis_client, session_id, lat, lng, city)
+    cached = None
+    if isinstance(session_id, str):
         cached = await load_cached_location(redis_client, session_id)
-        if cached:
+        if cached and (lat is None or lng is None):
             lat = lat or cached.get("lat")
             lng = lng or cached.get("lng")
     if lat is None or lng is None:
-        return {"error": "missing_location"}
+        if cached:
+            lat = cached.get("lat")
+            lng = cached.get("lng")
+        if lat is None or lng is None:
+            return {"error": "missing_location"}
     if query is None:
         query = tag or "美食"
     if isinstance(query, str) and query.strip() in _GENERIC_QUERIES:
@@ -83,6 +104,19 @@ async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dic
         lng,
         args.get("sort"),
     )
+    if not results and cached:
+        cached_lat = _normalize_coord(cached.get("lat"))
+        cached_lng = _normalize_coord(cached.get("lng"))
+        if cached_lat is not None and cached_lng is not None:
+            if not _coords_close(lat, lng, cached_lat, cached_lng):
+                results = await RestaurantService.search(
+                    redis_client,
+                    query,
+                    tag,
+                    cached_lat,
+                    cached_lng,
+                    args.get("sort"),
+                )
     await cache_restaurants(redis_client, session_id, results)
     return results
 
@@ -97,6 +131,50 @@ def _normalize_coord(value: Any) -> float | None:
     if value == 0:
         return None
     return value
+
+
+def _coords_close(lat1: float | None, lng1: float | None, lat2: float | None, lng2: float | None) -> bool:
+    if lat1 is None or lng1 is None or lat2 is None or lng2 is None:
+        return False
+    return abs(lat1 - lat2) < 0.0001 and abs(lng1 - lng2) < 0.0001
+
+
+def _looks_like_address(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or text in _GENERIC_QUERIES:
+        return False
+    tokens = ("省", "市", "区", "县", "街", "路", "巷", "号", "小区", "村", "镇", "乡", "大道", "广场", "站")
+    if any(token in text for token in tokens):
+        return True
+    return bool(re.search(r"\d+(\s*(号|栋|单元|室|楼))?", text))
+
+
+def _normalize_address_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _extract_city_from_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    match = re.search(r"([\u4e00-\u9fa5]{2,8}市)", text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _extract_city_from_context(context: dict[str, Any]) -> str | None:
+    env = context.get("environment") if isinstance(context.get("environment"), dict) else {}
+    location = env.get("location") or context.get("location")
+    if isinstance(location, dict):
+        return location.get("city") or location.get("name")
+    if isinstance(location, str):
+        return location
+    return None
 
 
 _GENERIC_QUERIES = {

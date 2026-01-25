@@ -19,6 +19,8 @@ class ChatState:
     turn_index: int = 0
     step_index: int = 0
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    pending_tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tool_results_batch: list[dict[str, Any]] = field(default_factory=list)
     observations: list[dict[str, Any]] = field(default_factory=list)
     final_json: dict[str, Any] | None = None
     planner_retry_count: int = 0

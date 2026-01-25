@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     CHAT_HISTORY_LOCAL_CACHE_SIZE: int = 256
     CHAT_HISTORY_LOCAL_CACHE_TTL_SECONDS: int = 30
     CHAT_HISTORY_CACHE_MODE: str = "local_validate"
+    TOOL_HISTORY_KEEP: int = 3
+    TOOL_HISTORY_ALLOW: str = "get_ip_location,geocode_location,search_restaurants,plan_route,get_weather"
     CHAT_COMPACT_MIN_MESSAGES: int = 3
     CHAT_COMPACT_TRIGGER_RATIO: float = 0.9
     CHAT_COMPACT_TAIL_RATIO: float = 0.2

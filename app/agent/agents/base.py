@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.agent.schemas import AgentAction, AgentActionModel
@@ -11,13 +12,11 @@ from app.common.config import settings
 def default_system_prompt(payload: dict[str, Any]) -> str:
     return (
         "You are a planner for a SmartEats agent. "
-        "Return the next action in strict JSON schema (tool or final). "
+        "Return the next action in strict <tool_calls> (multiple tools allowed) or final JSON. "
         "Format must be exactly:\n"
-        "{\n"
-        "  \"type\": \"tool\",\n"
-        "  \"name\": \"<tool_name>\",\n"
-        "  \"args\": {\"key\": \"value\"}\n"
-        "}\n"
+        "<tool_calls>[{\"tool_name\": {\"param\": \"value\"}}]</tool_calls>\n"
+        "Example:\n"
+        "<tool_calls>[{\"get_ip_location\": {}}, {\"search_restaurants\": {\"query\": \"noodles\"}}]</tool_calls>\n"
         "or\n"
         "{\n"
         "  \"type\": \"final\",\n"
@@ -100,18 +99,39 @@ def _normalize_final_answer(answer: Any) -> dict[str, Any] | None:
     return answer
 
 
+def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
+    match = re.search(r"<tool_calls>(.*?)</tool_calls>", raw, re.DOTALL)
+    if not match:
+        return None
+    payload = match.group(1).strip()
+    if not payload:
+        return []
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list):
+        return None
+    for item in data:
+        if not isinstance(item, dict) or len(item) != 1:
+            return None
+        name, params = next(iter(item.items()))
+        if not isinstance(name, str) or not isinstance(params, dict):
+            return None
+    return data
+
+
 def normalize_action_from_raw(content: str) -> AgentAction | None:
+    tool_calls = _parse_tool_calls(content)
+    if tool_calls is not None:
+        payload = {"type": "tool_calls", "calls": tool_calls}
+        return AgentActionModel.model_validate(payload).root
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
         return None
-    if isinstance(data, dict) and "tool" in data and "args" in data:
-        payload = {"type": "tool", "name": data.get("tool"), "args": data.get("args", {})}
-        return AgentActionModel.model_validate(payload).root
-    if isinstance(data, dict) and "final" in data:
-        answer = _normalize_final_answer(data.get("final"))
-        payload = {"type": "final", "answer": answer or data.get("final")}
-        return AgentActionModel.model_validate(payload).root
+    if isinstance(data, dict) and data.get("type") == "tool_calls" and "calls" in data:
+        return AgentActionModel.model_validate(data).root
     if isinstance(data, dict) and data.get("type") == "final" and "answer" in data:
         answer = _normalize_final_answer(data.get("answer"))
         payload = {"type": "final", "answer": answer or data.get("answer")}

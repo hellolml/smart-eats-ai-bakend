@@ -45,6 +45,28 @@ def _should_log_request(kind: str) -> bool:
         return True
     return mode == kind
 
+
+def _extract_response_text(response: Any) -> str | None:
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text
+    output = getattr(response, "output", None)
+    if not isinstance(output, list):
+        return None
+    parts: list[str] = []
+    for item in output:
+        if getattr(item, "type", None) == "output_text":
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+        content = getattr(item, "content", None)
+        if isinstance(content, list):
+            for block in content:
+                text = getattr(block, "text", None)
+                if isinstance(text, str):
+                    parts.append(text)
+    return "".join(parts) if parts else None
+
 @dataclass(frozen=True)
 class ProviderConfig:
     name: str
@@ -125,24 +147,33 @@ class OpenAIPlanner:
             )
 
         if hasattr(self.client, "responses"):
-            response = await self.client.responses.parse(
+            response = await self.client.responses.create(
                 model=self.config.model_planner,
                 input=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                text_format=AgentActionModel,
             )
+            content = _extract_response_text(response)
+            if not content:
+                raise RuntimeError("invalid planner response: empty content")
             logger.info(
-                "planner response provider=%s model=%s session_id=%s turn=%s step=%s parsed=%s",
+                "planner response provider=%s model=%s session_id=%s turn=%s step=%s raw=%s",
                 self.config.name,
                 self.config.model_planner,
                 context.get("session_id"),
                 context.get("turn"),
                 context.get("step"),
-                response.output_parsed,
+                content,
             )
-            return response.output_parsed.root
+            if action_normalizer:
+                mapped = action_normalizer(content)
+                if mapped:
+                    return mapped
+            try:
+                return AgentActionModel.model_validate_json(content).root
+            except Exception as exc:
+                raise RuntimeError(f"invalid planner response: {exc}") from exc
 
         response = await self.client.chat.completions.create(
             model=self.config.model_planner,
@@ -150,9 +181,8 @@ class OpenAIPlanner:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            response_format={"type": "json_object"},
         )
-        content = response.choices[0].message.content or "{}"
+        content = response.choices[0].message.content or ""
         logger.info(
             "planner response provider=%s model=%s session_id=%s turn=%s step=%s raw=%s",
             self.config.name,
@@ -166,7 +196,10 @@ class OpenAIPlanner:
             mapped = action_normalizer(content)
             if mapped:
                 return mapped
-        return AgentActionModel.model_validate_json(content).root
+        try:
+            return AgentActionModel.model_validate_json(content).root
+        except Exception as exc:
+            raise RuntimeError(f"invalid planner response: {exc}") from exc
 
 
 class OpenAIWriter:

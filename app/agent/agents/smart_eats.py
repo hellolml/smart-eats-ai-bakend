@@ -24,12 +24,10 @@ def smart_system_prompt(payload: dict) -> str:
         "仅当用户明确询问天气/出行天气，或确实需要天气辅助决策时才调用 get_weather，且同一会话只调用一次；"
         "严禁重复调用同一工具与相同参数。"
         "如果已经拿到天气信息，下一步应继续完成主要任务（如餐厅推荐），不要再次调用天气。"
-        "返回严格 JSON（tool 或 final），格式必须是:\n"
-        "{\n"
-        "  \"type\": \"tool\",\n"
-        "  \"name\": \"<tool_name>\",\n"
-        "  \"args\": {\"key\": \"value\"}\n"
-        "}\n"
+        "返回严格 <tool_calls> 或 final JSON（支持一次返回多个工具），格式必须是:\n"
+        "<tool_calls>[{\"tool_name\": {\"param\": \"value\"}}]</tool_calls>\n"
+        "示例（多工具）:\n"
+        "<tool_calls>[{\"get_ip_location\": {}}, {\"search_restaurants\": {\"query\": \"火锅\", \"lat\": 28.1, \"lng\": 112.9}}]</tool_calls>\n"
         "或\n"
         "{\n"
         "  \"type\": \"final\",\n"
@@ -234,6 +232,7 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
 
         distance = result.get("distance_m")
         duration = result.get("duration_s")
+        steps = result.get("steps")
         distance_km = None
         duration_min = None
         fallback_from = result.get("fallback_from")
@@ -256,12 +255,23 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             summary = f"预计约{duration_min:.0f}分钟"
         if fallback_from:
             summary = f"{summary}（距离过远，已切换为驾车路线）"
+        detail_lines = []
+        if isinstance(steps, list):
+            for idx, step in enumerate(steps, start=1):
+                if not isinstance(step, str):
+                    continue
+                detail_lines.append(f"{idx}. {step}")
+                if len(detail_lines) >= 8:
+                    break
+        reason = summary
+        if detail_lines:
+            reason = f"{summary}\n" + "\n".join(detail_lines)
         return FinalAnswer(
             recommendations=[
                 {
                     "type": "note",
                     "title": "路线建议",
-                    "reason": summary,
+                    "reason": reason,
                 }
             ],
             followups=["需要换一种出行方式吗？", "是否需要查看途经餐厅？"],
