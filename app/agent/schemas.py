@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Literal, Union, Any
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -46,12 +46,17 @@ class ToolAction(BaseModel):
     args: dict = Field(default_factory=dict)
 
 
+class ToolCallsAction(BaseModel):
+    type: Literal["tool_calls"] = "tool_calls"
+    calls: list[dict[str, dict[str, Any]]] = Field(default_factory=list)
+
+
 class FinalAction(BaseModel):
     type: Literal["final"] = "final"
     answer: FinalAnswer
 
 
-AgentAction = Union[ToolAction, FinalAction]
+AgentAction = Union[ToolAction, ToolCallsAction, FinalAction]
 
 
 class AgentActionModel(RootModel[AgentAction]):

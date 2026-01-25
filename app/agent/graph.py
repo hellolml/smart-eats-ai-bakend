@@ -31,9 +31,10 @@ from app.agent.llm_adapters import (
 )
 from app.agent.factory import build_agent_graph
 from app.agent.agent_registry import AgentConfig, get_agent_config
-from app.agent.schemas import FinalAction, FinalAnswer, ToolAction
+from app.agent.schemas import FinalAction, FinalAnswer, ToolAction, ToolCallsAction
 from app.agent.state import ChatState
 from app.agent.tools_registry import get_tool, list_tools, preview_result
+from app.agent.tool_executor import ToolExecutor
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
 from app.agent import history, memory
@@ -195,6 +196,8 @@ def _validate_args(
     return True, {}
 
 
+
+
 def build_langgraph(
     db: AsyncSession,
     redis_client: redis.Redis,
@@ -204,6 +207,7 @@ def build_langgraph(
     planner = OpenAIPlanner(provider=provider)
     agent_config = agent_config or get_agent_config(None)
     allowed_tools = agent_config.tool_names
+    tool_executor = ToolExecutor(allowed_tools, redis_client, db, max_workers=6)
 
     async def observe_node(state: ChatState) -> ChatState:
         first_round = state.steps_left <= 0 and not state.tool_calls and not state.observations
@@ -304,6 +308,99 @@ def build_langgraph(
             )
             return state
 
+        if isinstance(action, ToolCallsAction) or getattr(action, "type", None) == "tool_calls":
+            calls = action.calls if isinstance(action, ToolCallsAction) else getattr(action, "calls", [])
+            if not isinstance(calls, list) or not calls:
+                state.observations.append({"planner_error": "invalid_tool_calls", "detail": "empty"})
+                state.final_json = _fallback_final()
+                state.action_type = "final"
+                await _log_plan_event(
+                    db,
+                    state,
+                    "plan_invalid_tool_calls",
+                    {"detail": "empty"},
+                )
+                logger.info(
+                    "agent_decision session_id=%s action_type=invalid_tool_calls",
+                    state.session_id,
+                )
+                return state
+            normalized_calls: list[dict[str, Any]] = []
+            errors: list[dict[str, Any]] = []
+            for call in calls:
+                if not isinstance(call, dict) or len(call) != 1:
+                    errors.append({"reason": "invalid_format", "call": call})
+                    continue
+                tool_name, args = next(iter(call.items()))
+                if not isinstance(tool_name, str) or not isinstance(args, dict):
+                    errors.append({"reason": "invalid_format", "call": call})
+                    continue
+                args = tool_executor.normalize_args(tool_name, args)
+                tool = get_tool(tool_name, allowed_tools)
+                if not tool:
+                    errors.append({"reason": "unknown_tool", "tool": tool_name})
+                    continue
+                valid, error_obs = _validate_args(tool.input_schema, args)
+                if not valid:
+                    error_obs["tool"] = tool_name
+                    errors.append(error_obs)
+                    continue
+                normalized_calls.append({"name": tool_name, "args": args})
+
+            if errors:
+                state.planner_retry_count += 1
+                state.observations.append(
+                    {
+                        "planner_error": "invalid_tool_calls",
+                        "errors": errors,
+                    }
+                )
+                state.events.append(
+                    {
+                        "event": "retry",
+                        "data": {"reason": "invalid_tool_calls", "detail": errors},
+                    }
+                )
+                await _log_plan_event(
+                    db,
+                    state,
+                    "plan_invalid_tool_calls",
+                    {"errors": errors},
+                )
+                logger.info(
+                    "agent_decision session_id=%s action_type=invalid_tool_calls",
+                    state.session_id,
+                )
+                if state.planner_retry_count >= 2:
+                    state.final_json = _fallback_final()
+                    state.action_type = "final"
+                else:
+                    state.action_type = "retry"
+                return state
+
+            state.planner_retry_count = 0
+            state.action_type = "tool_calls"
+            state.action = action
+            state.pending_tool_calls = normalized_calls
+            state.events.append(
+                {
+                    "event": "plan_step",
+                    "data": {"type": "tool_calls", "calls": normalized_calls},
+                }
+            )
+            await _log_plan_event(
+                db,
+                state,
+                "plan_tool_calls",
+                {"calls": normalized_calls},
+            )
+            logger.info(
+                "agent_decision session_id=%s action_type=tool_calls tools=%s",
+                state.session_id,
+                [item["name"] for item in normalized_calls],
+            )
+            return state
+
         if not isinstance(action, ToolAction):
             state.observations.append({"planner_error": "invalid_action"})
             state.final_json = _fallback_final()
@@ -321,7 +418,7 @@ def build_langgraph(
             return state
 
         tool_name = action.name
-        args = action.args
+        args = tool_executor.normalize_args(action.name, action.args)
         tool = get_tool(tool_name, allowed_tools)
         if not tool:
             state.planner_retry_count += 1
@@ -408,6 +505,82 @@ def build_langgraph(
         return state
 
     async def act_node(state: ChatState) -> ChatState:
+        if state.action_type == "tool_calls":
+            if not state.pending_tool_calls:
+                state.final_json = _fallback_final()
+                state.action_type = "final"
+                return state
+            results = await tool_executor.execute_calls(
+                state.pending_tool_calls,
+                state,
+                servers_path=settings.MCP_SERVERS_CONFIG_PATH,
+            )
+            for item in results:
+                tool_name = item.get("name")
+                args = item.get("args") or {}
+                latency_ms = item.get("latency_ms") or 0
+                result = item.get("result")
+                result_preview = preview_result(result)
+                if tool_name == "plan_route" and isinstance(result, dict):
+                    result_preview = {
+                        "distance_m": result.get("distance_m"),
+                        "duration_s": result.get("duration_s"),
+                        "origin": result.get("origin"),
+                        "destination": result.get("destination"),
+                        "mode": result.get("mode"),
+                        "fallback_from": result.get("fallback_from"),
+                        "error": result.get("error"),
+                    }
+                state.tool_calls.append({"name": tool_name, "args": args, "latency_ms": latency_ms})
+                state.observations.append({"tool": tool_name, "result": result})
+                logger.info(
+                    "tool_call session_id=%s trace_id=%s tool=%s latency_ms=%s",
+                    state.session_id,
+                    state.trace_id,
+                    tool_name,
+                    latency_ms,
+                )
+                logger.info(
+                    "tool_result session_id=%s tool=%s result_preview=%s",
+                    state.session_id,
+                    tool_name,
+                    result_preview,
+                )
+                await history.save_tool_message(
+                    db,
+                    redis_client,
+                    state.session_id,
+                    tool_name,
+                    {
+                        "args": args,
+                        "latency_ms": latency_ms,
+                        "result": result,
+                        "result_preview": result_preview,
+                    },
+                )
+                state.events.append(
+                    {
+                        "event": "tool_call",
+                        "data": {
+                            "name": tool_name,
+                            "args": args,
+                            "latency_ms": latency_ms,
+                            "result_preview": result_preview,
+                        },
+                    }
+                )
+
+            state.steps_left -= 1
+            state.tool_results_batch = results
+            state.pending_tool_calls = []
+            state.action_type = "merge"
+            logger.info(
+                "agent_decision session_id=%s action_type=merge tools=%s",
+                state.session_id,
+                [item.get("name") for item in results],
+            )
+            return state
+
         action = state.action
         if not isinstance(action, ToolAction):
             state.final_json = _fallback_final()
@@ -416,27 +589,15 @@ def build_langgraph(
 
         tool_name = action.name
         args = action.args
-        tool = get_tool(tool_name, allowed_tools)
-        if not tool:
-            state.final_json = _fallback_final()
-            state.action_type = "final"
-            return state
-
-        tool_args = dict(args)
-        tool_args["redis_client"] = redis_client
-        tool_args["db"] = db
-        tool_args["user_id"] = state.user_id
-        tool_args["context"] = state.context
-        tool_args["session_id"] = state.session_id
-        tool_args["client_ip"] = state.client_ip
-        tool_args["last_user_message"] = state.last_user_message or state.message
-        tool_args["servers_path"] = settings.MCP_SERVERS_CONFIG_PATH
-        start = time.perf_counter()
-        try:
-            result = await asyncio.wait_for(tool.func(tool_args), timeout=15)
-        except Exception as exc:
-            result = {"error": str(exc)}
-        latency_ms = int((time.perf_counter() - start) * 1000)
+        results = await tool_executor.execute_calls(
+            [{"name": tool_name, "args": args}],
+            state,
+            servers_path=settings.MCP_SERVERS_CONFIG_PATH,
+        )
+        result_item = results[0] if results else {"name": tool_name, "args": args, "result": {}}
+        latency_ms = result_item.get("latency_ms") or 0
+        result = result_item.get("result")
+        args = result_item.get("args") or args
 
         result_preview = preview_result(result)
         if tool_name == "plan_route" and isinstance(result, dict):
@@ -517,13 +678,49 @@ def build_langgraph(
             )
         return state
 
+    async def merge_node(state: ChatState) -> ChatState:
+        if not state.tool_results_batch:
+            state.action_type = "plan"
+            return state
+        if agent_config.tool_result_handler:
+            for item in state.tool_results_batch:
+                tool_name = item.get("name")
+                result = item.get("result")
+                handled = agent_config.tool_result_handler(state, tool_name, result)
+                if handled:
+                    state.final_json = handled
+                    state.action_type = "final"
+                    logger.info(
+                        "agent_decision session_id=%s action_type=final tool=%s",
+                        state.session_id,
+                        tool_name,
+                    )
+                    state.tool_results_batch = []
+                    return state
+        state.tool_results_batch = []
+        if state.steps_left <= 0:
+            state.final_json = _fallback_final()
+            state.action_type = "final"
+            logger.info(
+                "agent_decision session_id=%s action_type=final reason=steps_exhausted",
+                state.session_id,
+            )
+        else:
+            state.action_type = "plan"
+            logger.info(
+                "agent_decision session_id=%s action_type=plan",
+                state.session_id,
+            )
+        return state
+
     graph = StateGraph(ChatState)
     graph.add_node("observe", observe_node)
     graph.add_node("think", think_node)
     graph.add_node("act", act_node)
+    graph.add_node("merge", merge_node)
 
     def _think_route(state: ChatState) -> str:
-        if state.action_type == "tool":
+        if state.action_type in {"tool", "tool_calls"}:
             return "act"
         if state.action_type == "retry":
             return "think"
@@ -532,11 +729,14 @@ def build_langgraph(
     graph.add_conditional_edges("think", _think_route)
 
     def _act_route(state: ChatState) -> str:
+        if state.action_type == "merge":
+            return "merge"
         if state.action_type == "final":
             return "observe"
         return "observe"
 
     graph.add_conditional_edges("act", _act_route)
+    graph.add_conditional_edges("merge", lambda state: "observe")
     graph.add_conditional_edges(
         "observe",
         lambda state: END if state.action_type == "final" else "think",

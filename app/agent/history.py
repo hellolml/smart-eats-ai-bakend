@@ -103,13 +103,46 @@ def _format_tool_payload(payload: dict[str, Any] | None) -> str:
         return ""
     if "result_preview" in payload:
         return json.dumps(payload.get("result_preview"), ensure_ascii=False)
-    if "result" in payload:
-        result = payload.get("result")
-        if isinstance(result, dict) and result.get("steps"):
-            result = dict(result)
-            result["steps"] = []
-        return json.dumps(result, ensure_ascii=False)
-    return json.dumps(payload, ensure_ascii=False)
+    return ""
+
+
+def _tool_history_allowlist() -> set[str]:
+    raw = settings.TOOL_HISTORY_ALLOW or ""
+    items = [item.strip() for item in raw.split(",") if item.strip()]
+    return set(items)
+
+
+def _tool_history_keep() -> int:
+    value = settings.TOOL_HISTORY_KEEP
+    if value < 0:
+        return 0
+    return value
+
+
+def _prune_tool_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    allow = _tool_history_allowlist()
+    keep = _tool_history_keep()
+    tool_indices: list[int] = []
+    for idx, item in enumerate(history):
+        if item.get("role") != "tool":
+            continue
+        name = item.get("name")
+        if name == "planner":
+            continue
+        if name in allow:
+            tool_indices.append(idx)
+    keep_tool_indices = set(tool_indices[-keep:]) if keep else set()
+    pruned: list[dict[str, Any]] = []
+    for idx, item in enumerate(history):
+        if item.get("role") != "tool":
+            pruned.append(item)
+            continue
+        name = item.get("name")
+        if name == "planner":
+            continue
+        if name in allow and idx in keep_tool_indices:
+            pruned.append(item)
+    return pruned
 
 
 def _history_signature(history: list[dict[str, Any]]) -> str:
@@ -136,21 +169,21 @@ async def load_history(
         if cached_local is not None:
             local_history, local_version = cached_local
             if mode == "local_validate" and redis_client:
-                remote_version = await redis_client.get(version_key)
-                if remote_version and remote_version != local_version:
-                    cached_local = None
-                else:
-                    if current_message and local_history:
-                        last = local_history[-1]
-                        if last.get("role") == "user" and last.get("content") == current_message:
-                            local_history = local_history[:-1]
-                    return _trim_history(local_history, limit)
+                    remote_version = await redis_client.get(version_key)
+                    if remote_version and remote_version != local_version:
+                        cached_local = None
+                    else:
+                        if current_message and local_history:
+                            last = local_history[-1]
+                            if last.get("role") == "user" and last.get("content") == current_message:
+                                local_history = local_history[:-1]
+                        return _trim_history(_prune_tool_history(local_history), limit)
             elif mode == "local_first":
                 if current_message and local_history:
                     last = local_history[-1]
                     if last.get("role") == "user" and last.get("content") == current_message:
                         local_history = local_history[:-1]
-                return _trim_history(local_history, limit)
+                return _trim_history(_prune_tool_history(local_history), limit)
 
     cache_limit = max(limit, settings.CHAT_HISTORY_CACHE_LIMIT)
     cache_key = f"chat:history:{session_id}"
@@ -166,7 +199,7 @@ async def load_history(
                     last = history[-1]
                     if last.get("role") == "user" and last.get("content") == current_message:
                         history = history[:-1]
-                history = _trim_history(history, limit)
+                history = _trim_history(_prune_tool_history(history), limit)
                 version = await redis_client.get(version_key)
                 if not version:
                     version = _history_signature(history)
@@ -205,7 +238,7 @@ async def load_history(
         last = history[-1]
         if last.get("role") == "user" and last.get("content") == current_message:
             history = history[:-1]
-    history = _trim_history(history, limit)
+    history = _trim_history(_prune_tool_history(history), limit)
     version = _history_signature(history)
     if mode != "redis_only":
         local_cache.set(session_id, history, version)
