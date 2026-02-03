@@ -15,8 +15,8 @@ def smart_system_prompt(payload: dict) -> str:
         "如果目的地是已推荐餐厅或近期搜索结果中的餐厅名称，直接调用 plan_route，"
         "不要再调用 geocode_location，应依赖历史餐厅结果匹配 POI。"
         "如果路线所需的起点或终点缺失，应返回 final 追问缺失信息。"
-        "当用户明确或暗示在家做饭时，优先调用 get_fridge_items 获取冰箱食材，"
-        "并结合食材再调用 search_recipes 给出在家做的推荐；"
+            "当用户明确或暗示在家做饭时，优先调用 get_fridge_items 获取冰箱食材，"
+            "并结合食材再调用 rag_search_recipes 给出在家做的推荐；"
         "当用户想外出用餐时，若用户提供了城市/地标/门店名称，应先调用 geocode_location 获取坐标，"
         "再调用 search_restaurants；若用户仅说“出去吃”且无位置，先调用 get_ip_location，"
         "若仍无位置再追问城市/地标。"
@@ -27,8 +27,10 @@ def smart_system_prompt(payload: dict) -> str:
         "返回严格 <tool_calls> 或 final JSON（支持一次返回多个工具），格式必须是:\n"
         "<tool_calls>[{\"tool_name\": {\"param\": \"value\"}}]</tool_calls>\n"
         "示例（多工具）:\n"
-        "<tool_calls>[{\"get_ip_location\": {}}, {\"search_restaurants\": {\"query\": \"火锅\", \"lat\": 28.1, \"lng\": 112.9}}]</tool_calls>\n"
-        "或\n"
+            "<tool_calls>[{\"get_ip_location\": {}}, {\"search_restaurants\": {\"query\": \"火锅\", \"lat\": 28.1, \"lng\": 112.9}}]</tool_calls>\n"
+            "示例（在家做饭，多路检索）:\n"
+            "<tool_calls>[{\"get_fridge_items\": {}}, {\"rag_search_recipes\": {\"query\": \"鸡蛋 番茄\", \"top_k\": 5}}]</tool_calls>\n"
+            "或\n"
         "{\n"
         "  \"type\": \"final\",\n"
         "  \"answer\": {\n"
@@ -289,6 +291,7 @@ def _smart_eats_agent() -> AgentConfig:
             "get_weather",
             "get_fridge_items",
             "search_recipes",
+            "rag_search_recipes",
             "search_restaurants",
             "plan_route",
             "get_ip_location",

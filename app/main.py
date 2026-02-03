@@ -32,6 +32,13 @@ async def on_startup() -> None:
     tools = list_tools()
     logger.info("tools_registered count=%s names=%s", len(tools), [t["name"] for t in tools])
     await init_db()
+    
+    # Preload RAG embedding model to avoid cold start latency
+    try:
+        from app.agent.rag import recipes_index
+        recipes_index.warmup()
+    except Exception as e:
+        logger.warning("RAG warmup skipped: %s", e)
 
 
 @app.middleware("http")
