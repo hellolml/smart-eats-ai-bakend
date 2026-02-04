@@ -1,10 +1,16 @@
+"""
+食谱 RAG 搜索工具
+
+基于向量 + BM25 混合检索的食谱搜索。
+"""
 from __future__ import annotations
 
 import logging
 from typing import Any
 
 from app.agent.tools_registry import register_tool
-from app.agent.rag import recipes_index
+from app.agent.rag import base as rag
+from app.domain.recipe import recipe_index
 
 logger = logging.getLogger("rag")
 
@@ -41,28 +47,28 @@ def _load_index() -> tuple[bool, str | None]:
     if _INDEX is not None and _META is not None:
         return True, None
     
-    index_path = recipes_index.default_index_path()
-    meta_path = recipes_index.default_meta_path()
-    bm25_path = recipes_index.default_bm25_path()
+    index_path = recipe_index.default_index_path()
+    meta_path = recipe_index.default_meta_path()
+    bm25_path = recipe_index.default_bm25_path()
     
     # Load FAISS index
-    _INDEX = recipes_index.load_faiss_index(index_path)
+    _INDEX = rag.load_faiss_index(index_path)
     if _INDEX is None:
         error = f"FAISS index not found: {index_path}"
         logger.warning(error)
         return False, error
     
     # Load metadata
-    _META = recipes_index.load_metadata(meta_path)
+    _META = recipe_index.load_metadata(meta_path)
     if not _META:
         error = f"Metadata not found or empty: {meta_path}"
         logger.warning(error)
         return False, error
     
-    # Load BM25 index (optional, fall back to simple keyword if missing)
-    _BM25 = recipes_index.load_bm25_index(bm25_path)
+    # Load BM25 index (optional)
+    _BM25 = rag.load_bm25_index(bm25_path)
     if _BM25 is None:
-        logger.info("BM25 index not available, falling back to simple keyword search")
+        logger.info("BM25 index not available, using simple keyword search")
     
     logger.info("RAG indices loaded: %d recipes", len(_META))
     return True, None
@@ -75,7 +81,6 @@ def _expand_query(query: str) -> str:
     
     for keyword, synonyms in _SYNONYMS.items():
         if keyword in query_lower:
-            # Add a subset of synonyms to avoid query explosion
             expanded_terms.extend(synonyms[:3])
     
     expanded = " ".join(expanded_terms)
@@ -124,6 +129,13 @@ def _expand_query(query: str) -> str:
 )
 async def rag_search_recipes(args: dict[str, Any]) -> dict[str, Any]:
     query = str(args.get("query") or "").strip()
+    
+    # Fallback: use last user message if query is empty
+    if not query:
+        query = str(args.get("last_user_message") or "").strip()
+        if query:
+            logger.info("rag_search_recipes: using last_user_message as query fallback: %s", query)
+    
     if not query:
         return {"items": [], "error": "Empty query"}
     
@@ -141,7 +153,7 @@ async def rag_search_recipes(args: dict[str, Any]) -> dict[str, Any]:
     
     filters = args.get("filters") if isinstance(args.get("filters"), dict) else {}
 
-    # Load indices with error handling
+    # Load indices
     success, error = _load_index()
     if not success:
         return {"items": [], "error": error}
@@ -149,59 +161,24 @@ async def rag_search_recipes(args: dict[str, Any]) -> dict[str, Any]:
     # Expand query with synonyms
     expanded_query = _expand_query(query)
     
-    # Hybrid search
-    vector_hits = _vector_search(expanded_query, top_k=top_k)
+    # Hybrid search using generic RAG functions
+    vector_hits = rag.vector_search(expanded_query, _INDEX, _META, top_k=top_k)
     keyword_hits = _keyword_search(expanded_query, top_k=top_k)
     merged = _merge_hits(vector_hits, keyword_hits, top_k=top_k)
     
     return {"items": _format_items(merged, filters, min_score)}
 
 
-def _vector_search(query: str, top_k: int) -> list[dict[str, Any]]:
-    try:
-        import numpy as np  # type: ignore
-    except Exception:
-        return []
-    embeddings_model = recipes_index.get_embedding_model()
-    embedding = embeddings_model.embed_query(query)
-    embedding = np.asarray([embedding], dtype="float32")
-    scores, indices = _INDEX.search(embedding, top_k)
-    results = []
-    for idx, score in zip(indices[0], scores[0]):
-        if idx < 0 or idx >= len(_META):
-            continue
-        meta = _META[idx]
-        results.append({"index": idx, "score": float(score), "meta": meta})
-    return results
-
-
 def _keyword_search(query: str, top_k: int) -> list[dict[str, Any]]:
-    """Use BM25 for efficient keyword search, fallback to simple token matching."""
+    """Use BM25 or fallback to simple keyword matching."""
     if _BM25 is not None:
-        # Use BM25 for efficient search
-        tokenized_query = recipes_index.tokenize(query)
-        if not tokenized_query:
-            return []
-        
-        scores = _BM25.get_scores(tokenized_query)
-        # Get top_k indices with highest scores
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-        
-        results = []
-        for idx in top_indices:
-            if scores[idx] <= 0:
-                continue
-            meta = _META[idx] if idx < len(_META) else {}
-            # Normalize BM25 score to 0-1 range (approximate)
-            normalized_score = min(scores[idx] / 10.0, 1.0)
-            results.append({"index": idx, "score": float(normalized_score), "meta": meta})
-        return results
+        return rag.bm25_search(query, _BM25, _META, top_k=top_k)
     
-    # Fallback: simple token matching (old method)
+    # Fallback: simple token matching
     results = []
     for idx, meta in enumerate(_META or []):
         text = str(meta.get("text") or "")
-        score = recipes_index.keyword_score(query, text)
+        score = rag.keyword_score(query, text)
         if score <= 0:
             continue
         results.append({"index": idx, "score": float(score), "meta": meta})
@@ -214,15 +191,19 @@ def _merge_hits(
     keyword_hits: list[dict[str, Any]],
     top_k: int,
 ) -> list[dict[str, Any]]:
+    """Merge vector and keyword search results."""
     merged: dict[int, dict[str, Any]] = {}
+    
     for item in vector_hits:
         idx = item["index"]
         merged.setdefault(idx, {"index": idx, "meta": item["meta"], "score": 0.0})
         merged[idx]["score"] += item["score"] * 0.7
+    
     for item in keyword_hits:
         idx = item["index"]
         merged.setdefault(idx, {"index": idx, "meta": item["meta"], "score": 0.0})
         merged[idx]["score"] += item["score"] * 0.3
+    
     ranked = sorted(merged.values(), key=lambda item: item["score"], reverse=True)
     return ranked[:top_k]
 
@@ -232,11 +213,11 @@ def _format_items(
     filters: dict[str, Any],
     min_score: float = 0.0,
 ) -> list[dict[str, Any]]:
+    """Format search results with filtering."""
     items: list[dict[str, Any]] = []
+    
     for item in hits:
         score = float(item.get("score") or 0.0)
-        
-        # Apply min_score filter
         if score < min_score:
             continue
         
@@ -251,15 +232,19 @@ def _format_items(
         }
         if _passes_filters(payload, filters):
             items.append(payload)
+    
     return items
 
 
 def _passes_filters(item: dict[str, Any], filters: dict[str, Any]) -> bool:
+    """Apply tag filters."""
     if not filters:
         return True
+    
     tags = item.get("metadata", {}).get("tags") or []
     if isinstance(filters.get("tags"), list):
         required = set(filters.get("tags") or [])
         if required and not required.issubset(set(tags)):
             return False
+    
     return True

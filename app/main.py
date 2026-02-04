@@ -35,8 +35,8 @@ async def on_startup() -> None:
     
     # Preload RAG embedding model to avoid cold start latency
     try:
-        from app.agent.rag import recipes_index
-        recipes_index.warmup()
+        from app.agent.rag import base as rag
+        rag.warmup()
     except Exception as e:
         logger.warning("RAG warmup skipped: %s", e)
 

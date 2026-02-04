@@ -197,6 +197,76 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             followups=["要不要更快手的？", "能接受辣吗？"],
             warnings=[],
         ).model_dump()
+    if tool_name == "rag_search_recipes" and isinstance(result, dict):
+        items = result.get("items") if isinstance(result.get("items"), list) else []
+        error = result.get("error")
+        if error and not items:
+            return FinalAnswer(
+                recommendations=[
+                    {
+                        "type": "note",
+                        "title": "暂时没找到合适的食谱",
+                        "reason": error,
+                    }
+                ],
+                followups=["换个关键词试试？", "想吃什么口味的？"],
+                warnings=[],
+            ).model_dump()
+        if not items:
+            return FinalAnswer(
+                recommendations=[
+                    {
+                        "type": "note",
+                        "title": "没有找到匹配的食谱",
+                        "reason": "可以换个关键词或口味试试",
+                    }
+                ],
+                followups=["想吃辣的还是清淡的？", "有什么食材想用吗？"],
+                warnings=[],
+            ).model_dump()
+        # 获取冰箱食材用于匹配
+        fridge_items = []
+        if state.context:
+            fridge_items = state.context.get("fridge_items") or []
+        fridge_names = [
+            str(item.get("name") or "")
+            for item in fridge_items
+            if isinstance(item, dict) and item.get("name")
+        ]
+        fridge_names_lower = [name.lower() for name in fridge_names]
+
+        cards = []
+        for item in items[:5]:
+            title = item.get("title") or ""
+            snippet = item.get("snippet") or ""
+            metadata = item.get("metadata") or {}
+            title_lower = title.lower()
+            # 匹配冰箱食材
+            matched = [
+                name
+                for name, name_lower in zip(fridge_names, fridge_names_lower)
+                if name_lower in title_lower or name_lower in snippet.lower()
+            ]
+            if matched:
+                reason = f"匹配食材：{', '.join(matched[:3])}"
+            else:
+                reason = metadata.get("description") or "适合在家做"
+            cards.append(
+                {
+                    "type": "recipe",
+                    "title": title,
+                    "reason": reason,
+                    "calories": metadata.get("calories"),
+                    "time": metadata.get("time") or metadata.get("cook_time_min"),
+                    "tags": metadata.get("tags") or [],
+                    "image_url": metadata.get("image_url"),
+                }
+            )
+        return FinalAnswer(
+            recommendations=cards,
+            followups=["要不要更快手的？", "能接受辣吗？"],
+            warnings=[],
+        ).model_dump()
     if tool_name == "plan_route" and isinstance(result, dict):
         error = result.get("error")
         if error == "missing_origin":
