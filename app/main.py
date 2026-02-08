@@ -22,12 +22,14 @@ app = FastAPI(title="smart-eats")
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    from app.agent.llm_adapters import ProviderRegistry
+    config = ProviderRegistry.get(settings.LLM_PROVIDER)
     logger.info(
-        "llm provider=%s key_set=%s",
-        settings.LLM_PROVIDER,
-        bool(settings.OPENAI_API_KEY)
-        or bool(settings.DEEPSEEK_API_KEY)
-        or bool(settings.DASHSCOPE_API_KEY),
+        "llm provider=%s model_planner=%s model_writer=%s key_set=%s",
+        config.name,
+        config.model_planner,
+        config.model_writer,
+        bool(config.api_key),
     )
     tools = list_tools()
     logger.info("tools_registered count=%s names=%s", len(tools), [t["name"] for t in tools])

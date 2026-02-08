@@ -16,7 +16,7 @@ def default_system_prompt(payload: dict[str, Any]) -> str:
         "Format must be exactly:\n"
         "<tool_calls>[{\"tool_name\": {\"param\": \"value\"}}]</tool_calls>\n"
         "Example:\n"
-        "<tool_calls>[{\"get_ip_location\": {}}, {\"search_restaurants\": {\"query\": \"noodles\"}}]</tool_calls>\n"
+        "<tool_calls>[{\"tool_a\": {}}, {\"tool_b\": {\"query\": \"example\"}}]</tool_calls>\n"
         "or\n"
         "{\n"
         "  \"type\": \"final\",\n"
@@ -56,32 +56,6 @@ def _normalize_final_answer(answer: Any) -> dict[str, Any] | None:
             for item in recs:
                 if "type" in item:
                     mapped.append(item)
-                    continue
-                if "cook_time_min" in item or "calories" in item or "image_url" in item:
-                    mapped.append(
-                        {
-                            "type": "recipe",
-                            "title": item.get("title"),
-                            "reason": item.get("reason"),
-                            "calories": item.get("calories"),
-                            "time": item.get("time") or item.get("cook_time_min"),
-                            "tags": item.get("tags") or [],
-                            "image_url": item.get("image_url"),
-                        }
-                    )
-                    continue
-                if "rating" in item or "price" in item or "geo" in item:
-                    mapped.append(
-                        {
-                            "type": "restaurant",
-                            "title": item.get("title") or item.get("name"),
-                            "reason": item.get("reason"),
-                            "rating": item.get("rating"),
-                            "price": item.get("price"),
-                            "tags": item.get("tags") or [],
-                            "geo": item.get("geo"),
-                        }
-                    )
                     continue
                 mapped.append(
                     {
@@ -126,9 +100,33 @@ def normalize_action_from_raw(content: str) -> AgentAction | None:
     if tool_calls is not None:
         payload = {"type": "tool_calls", "calls": tool_calls}
         return AgentActionModel.model_validate(payload).root
+    
+    # 去除 markdown code block 包装
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        # 移除开头的 ```json 或 ``` 行
+        lines = cleaned.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        # 移除结尾的 ```
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    
     try:
-        data = json.loads(content)
+        data = json.loads(cleaned)
     except json.JSONDecodeError:
+        # 不是 JSON，将纯文本作为 final 响应处理
+        if cleaned:
+            answer = {
+                "recommendations": [
+                    {"type": "note", "title": cleaned, "reason": "planner_text"}
+                ],
+                "followups": [],
+                "warnings": [],
+            }
+            payload = {"type": "final", "answer": answer}
+            return AgentActionModel.model_validate(payload).root
         return None
     if isinstance(data, dict) and data.get("type") == "tool_calls" and "calls" in data:
         return AgentActionModel.model_validate(data).root

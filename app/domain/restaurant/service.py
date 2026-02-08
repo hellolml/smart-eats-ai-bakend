@@ -23,8 +23,9 @@ class RestaurantService:
         lat: float | None,
         lng: float | None,
         sort: str | None,
+        city: str | None = None,
     ) -> list[dict[str, Any]]:
-        cache_key = f"restaurant:search:{query}:{tag}:{lat}:{lng}:{sort}"
+        cache_key = f"restaurant:search:{query}:{tag}:{lat}:{lng}:{sort}:{city}"
         cached = await redis_client.get(cache_key)
         if cached:
             cached_results = json.loads(cached)
@@ -45,6 +46,7 @@ class RestaurantService:
             pois = await amap.text_search(
                 keywords,
                 types,
+                city=city,
                 page_size=5,
                 servers_path=settings.MCP_SERVERS_CONFIG_PATH,
             )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, AsyncGenerator
 from uuid import uuid4
+import logging
 
 from datetime import datetime, timedelta, timezone
 
@@ -21,6 +22,20 @@ from app.infra.models.chat import ChatMessage, ChatSession
 from sqlalchemy import desc, select
 
 router = APIRouter()
+logger = logging.getLogger("chat.api")
+
+
+def _quick_intent(message: str | None) -> str:
+    text = (message or "").strip().lower()
+    if not text:
+        return "unknown"
+    if any(token in text for token in ("出去吃", "外出", "餐厅", "吃饭")):
+        return "eat_out"
+    if any(token in text for token in ("做饭", "在家做", "菜谱", "食谱", "冰箱")):
+        return "cook_home"
+    if any(token in text for token in ("路线", "导航", "怎么走")):
+        return "route"
+    return "chat"
 
 
 class ChatStreamRequest(BaseModel):
@@ -238,6 +253,18 @@ async def stream_session(
 ):
     payload = payload or ChatStreamRequest()
     user_id = _resolve_user_id(user_id)
+    overrides = payload.client_context_overrides if isinstance(payload.client_context_overrides, dict) else {}
+    env = overrides.get("environment") if isinstance(overrides.get("environment"), dict) else {}
+    location = env.get("location") if isinstance(env.get("location"), dict) else None
+    has_device_location = bool(location and location.get("lat") is not None and location.get("lng") is not None)
+    intent = _quick_intent(payload.message)
+    logger.info(
+        "chat_stream_location session_id=%s intent=%s has_device_location=%s location=%s",
+        session_id,
+        intent,
+        has_device_location,
+        location if has_device_location else None,
+    )
     forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
     if forwarded:
         client_ip = forwarded.split(",")[0].strip()

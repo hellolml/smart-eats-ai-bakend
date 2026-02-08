@@ -176,23 +176,6 @@
         color: var(--accent);
       }
 
-      .stream-box,
-      .log-box {
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 12px;
-        background: #111010;
-        color: #f0eee9;
-        border-radius: 12px;
-        padding: 12px;
-        min-height: 160px;
-        white-space: pre-wrap;
-        overflow-y: auto;
-      }
-
-      .log-box {
-        background: #1a1918;
-      }
-
       .meta {
         font-size: 12px;
         color: var(--muted);
@@ -393,25 +376,19 @@
             <div class="actions">
               <button id="send">Send</button>
               <button id="stop" class="secondary">Stop</button>
+              <button id="device-location" class="secondary small" type="button">Use Device Location</button>
               <button id="new-session" class="secondary small" type="button">New Session</button>
               <button id="clear" class="secondary small" type="button">Clear</button>
             </div>
+            <div class="meta" id="location-meta">Location: not set</div>
           </div>
           <div class="meta" id="session">Session: -</div>
-        </section>
-        <section class="panel">
-          <h2>Stream</h2>
-          <div class="stream-box" id="stream"></div>
-          <h2>Log</h2>
-          <div class="log-box" id="log"></div>
         </section>
       </div>
     </div>
 
     <script>
       const messagesEl = document.getElementById("messages");
-      const logEl = document.getElementById("log");
-      const streamEl = document.getElementById("stream");
       const statusEl = document.getElementById("status");
       const messageEl = document.getElementById("message");
       const pickerButton = document.getElementById("picker-button");
@@ -423,9 +400,11 @@
       const newSessionSidebarBtn = document.getElementById("new-session-sidebar");
       const sendBtn = document.getElementById("send");
       const stopBtn = document.getElementById("stop");
+      const deviceLocationBtn = document.getElementById("device-location");
       const newSessionBtn = document.getElementById("new-session");
       const clearBtn = document.getElementById("clear");
       const sessionEl = document.getElementById("session");
+      const locationMetaEl = document.getElementById("location-meta");
 
       let sessionId = null;
       let abortController = null;
@@ -433,6 +412,8 @@
       let historyOffset = 0;
       const historyLimit = 10;
       let historyQuery = "";
+      let useDeviceLocation = true;
+      let deviceLocation = null;
 
       function addMessage(role, text) {
         const div = document.createElement("div");
@@ -441,16 +422,6 @@
         messagesEl.appendChild(div);
         messagesEl.scrollTop = messagesEl.scrollHeight;
         return div;
-      }
-
-      function log(line) {
-        logEl.textContent += line + "\n";
-        logEl.scrollTop = logEl.scrollHeight;
-      }
-
-      function stream(line) {
-        streamEl.textContent += line;
-        streamEl.scrollTop = streamEl.scrollHeight;
       }
 
       async function createSession() {
@@ -475,12 +446,12 @@
         statusEl.textContent = `Streaming ${sessionId}`;
 
         const userText = messageEl.value.trim();
+        const contextOverrides = await buildContextOverrides();
         if (userText) {
           addMessage("user", userText);
         }
         messageEl.value = "";
         const aiBubble = addMessage("ai", "");
-        streamEl.textContent = "";
 
         const resp = await fetch(`/api/v1/chat/sessions/${sessionId}/stream`, {
           method: "POST",
@@ -488,6 +459,7 @@
           body: JSON.stringify({
             message: userText,
             provider: selectedProvider,
+            client_context_overrides: contextOverrides,
           }),
           signal: abortController.signal,
         });
@@ -522,23 +494,8 @@
                 text = data.replace(/^\"|\"$/g, "");
               }
               aiBubble.textContent += text;
-              stream(text);
             } else if (event === "final") {
               statusEl.textContent = "Completed";
-              try {
-                const parsed = JSON.parse(data);
-                const isFallback = parsed?.answer?.recommendations?.some(
-                  (item) => item?.reason === "fallback"
-                );
-                if (isFallback) {
-                  log("[final][fallback] request used fallback response");
-                }
-              } catch (err) {
-                // ignore parse errors
-              }
-              log(`[final] ${data}`);
-            } else {
-              log(`[${event}] ${data}`);
             }
           }
         }
@@ -559,7 +516,6 @@
         try {
           await streamChat();
         } catch (err) {
-          log(`error: ${err}`);
           statusEl.textContent = "Error";
         }
       });
@@ -570,7 +526,6 @@
           try {
             await streamChat();
           } catch (err) {
-            log(`error: ${err}`);
             statusEl.textContent = "Error";
           }
         }
@@ -578,6 +533,17 @@
 
       stopBtn.addEventListener("click", async () => {
         await stopChat();
+      });
+
+      deviceLocationBtn.addEventListener("click", async () => {
+        useDeviceLocation = !useDeviceLocation;
+        updateDeviceLocationButton();
+        if (!useDeviceLocation) {
+          deviceLocation = null;
+          locationMetaEl.textContent = "Location: not set";
+          return;
+        }
+        await refreshDeviceLocation();
       });
 
       newSessionBtn.addEventListener("click", async () => {
@@ -596,9 +562,71 @@
 
       clearBtn.addEventListener("click", () => {
         messagesEl.textContent = "";
-        logEl.textContent = "";
-        streamEl.textContent = "";
       });
+
+      function updateDeviceLocationButton() {
+        deviceLocationBtn.textContent = useDeviceLocation ? "Using Device Location" : "Use Device Location";
+      }
+
+      function buildLocationMeta(location) {
+        if (!location) return "Location: not set";
+        const lat = Number(location.lat);
+        const lng = Number(location.lng);
+        const accuracy = location.accuracy_m;
+        const accuracyText = typeof accuracy === "number" ? ` +/-${Math.round(accuracy)}m` : "";
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "Location: unavailable";
+        return `Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}${accuracyText}`;
+      }
+
+      async function refreshDeviceLocation() {
+        if (!("geolocation" in navigator)) {
+          locationMetaEl.textContent = "Location: geolocation unsupported";
+          useDeviceLocation = false;
+          updateDeviceLocationButton();
+          return null;
+        }
+        try {
+          const position = await new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+              enableHighAccuracy: true,
+              timeout: 8000,
+              maximumAge: 30000,
+            });
+          });
+          deviceLocation = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            accuracy_m: position.coords.accuracy,
+            source: "device",
+            captured_at: new Date().toISOString(),
+          };
+          locationMetaEl.textContent = buildLocationMeta(deviceLocation);
+          return deviceLocation;
+        } catch (err) {
+          deviceLocation = null;
+          locationMetaEl.textContent = "Location: unavailable";
+          useDeviceLocation = false;
+          updateDeviceLocationButton();
+          return null;
+        }
+      }
+
+      async function buildContextOverrides() {
+        if (!useDeviceLocation) return null;
+        const location = await refreshDeviceLocation();
+        if (!location) return null;
+        return {
+          environment: {
+            location: {
+              lat: location.lat,
+              lng: location.lng,
+              accuracy_m: location.accuracy_m,
+              source: location.source,
+              captured_at: location.captured_at,
+            },
+          },
+        };
+      }
 
       async function loadProviders() {
         try {
@@ -635,7 +663,7 @@
           }
           pickerMenu.firstChild?.classList.add("active");
         } catch (err) {
-          log(`error: ${err}`);
+          statusEl.textContent = "Error";
         }
       }
 
@@ -715,7 +743,7 @@
           });
           historyOffset += sessions.length;
         } catch (err) {
-          log(`error: ${err}`);
+          statusEl.textContent = "Error";
         }
       }
 
@@ -731,7 +759,7 @@
             addMessage(role, msg.content);
           });
         } catch (err) {
-          log(`error: ${err}`);
+          statusEl.textContent = "Error";
         }
       }
 
@@ -760,6 +788,7 @@
 
       loadHistory(true);
       loadProviders();
+      updateDeviceLocationButton();
     </script>
   </body>
 </html>

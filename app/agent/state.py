@@ -29,6 +29,10 @@ class ChatState:
     provider: str | None = None
     agent_type: str | None = None
     client_ip: str | None = None
+    intent: str | None = None
+    location_source: str | None = None
+    tool_plan: list[dict[str, Any]] = field(default_factory=list)
+    recovery_path: list[str] = field(default_factory=list)
     resume_from_checkpoint: bool = False
     checkpoint_ref: str | None = None
     replay_from_checkpoint: bool = False

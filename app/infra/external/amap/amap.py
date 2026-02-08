@@ -10,6 +10,14 @@ from . import amap_config
 
 logger = logging.getLogger("amap.mcp")
 
+_GEOCODE_LEVEL_SCORE = {
+    "门址": 4,
+    "兴趣点": 3,
+    "道路": 2,
+    "村庄": 1,
+    "未知": 0,
+}
+
 def _parse_location(value: Any) -> dict[str, float] | None:
     if isinstance(value, dict):
         lat = value.get("lat")
@@ -100,6 +108,98 @@ def _extract_geocode(payload: Any) -> dict[str, float] | None:
         if isinstance(first, dict):
             return _parse_location(first.get("location"))
     return None
+
+
+def _normalize_city_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    name = value.strip()
+    for suffix in ("市", "省", "特别行政区", "自治区"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name
+
+
+def _city_matches(candidate: dict[str, Any], expected_city: str | None) -> bool:
+    if not expected_city:
+        return True
+    expected = _normalize_city_name(expected_city)
+    if not expected:
+        return True
+    values = [
+        candidate.get("city"),
+        candidate.get("province"),
+        candidate.get("district"),
+    ]
+    for value in values:
+        normalized = _normalize_city_name(value)
+        if not normalized:
+            continue
+        if expected in normalized or normalized in expected:
+            return True
+    return False
+
+
+def _extract_geocode_candidates(payload: Any) -> list[dict[str, Any]]:
+    payload = _parse_json_payload(payload)
+    if isinstance(payload, dict):
+        for key in ("geocodes", "geocode", "data", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return [payload]
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
+def _pick_geocode_location(
+    payload: Any,
+    city: str | None,
+) -> tuple[dict[str, float] | None, bool]:
+    candidates = _extract_geocode_candidates(payload)
+    valid: list[tuple[int, dict[str, Any], dict[str, float]]] = []
+    for item in candidates:
+        location = _parse_location(item.get("location"))
+        if not location:
+            continue
+        level = str(item.get("level") or "未知")
+        score = _GEOCODE_LEVEL_SCORE.get(level, 0)
+        if _city_matches(item, city):
+            score += 10
+        valid.append((score, item, location))
+    if not valid:
+        return None, True
+    valid.sort(key=lambda row: row[0], reverse=True)
+    best_score, best_item, best_location = valid[0]
+    level = str(best_item.get("level") or "未知")
+    low_confidence = best_score < 10 or _GEOCODE_LEVEL_SCORE.get(level, 0) <= 0
+    return best_location, low_confidence
+
+
+async def _fallback_geocode_from_poi(
+    address: str,
+    city: str | None,
+    *,
+    servers_path: str | None,
+) -> dict[str, float] | None:
+    pois = await text_search(
+        keywords=address,
+        types=None,
+        city=city,
+        page_size=1,
+        servers_path=servers_path,
+    )
+    if not pois:
+        return None
+    first = pois[0]
+    poi_id = first.get("id") or first.get("poi_id")
+    if isinstance(poi_id, str) and poi_id:
+        detail = await search_detail(poi_id, servers_path=servers_path)
+        detail_location = _parse_location(detail.get("location") if isinstance(detail, dict) else None)
+        if detail_location:
+            return detail_location
+    return _parse_location(first.get("location"))
 
 
 def _route_tool_key(mode: str | None) -> str:
@@ -241,7 +341,11 @@ async def geocode_address(
     payload = await _fetch_tool_payload("maps_geo", args, servers_path)
     if payload is None:
         return None
-    return _extract_geocode(payload)
+    location, low_confidence = _pick_geocode_location(payload, city)
+    if location and not low_confidence:
+        return location
+    fallback = await _fallback_geocode_from_poi(address, city, servers_path=servers_path)
+    return fallback or location
 
 
 async def text_search(
