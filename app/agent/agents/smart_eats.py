@@ -10,6 +10,9 @@ from app.agent.state import ChatState
 from app.agent.agent_registry import AgentConfig, create_agent_config, register_agent
 from app.agent import memory
 
+# 规则分层说明：
+# - 代码规则（本文件）：可测试、可确定执行的逻辑（意图判定、工具编排、参数归一化、结果兜底）。
+# - Prompt 规则（system.md）：给 LLM 的行为策略与表达规范。
 # 系统提示词文件路径
 SYSTEM_PROMPT_PATH = os.path.join(
     os.path.dirname(__file__), "..", "prompts", "system.md"
@@ -24,7 +27,6 @@ def smart_intent_resolver(state: ChatState) -> str | None:
         return "unknown"
     
     # 确认选择信号（优先级高）
-    confirm_tokens = ("就这个", "就它", "做这个", "那就", "吧", "怎么做", "教我做", "做法")
     eat_out_tokens = ("出去吃", "外出", "附近餐厅", "找餐厅", "吃饭", "下馆子")
     cook_home_tokens = ("在家做", "做饭", "菜谱", "食谱", "冰箱")
     route_tokens = ("怎么走", "路线", "导航", "去那里", "到")
@@ -145,7 +147,7 @@ async def smart_final_action_hook(state: ChatState, _final_json: dict[str, Any],
 
 
 def smart_system_prompt(payload: dict) -> str:
-    """从 system.md 加载系统提示词，并附加上下文信息。"""
+    """从 system.md 加载 Prompt 规则，并注入运行时上下文。"""
     try:
         with open(SYSTEM_PROMPT_PATH, "r", encoding="utf-8") as f:
             base_prompt = f.read()
@@ -154,8 +156,9 @@ def smart_system_prompt(payload: dict) -> str:
     
     return (
         f"{base_prompt}\n\n"
-        f"始终使用 {settings.DEFAULT_LANGUAGE} 输出。\n"
-        f"上下文: {payload}"
+        "## Runtime Context（系统注入，非用户输入）\n"
+        f"- output_language: {settings.DEFAULT_LANGUAGE}\n"
+        f"- context: {payload}"
     )
 
 

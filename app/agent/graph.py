@@ -105,30 +105,31 @@ async def _refresh_observation_context(
     agent_config: AgentConfig,
     emit_context_event: bool = True,
 ) -> None:
+    should_log = False
     if state.message:
         should_log = not state.user_message_logged or state.last_user_message != state.message
-        if should_log:
-            logger.info(
-                "user_message session_id=%s message=%s",
-                state.session_id,
-                state.message,
-            )
-            await history.save_user_message(
-                db,
-                redis_client,
-                state.session_id,
-                state.message,
-            )
-            state.user_message_logged = True
-            state.last_user_message = state.message
 
     state.history = await history.load_history(
         db,
         redis_client,
         state.session_id,
         settings.CHAT_HISTORY_LIMIT,
-        state.message,
+        state.message if not should_log else None,
     )
+    if state.message and should_log:
+        logger.info(
+            "user_message session_id=%s message=%s",
+            state.session_id,
+            state.message,
+        )
+        await history.save_user_message(
+            db,
+            redis_client,
+            state.session_id,
+            state.message,
+        )
+        state.user_message_logged = True
+        state.last_user_message = state.message
     state.history, summary = await history.maybe_compress_history(
         redis_client,
         state.provider or settings.LLM_PROVIDER,

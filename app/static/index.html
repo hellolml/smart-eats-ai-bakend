@@ -754,6 +754,7 @@
           const messages = data?.data?.messages || [];
           messagesEl.textContent = "";
           messages.forEach((msg) => {
+            if (msg.role === "tool") return;
             if (!msg.content) return;
             const role = msg.role === "assistant" ? "ai" : "user";
             addMessage(role, msg.content);
