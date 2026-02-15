@@ -173,14 +173,29 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         if isinstance(ctx_loc_source, str) and ctx_loc_source:
             state.location_source = ctx_loc_source
     
-    # get_fridge_items: 仅缓存食材到 context，不再直接返回食谱推荐
-    # Agent 需要继续调用 rag_search_recipes 来获取食谱
+    # get_fridge_items: 缓存食材到 context
+    # 冰箱有食材时继续让 Agent 调用 rag_search_recipes
+    # 冰箱为空时直接返回提示，引导用户说出想做的菜
     if tool_name == "get_fridge_items" and isinstance(result, dict):
         items = result.get("items") if isinstance(result.get("items"), list) else []
         if state.context is None:
             state.context = {}
         state.context["fridge_items"] = items
-        # 返回 None 表示继续让 Agent 决定下一步
+        if not items:
+            # 冰箱为空：提醒用户并引导输入想做的菜
+            return FinalAnswer(
+                recommendations=[
+                    {
+                        "type": "note",
+                        "title": "你的冰箱里暂时没有食材记录哦～",
+                        "reason": "你可以去「冰箱」页面添加食材，我就能根据现有食材推荐菜谱啦！"
+                                  "或者直接告诉我你想做什么菜，我来帮你生成菜谱 🍳",
+                    }
+                ],
+                followups=["想做什么菜？告诉我菜名我来出菜谱", "去冰箱页面添加食材", "随便推荐几道家常菜吧"],
+                warnings=[],
+            ).model_dump()
+        # 有食材，继续让 Agent 决定下一步（调用 rag_search_recipes）
         return None
     if tool_name == "search_restaurants":
         if isinstance(result, dict) and result.get("error") == "missing_location":
@@ -298,35 +313,19 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         items = result.get("items") if isinstance(result.get("items"), list) else []
         error = result.get("error")
         if error and not items:
-            return FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "note",
-                        "title": "暂时没找到合适的食谱",
-                        "reason": error,
-                    }
-                ],
-                followups=["换个关键词试试？", "想吃什么口味的？"],
-                warnings=[],
-            ).model_dump()
+            # RAG 出错且无结果 → 返回 None 让 LLM 兜底生成菜谱
+            return None
         if not items:
-            return FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "note",
-                        "title": "没有找到匹配的食谱",
-                        "reason": "可以换个关键词或口味试试",
-                    }
-                ],
-                followups=["想吃辣的还是清淡的？", "有什么食材想用吗？"],
-                warnings=[],
-            ).model_dump()
+            # 没有匹配结果 → 返回 None 让 LLM 直接生成菜谱
+            return None
         
-        # 检查是否是确认选择意图（用户选择了某道菜）
-        is_confirm = state.intent == "confirm_recipe"
+        # 判断是否为"指定菜名"场景：
+        # 1. intent == confirm_recipe（确认选择）
+        # 2. 只返回 1 个结果（top_k=1，用户指定了具体菜名）
+        is_specific_dish = state.intent == "confirm_recipe" or len(items) == 1
         
-        if is_confirm and items:
-            # 用户确认选择，返回第一道菜的详细做法
+        if is_specific_dish:
+            # 用户指定了具体菜名，需要返回详细做法
             item = items[0]
             title = item.get("title") or ""
             metadata = item.get("metadata") or {}
@@ -339,28 +338,28 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
                     reason = "做法：\n" + "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
                 else:
                     reason = f"做法：{steps}"
+                
+                return FinalAnswer(
+                    recommendations=[
+                        {
+                            "type": "recipe",
+                            "title": title,
+                            "reason": reason,
+                            "calories": metadata.get("calories"),
+                            "time": metadata.get("time") or metadata.get("cook_time_min"),
+                            "tags": metadata.get("tags") or [],
+                            "image_url": metadata.get("image_url"),
+                            "ingredients": ingredients,
+                        }
+                    ],
+                    followups=["需要更详细的步骤吗？", "想知道注意事项吗？"],
+                    warnings=[],
+                ).model_dump()
             else:
-                # 无步骤数据，返回 None 让 LLM 兜底生成
+                # 无步骤数据，返回 None 让 LLM 根据菜名 + 食材生成完整菜谱
                 return None
-            
-            return FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "recipe",
-                        "title": title,
-                        "reason": reason,
-                        "calories": metadata.get("calories"),
-                        "time": metadata.get("time") or metadata.get("cook_time_min"),
-                        "tags": metadata.get("tags") or [],
-                        "image_url": metadata.get("image_url"),
-                        "ingredients": ingredients,
-                    }
-                ],
-                followups=["需要更详细的步骤吗？", "想知道注意事项吗？"],
-                warnings=[],
-            ).model_dump()
         
-        # 获取冰箱食材用于匹配
+        # 多结果推荐模式：获取冰箱食材用于匹配排序
         fridge_items = []
         if state.context:
             fridge_items = state.context.get("fridge_items") or []

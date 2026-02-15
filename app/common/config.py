@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     AMAP_SEARCH_CACHE_TTL_SECONDS: int = 180
     RESTAURANT_DETAIL_CACHE_TTL_SECONDS: int = 300
     MCP_SERVERS_CONFIG_PATH: str | None = "mcp_servers.json"
+    APP_FALLBACK_ENABLED: bool = True
+    APP_RECIPE_GEN_TIMEOUT_SECONDS: int = 12
 
 
 settings = Settings()

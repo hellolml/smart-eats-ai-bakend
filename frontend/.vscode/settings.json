@@ -1,0 +1,14 @@
+{
+  "editor.quickSuggestions": { "other": true, "comments": false, "strings": false },
+  "editor.suggestOnTriggerCharacters": true,
+  "editor.acceptSuggestionOnEnter": "on",
+  "editor.tabCompletion": "on",
+  "editor.inlineSuggest.enabled": true,
+  "editor.suggestSelection": "first",
+  "editor.wordBasedSuggestions": "matchingDocuments",
+  "editor.parameterHints.enabled": true,
+  "typescript.suggest.enabled": true,
+  "javascript.suggest.enabled": true,
+  "emmet.includeLanguages": { "javascript": "javascriptreact", "typescript": "typescriptreact" },
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

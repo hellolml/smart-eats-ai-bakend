@@ -1,0 +1,14 @@
+[
+    {
+        "path": "/",
+        "table_name": ["users", "ingredients", "eating_history"]
+    },
+    {
+        "path": "/home-chef",
+        "table_name": ["ingredients"]
+    },
+    {
+        "path": "ledger",
+        "table_name": ["eating_history"]
+    }
+]

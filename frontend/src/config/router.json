@@ -1,0 +1,47 @@
+{
+    "Index": {
+        "title": "今日决策",
+        "path": "/",
+        "isDefault": true
+    },
+    "HomeChef": {
+        "title": "家里做",
+        "path": "/home-chef"
+    },
+    "FoodHunter": {
+        "title": "出去吃",
+        "path": "/food-hunter"
+    },
+    "Profile": {
+        "title": "我的",
+        "path": "/profile"
+    },
+    "Preferences": {
+        "title": "偏好设置",
+        "path": "/preferences"
+    },
+    "SecuritySettings": {
+        "title": "安全设置",
+        "path": "/security-settings"
+    },
+    "BlindBox": {
+        "title": "盲盒摇一摇",
+        "path": "/blind-box"
+    },
+    "Wheel": {
+        "title": "幸运大转盘",
+        "path": "/wheel"
+    },
+    "AiChat": {
+        "title": "AI食神对话",
+        "path": "/ai-chat"
+    },
+    "Login": {
+        "title": "登录",
+        "path": "/login"
+    },
+    "Register": {
+        "title": "注册",
+        "path": "/register"
+    }
+}

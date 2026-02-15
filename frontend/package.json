@@ -1,0 +1,49 @@
+{
+  "name": "eat_what_react_project",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "webpack serve --mode development",
+    "build": "webpack --mode production"
+  },
+  "dependencies": {
+    "antd": "^5.12.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "date-fns": "^3.6.0",
+    "framer-motion": "^11.0.0",
+    "lucide-react": "^0.344.0",
+  "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-hook-form": "^7.54.2",
+    "react-hot-toast": "^2.4.1",
+    "react-markdown": "^8.0.0",
+    "react-router-dom": "^6.16.0",
+    "recharts": "^2.15.4",
+    "remark-gfm": "^3.0.1",
+    "tailwind-merge": "^2.6.0",
+    "tailwindcss-animate": "^1.0.7"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.23.0",
+    "@babel/preset-react": "^7.22.0",
+    "@babel/preset-typescript": "^7.22.0",
+    "@tailwindcss/typography": "^0.5.16",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "autoprefixer": "^10.4.0",
+    "babel-loader": "^9.1.0",
+    "css-loader": "^6.8.0",
+    "html-webpack-plugin": "^5.5.3",
+    "postcss": "^8.4.0",
+    "postcss-loader": "^7.3.0",
+    "style-loader": "^3.3.0",
+    "tailwindcss": "^3.3.0",
+    "typescript": "^5.2.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.0",
+    "webpack-dev-server": "^5.2.2"
+  }
+}
