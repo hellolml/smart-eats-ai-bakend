@@ -120,7 +120,7 @@ def normalize_action_from_raw(content: str) -> AgentAction | None:
         if cleaned:
             answer = {
                 "recommendations": [
-                    {"type": "note", "title": cleaned, "reason": "planner_text"}
+                    {"type": "note", "title": cleaned, "reason": None}
                 ],
                 "followups": [],
                 "warnings": [],

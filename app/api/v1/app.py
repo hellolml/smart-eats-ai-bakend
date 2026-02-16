@@ -375,6 +375,7 @@ async def spin_wheel_current(
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
+# Chat session endpoints
 @router.post("/chat/session")
 async def create_chat_session(
     request: Request,
@@ -445,8 +446,7 @@ async def stop_chat(
     redis: redis_dep,
     user_id: str = Depends(get_current_user_id),
 ):
-    await AppBffService.ensure_chat_session_access(user_id, session_id, db)
-    data = await AppBffService.stop_chat(session_id, redis)
+    data = await AppBffService.stop_chat_session(user_id, session_id, db, redis)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -459,22 +459,19 @@ async def chat_stream(
     redis: redis_dep,
     user_id: str = Depends(get_current_user_id),
 ):
-    await AppBffService.ensure_chat_session_access(user_id, session_id, db)
     raw = payload.model_dump(exclude_unset=True) if payload else {}
-    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip()
-    else:
-        client_ip = request.client.host if request.client else "unknown"
-
-    state = await AppBffService.build_chat_state(
+    state = await AppBffService.prepare_chat_stream_state(
         session_id=session_id,
         user_id=user_id,
         payload=raw,
-        request_client_ip=client_ip,
+        db=db,
         redis_client=redis,
+        forwarded_for=request.headers.get("x-forwarded-for"),
+        real_ip=request.headers.get("x-real-ip"),
+        request_client_host=request.client.host if request.client else None,
+        trace_id=getattr(request.state, "trace_id", None),
+        rate_limit_key_prefix="app_chat",
     )
-    state.trace_id = getattr(request.state, "trace_id", None)
 
     async def event_stream() -> AsyncGenerator[str, None]:
         async for item in run_chat_stream(request, db, redis, state):

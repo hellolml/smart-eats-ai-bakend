@@ -719,7 +719,7 @@ class AppBffService:
         }
 
     @staticmethod
-    async def create_chat_session(user_id: str, db: AsyncSession) -> dict[str, Any]:
+    async def create_chat_session(user_id: str | None, db: AsyncSession) -> dict[str, Any]:
         session = ChatSession(
             id=str(uuid4()),
             user_id=user_id,
@@ -732,17 +732,17 @@ class AppBffService:
 
     @staticmethod
     async def rename_chat_session(
-        user_id: str,
+        user_id: str | None,
         session_id: str,
         title: str,
         db: AsyncSession,
     ) -> dict[str, Any]:
-        result = await db.execute(
-            select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id)
-        )
+        result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
         session = result.scalar_one_or_none()
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
+        if user_id and session.user_id != user_id:
+            raise HTTPException(status_code=403, detail="forbidden")
 
         session.title = title
         await db.commit()
@@ -750,28 +750,28 @@ class AppBffService:
 
     @staticmethod
     async def delete_chat_session(
-        user_id: str,
+        user_id: str | None,
         session_id: str,
         db: AsyncSession,
         redis_client: redis.Redis,
     ) -> dict[str, Any]:
-        result = await db.execute(
-            select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id)
-        )
+        result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
         session = result.scalar_one_or_none()
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
+        if user_id and session.user_id != user_id:
+            raise HTTPException(status_code=403, detail="forbidden")
 
         session.deleted_at = datetime.utcnow()
         await db.commit()
-        
+
         await history.clear_session_cache(redis_client, session_id)
-        
+
         return {"deleted": True}
 
     @staticmethod
     async def list_chat_sessions(
-        user_id: str,
+        user_id: str | None,
         db: AsyncSession,
         limit: int,
         offset: int,
@@ -779,15 +779,35 @@ class AppBffService:
     ) -> dict[str, Any]:
         stmt = (
             select(ChatSession)
-            .where(ChatSession.user_id == user_id, ChatSession.deleted_at.is_(None))
+            .where(ChatSession.deleted_at.is_(None))
             .order_by(desc(ChatSession.created_at))
             .offset(offset)
             .limit(limit)
         )
+        if user_id:
+            stmt = stmt.where(ChatSession.user_id == user_id)
         if q:
             stmt = stmt.where(ChatSession.title.contains(q))
 
         rows = (await db.execute(stmt)).scalars().all()
+        updated = False
+        for row in rows:
+            if not row.title or row.title == "新会话":
+                msg_stmt = (
+                    select(ChatMessage)
+                    .where(ChatMessage.session_id == row.id, ChatMessage.role == "user")
+                    .order_by(ChatMessage.created_at)
+                    .limit(1)
+                )
+                msg_result = await db.execute(msg_stmt)
+                msg = msg_result.scalar_one_or_none()
+                if msg and msg.content:
+                    title = msg.content.strip().replace("\n", " ")
+                    row.title = title[:24] if len(title) > 24 else title
+                    updated = True
+        if updated:
+            await db.commit()
+
         tz = timezone(timedelta(hours=8))
         sessions = []
         for row in rows:
@@ -806,17 +826,18 @@ class AppBffService:
 
     @staticmethod
     async def list_chat_messages(
-        user_id: str,
+        user_id: str | None,
         session_id: str,
         db: AsyncSession,
         limit: int,
         offset: int,
     ) -> dict[str, Any]:
-        session = (
-            await db.execute(select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id))
-        ).scalar_one_or_none()
+        result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
+        session = result.scalar_one_or_none()
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
+        if user_id and session.user_id != user_id:
+            raise HTTPException(status_code=403, detail="forbidden")
 
         rows = (
             await db.execute(
@@ -842,12 +863,19 @@ class AppBffService:
         return {"messages": messages, "offset": offset, "limit": limit}
 
     @staticmethod
-    async def ensure_chat_session_access(user_id: str, session_id: str, db: AsyncSession) -> None:
+    async def ensure_chat_session_access(
+        user_id: str | None,
+        session_id: str,
+        db: AsyncSession,
+        allow_missing: bool = True,
+    ) -> None:
         result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
         session = result.scalar_one_or_none()
         if session is None:
-            return
-        if session.user_id != user_id:
+            if allow_missing:
+                return
+            raise HTTPException(status_code=404, detail="session not found")
+        if user_id and session.user_id != user_id:
             raise HTTPException(status_code=403, detail="forbidden")
 
     @staticmethod
@@ -856,16 +884,38 @@ class AppBffService:
         return {"stopped": True}
 
     @staticmethod
+    async def stop_chat_session(
+        user_id: str | None,
+        session_id: str,
+        db: AsyncSession,
+        redis_client: redis.Redis,
+    ) -> dict[str, Any]:
+        await AppBffService.ensure_chat_session_access(user_id, session_id, db)
+        return await AppBffService.stop_chat(session_id, redis_client)
+
+    @staticmethod
+    def resolve_client_ip(
+        forwarded_for: str | None,
+        real_ip: str | None,
+        request_client_host: str | None,
+    ) -> str:
+        forwarded = forwarded_for or real_ip
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request_client_host or "unknown"
+
+    @staticmethod
     async def build_chat_state(
         session_id: str,
-        user_id: str,
+        user_id: str | None,
         payload: dict[str, Any],
         request_client_ip: str,
         redis_client: redis.Redis,
+        rate_limit_key_prefix: str = "app_chat",
     ) -> ChatState:
         await ensure_rate_limit(
             redis_client,
-            key=f"rl:app_chat:{request_client_ip}",
+            key=f"rl:{rate_limit_key_prefix}:{request_client_ip}",
             limit=30,
             window_seconds=60,
         )
@@ -878,3 +928,29 @@ class AppBffService:
             agent_type=payload.get("agent_type"),
             client_ip=request_client_ip,
         )
+
+    @staticmethod
+    async def prepare_chat_stream_state(
+        session_id: str,
+        user_id: str | None,
+        payload: dict[str, Any] | None,
+        db: AsyncSession,
+        redis_client: redis.Redis,
+        forwarded_for: str | None,
+        real_ip: str | None,
+        request_client_host: str | None,
+        trace_id: str | None,
+        rate_limit_key_prefix: str = "app_chat",
+    ) -> ChatState:
+        await AppBffService.ensure_chat_session_access(user_id, session_id, db)
+        client_ip = AppBffService.resolve_client_ip(forwarded_for, real_ip, request_client_host)
+        state = await AppBffService.build_chat_state(
+            session_id=session_id,
+            user_id=user_id,
+            payload=payload or {},
+            request_client_ip=client_ip,
+            redis_client=redis_client,
+            rate_limit_key_prefix=rate_limit_key_prefix,
+        )
+        state.trace_id = trace_id
+        return state

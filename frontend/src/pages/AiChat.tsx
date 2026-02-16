@@ -1,6 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, Send, Sparkles, Pencil, Trash2, Check, X } from 'lucide-react';
+import {
+    ChevronLeft,
+    Send,
+    Sparkles,
+    Pencil,
+    Trash2,
+    Check,
+    X,
+    ThumbsUp,
+    ThumbsDown,
+    RotateCcw,
+    Copy
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -86,15 +98,37 @@ function getSessionId(session: unknown): string {
     return typeof raw === 'string' ? raw : '';
 }
 
-function getApiBaseUrl(): string {
-    const raw = (process.env.APP_API_BASE_URL || '').trim();
-    if (!raw) return '';
-    return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+function normalizeBaseUrl(raw: string): string {
+    const value = (raw || '').trim();
+    if (!value) return '';
+    return value.endsWith('/') ? value.slice(0, -1) : value;
 }
 
-async function streamChatReply(sessionId: string, input: string): Promise<string> {
+function getApiBaseUrl(): string {
+    return normalizeBaseUrl(process.env.APP_API_BASE_URL || '');
+}
+
+function getStreamBaseUrl(): string {
+    const explicitApiBase = getApiBaseUrl();
+    if (!explicitApiBase) return '';
+    if (typeof window !== 'undefined' && explicitApiBase === window.location.origin) {
+        return '';
+    }
+    return explicitApiBase;
+}
+
+type StreamChatReplyOptions = {
+    onDelta?: (partialText: string, deltaText: string) => void;
+    onFinal?: () => void;
+};
+
+async function streamChatReply(
+    sessionId: string,
+    input: string,
+    options: StreamChatReplyOptions = {}
+): Promise<string> {
     const token = authStore.getAccessToken();
-    const url = `${getApiBaseUrl()}/api/v1/app/chat/session/${sessionId}/stream`;
+    const url = `${getStreamBaseUrl()}/api/v1/chat/sessions/${sessionId}/stream`;
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -118,7 +152,30 @@ async function streamChatReply(sessionId: string, input: string): Promise<string
     let buffer = '';
     let collected = '';
 
-    const consumeEventBlock = (block: string) => {
+    const sleepToNextFrame = () =>
+        new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+        });
+
+    const emitDeltaSmoothly = async (rawText: string) => {
+        const text = rawText || '';
+        if (!text) return;
+
+        const chars = Array.from(text);
+        const shouldAnimate = chars.length >= 16;
+        const chunkSize = shouldAnimate ? 2 : chars.length;
+
+        for (let i = 0; i < chars.length; i += chunkSize) {
+            const piece = chars.slice(i, i + chunkSize).join('');
+            collected += piece;
+            options.onDelta?.(collected, piece);
+            if (shouldAnimate) {
+                await sleepToNextFrame();
+            }
+        }
+    };
+
+    const consumeEventBlock = async (block: string) => {
         const lines = block.split(/\r?\n/);
         let sseEvent = '';
         const dataLines: string[] = [];
@@ -131,7 +188,7 @@ async function streamChatReply(sessionId: string, input: string): Promise<string
                 continue;
             }
             if (line.startsWith('data:')) {
-                dataLines.push(line.slice(5).trim());
+                dataLines.push(line.slice(5));
             }
         }
 
@@ -167,20 +224,23 @@ async function streamChatReply(sessionId: string, input: string): Promise<string
         }
 
         if (eventType === 'final') {
-            const finalText = extractText(
-                payloadRecord.final || payloadRecord.output || payloadRecord.data || parsedPayload
-            );
-            if (finalText) {
-                collected = finalText;
+            options.onFinal?.();
+            if (!collected.trim()) {
+                const finalText = extractText(
+                    payloadRecord.final || payloadRecord.output || payloadRecord.data || parsedPayload
+                );
+                if (finalText) {
+                    await emitDeltaSmoothly(finalText);
+                }
             }
             return;
         }
 
         const deltaText = extractText(
-            payloadRecord.delta || payloadRecord.data || payloadRecord.output || parsedPayload
+            payloadRecord.token || payloadRecord.delta || payloadRecord.data || payloadRecord.output || parsedPayload
         );
         if (deltaText) {
-            collected += deltaText;
+            await emitDeltaSmoothly(deltaText);
         }
     };
 
@@ -193,12 +253,12 @@ async function streamChatReply(sessionId: string, input: string): Promise<string
         buffer = parts.pop() || '';
 
         for (const part of parts) {
-            consumeEventBlock(part);
+            await consumeEventBlock(part);
         }
     }
 
     if (buffer.trim()) {
-        consumeEventBlock(buffer);
+        await consumeEventBlock(buffer);
     }
 
     return collected.trim();
@@ -215,6 +275,26 @@ const AiChat = () => {
     const [showSidebar, setShowSidebar] = useState(true); // Control sidebar visibility on small screens
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
     const [editTitle, setEditTitle] = useState('');
+    const [assistantFeedback, setAssistantFeedback] = useState<Record<string, 'like' | 'dislike'>>({});
+    const messagesScrollRef = React.useRef<HTMLDivElement>(null);
+    const scrollRafRef = React.useRef<number | null>(null);
+    const lastAutoScrollAtRef = React.useRef(0);
+
+    const scheduleAutoScrollToBottom = React.useCallback((force = false) => {
+        if (!messagesScrollRef.current) return;
+        const now = Date.now();
+        if (!force && now - lastAutoScrollAtRef.current < 60) return;
+        if (scrollRafRef.current !== null) {
+            cancelAnimationFrame(scrollRafRef.current);
+        }
+        scrollRafRef.current = requestAnimationFrame(() => {
+            const container = messagesScrollRef.current;
+            if (!container) return;
+            container.scrollTop = container.scrollHeight;
+            lastAutoScrollAtRef.current = Date.now();
+            scrollRafRef.current = null;
+        });
+    }, []);
 
     const handleEditStart = (e: React.MouseEvent, session: AppChatSession) => {
         e.stopPropagation();
@@ -284,6 +364,14 @@ const AiChat = () => {
     const canSend = useMemo(() => {
         return Boolean(inputValue.trim()) && Boolean(sessionId) && !sending;
     }, [inputValue, sessionId, sending]);
+
+    useEffect(() => {
+        return () => {
+            if (scrollRafRef.current !== null) {
+                cancelAnimationFrame(scrollRafRef.current);
+            }
+        };
+    }, []);
 
     // Initial load: Auth check + Load Sessions
     useEffect(() => {
@@ -358,32 +446,135 @@ const AiChat = () => {
         const question = inputValue.trim();
         if (!question || !sessionId || sending) return;
 
+        const hadNoMessages = messages.length === 0;
+        const assistantMessageId = makeId();
+
         setInputValue('');
-        setMessages((prev) => [...prev, { id: makeId(), role: 'user', content: question }]);
+        setMessages((prev) => [
+            ...prev,
+            { id: makeId(), role: 'user', content: question },
+            { id: assistantMessageId, role: 'assistant', content: '' }
+        ]);
+        scheduleAutoScrollToBottom(true);
         setSending(true);
 
         try {
-            const reply = await streamChatReply(sessionId, question);
-            setMessages((prev) => [
-                ...prev,
-                {
-                    id: makeId(),
-                    role: 'assistant',
-                    content: reply || '收到，我还在整理答案。'
+            const reply = await streamChatReply(sessionId, question, {
+                onDelta: (partialText) => {
+                    setMessages((prev) =>
+                        prev.map((message) =>
+                            message.id === assistantMessageId
+                                ? {
+                                    ...message,
+                                    content: partialText
+                                }
+                                : message
+                        )
+                    );
+                    scheduleAutoScrollToBottom();
                 }
-            ]);
+            });
 
-            // Update session title implies re-fetching list or updating local state
-            // For simplicity, we can re-fetch sessions occasionally or just leave it "New Session" until refresh.
-            // But let's verify if the backend updates the title immediately after first message.
-            if (messages.length === 0) {
-                // Refresh session list to update title after first message (optional optimization)
+            setMessages((prev) =>
+                prev.map((message) =>
+                    message.id === assistantMessageId
+                        ? {
+                            ...message,
+                            content: reply || message.content || '收到，我还在整理答案。'
+                        }
+                        : message
+                )
+            );
+            scheduleAutoScrollToBottom(true);
+
+            if (hadNoMessages) {
                 void appApi.chat.listSessions().then(setSessions);
             }
-
         } catch (error) {
             console.error('send ai message failed:', error);
+            setMessages((prev) =>
+                prev.map((message) =>
+                    message.id === assistantMessageId
+                        ? {
+                            ...message,
+                            content: '抱歉，刚刚网络有点波动，请再试一次。'
+                        }
+                        : message
+                )
+            );
             toast.error('发送失败，请稍后重试');
+        } finally {
+            setSending(false);
+        }
+    };
+
+    const handleAssistantFeedback = (messageId: string, value: 'like' | 'dislike') => {
+        setAssistantFeedback((prev) => {
+            const current = prev[messageId];
+            if (current === value) {
+                const next = { ...prev };
+                delete next[messageId];
+                return next;
+            }
+            return { ...prev, [messageId]: value };
+        });
+    };
+
+    const handleCopyAssistantMessage = async (content: string) => {
+        try {
+            await navigator.clipboard.writeText(content);
+            toast.success('已复制');
+        } catch (error) {
+            console.error('copy failed:', error);
+            toast.error('复制失败');
+        }
+    };
+
+    const handleRetryAssistantMessage = async (messageId: string) => {
+        if (!sessionId || sending) return;
+
+        const targetIndex = messages.findIndex((message) => message.id === messageId && message.role === 'assistant');
+        if (targetIndex < 0) return;
+
+        const previousUser = [...messages.slice(0, targetIndex)].reverse().find((message) => message.role === 'user');
+        if (!previousUser) {
+            toast.error('未找到可重试的问题');
+            return;
+        }
+
+        setSending(true);
+        scheduleAutoScrollToBottom(true);
+        try {
+            const reply = await streamChatReply(sessionId, previousUser.content, {
+                onDelta: (partialText) => {
+                    setMessages((prev) =>
+                        prev.map((message) =>
+                            message.id === messageId
+                                ? {
+                                    ...message,
+                                    content: partialText
+                                }
+                                : message
+                        )
+                    );
+                    scheduleAutoScrollToBottom();
+                }
+            });
+            setMessages((prev) =>
+                prev.map((message) =>
+                    message.id === messageId
+                        ? {
+                            ...message,
+                            content: reply || message.content || '收到，我还在整理答案。'
+                        }
+                        : message
+                )
+            );
+            scheduleAutoScrollToBottom(true);
+            toast.success('已重新生成');
+        } catch (error) {
+            console.error('retry ai message failed:', error);
+            toast.error('重试失败，请稍后再试');
         } finally {
             setSending(false);
         }
@@ -508,7 +699,7 @@ const AiChat = () => {
                             <Sparkles size={16} className="text-white" />
                         </div>
                         <div>
-                            <p className="text-sm font-bold text-gray-800">AI 食神</p>
+                            <p className="text-sm font-bold text-gray-800">吃点啥AI助手</p>
                             <p className="text-[10px] text-gray-400 hidden sm:block">
                                 {sessionId ? `ID: ${sessionId.slice(0, 8)}` : '初始化中...'}
                             </p>
@@ -517,7 +708,7 @@ const AiChat = () => {
                 </div>
 
                 {/* Messages */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#FDFBFF]">
+                <div ref={messagesScrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#FDFBFF]">
                     {initializing ? (
                         <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-2">
                             <div className="w-6 h-6 border-2 border-[#7E57FF] border-t-transparent rounded-full animate-spin"></div>
@@ -532,69 +723,131 @@ const AiChat = () => {
                         </div>
                     ) : (
                         <>
-                            {messages.map((message) => (
-                                <div
-                                    key={message.id}
-                                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                                >
-                                    <div
-                                        className={`
-                                            text-sm leading-relaxed
-                                            ${message.role === 'user'
-                                                ? 'max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 bg-[#F0F0F5] text-gray-800 rounded-br-none whitespace-pre-wrap shadow-sm'
-                                                : 'max-w-[90%] sm:max-w-[80%] text-gray-700 py-1'}
-                                        `}
-                                    >
-                                        <ReactMarkdown
-                                            className="prose prose-sm max-w-none break-words prose-p:my-1 prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-gray-800 prose-pre:rounded-lg prose-code:text-[#7E57FF] prose-code:bg-purple-50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-a:text-[#7E57FF] prose-a:no-underline hover:prose-a:underline prose-headings:text-inherit prose-headings:my-2 prose-headings:text-base prose-strong:text-inherit prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-table:border-collapse prose-table:border prose-table:border-gray-200 prose-th:bg-gray-50 prose-th:p-2 prose-th:text-xs prose-th:font-medium prose-th:text-gray-500 prose-th:border prose-th:border-gray-200 prose-td:p-2 prose-td:text-xs prose-td:text-gray-600 prose-td:border prose-td:border-gray-200"
-                                            remarkPlugins={[remarkGfm]}
-                                            components={{
-                                                a: ({ node, ...props }) => (
-                                                    <a {...props} target="_blank" rel="noopener noreferrer" />
-                                                ),
-                                                pre: ({ node, ...props }) => (
-                                                    <div className="overflow-auto w-full my-2 bg-gray-900 rounded-lg p-3 text-white">
-                                                        <pre {...props} className="bg-transparent p-0 m-0" />
+                            {messages.map((message) => {
+                                const isAssistant = message.role === 'assistant';
+                                const isStreamingPlaceholder = sending && isAssistant && !message.content.trim();
+                                const feedback = assistantFeedback[message.id];
+
+                                if (isStreamingPlaceholder) {
+                                    return null;
+                                }
+
+                                return (
+                                    <div key={message.id} className={`w-full flex ${isAssistant ? 'justify-start' : 'justify-end'}`}>
+                                        <div className={isAssistant ? 'w-full max-w-3xl' : 'max-w-[85%] sm:max-w-[72%]'}>
+                                            {isAssistant && (
+                                                <div className="mb-2 flex items-center gap-2 text-xs text-gray-500">
+                                                    <div className="w-6 h-6 rounded-lg bg-[#7E57FF]/10 text-[#7E57FF] flex items-center justify-center">
+                                                        <Sparkles size={12} />
                                                     </div>
-                                                ),
-                                                code: ({ node, inline, className, children, ...props }: any) => {
-                                                    const match = /language-(\w+)/.exec(className || '');
-                                                    return !inline && match ? (
-                                                        <code className={className} {...props}>
-                                                            {children}
-                                                        </code>
-                                                    ) : (
-                                                        <code className="bg-black/5 rounded px-1 py-0.5 text-sm font-mono" {...props}>
-                                                            {children}
-                                                        </code>
-                                                    );
-                                                },
-                                                h1: ({ node, ...props }) => <h3 className="text-base font-bold mt-3 mb-1" {...props} />,
-                                                h2: ({ node, ...props }) => <h3 className="text-base font-bold mt-3 mb-1" {...props} />,
-                                                h3: ({ node, ...props }) => <h4 className="text-sm font-bold mt-2 mb-1" {...props} />,
-                                                p: ({ node, ...props }) => <p className="my-1 leading-relaxed" {...props} />,
-                                                ol: ({ node, ...props }) => <ol className="list-decimal list-outside ml-4 my-1 space-y-0.5" {...props} />,
-                                                ul: ({ node, ...props }) => <ul className="list-disc list-outside ml-4 my-1 space-y-0.5" {...props} />,
-                                                li: ({ node, ...props }) => <li className="my-0" {...props} />,
-                                                table: ({ node, ...props }) => <div className="overflow-x-auto my-2 rounded-lg border border-gray-200"><table className="w-full text-left text-sm" {...props} /></div>,
-                                                thead: ({ node, ...props }) => <thead className="bg-gray-50" {...props} />,
-                                                tbody: ({ node, ...props }) => <tbody className="divide-y divide-gray-100" {...props} />,
-                                                tr: ({ node, ...props }) => <tr className="hover:bg-gray-50/50" {...props} />,
-                                                th: ({ node, ...props }) => <th className="px-3 py-2 font-medium text-gray-500" {...props} />,
-                                                td: ({ node, ...props }) => <td className="px-3 py-2 text-gray-600" {...props} />,
-                                            }}
-                                        >
-                                            {message.content}
-                                        </ReactMarkdown>
+                                                    <span className="font-medium text-gray-700">小馋嘴</span>
+                                                </div>
+                                            )}
+                                            <div
+                                                className={
+                                                    isAssistant
+                                                        ? 'rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm leading-relaxed text-gray-700 shadow-sm'
+                                                        : 'rounded-2xl rounded-br-none bg-[#F0F0F5] px-4 py-3 text-sm leading-relaxed text-gray-800 shadow-sm'
+                                                }
+                                            >
+                                                <ReactMarkdown
+                                                    className="prose prose-sm max-w-none break-words prose-p:my-1 prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-gray-800 prose-pre:rounded-lg prose-code:text-[#7E57FF] prose-code:bg-purple-50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-a:text-[#7E57FF] prose-a:no-underline hover:prose-a:underline prose-headings:text-inherit prose-headings:my-2 prose-headings:text-base prose-strong:text-inherit prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-table:border-collapse prose-table:border prose-table:border-gray-200 prose-th:bg-gray-50 prose-th:p-2 prose-th:text-xs prose-th:font-medium prose-th:text-gray-500 prose-th:border prose-th:border-gray-200 prose-td:p-2 prose-td:text-xs prose-td:text-gray-600 prose-td:border prose-td:border-gray-200"
+                                                    remarkPlugins={[remarkGfm]}
+                                                    components={{
+                                                        a: ({ node, ...props }) => (
+                                                            <a {...props} target="_blank" rel="noopener noreferrer" />
+                                                        ),
+                                                        pre: ({ node, ...props }) => (
+                                                            <div className="overflow-auto w-full my-2 bg-gray-900 rounded-lg p-3 text-white">
+                                                                <pre {...props} className="bg-transparent p-0 m-0" />
+                                                            </div>
+                                                        ),
+                                                        code: ({ node, inline, className, children, ...props }: any) => {
+                                                            const match = /language-(\w+)/.exec(className || '');
+                                                            return !inline && match ? (
+                                                                <code className={className} {...props}>
+                                                                    {children}
+                                                                </code>
+                                                            ) : (
+                                                                <code className="bg-black/5 rounded px-1 py-0.5 text-sm font-mono" {...props}>
+                                                                    {children}
+                                                                </code>
+                                                            );
+                                                        },
+                                                        h1: ({ node, ...props }) => <h3 className="text-base font-bold mt-3 mb-1" {...props} />,
+                                                        h2: ({ node, ...props }) => <h3 className="text-base font-bold mt-3 mb-1" {...props} />,
+                                                        h3: ({ node, ...props }) => <h4 className="text-sm font-bold mt-2 mb-1" {...props} />,
+                                                        p: ({ node, ...props }) => <p className="my-1 leading-relaxed" {...props} />,
+                                                        ol: ({ node, ...props }) => <ol className="list-decimal list-outside ml-4 my-1 space-y-0.5" {...props} />,
+                                                        ul: ({ node, ...props }) => <ul className="list-disc list-outside ml-4 my-1 space-y-0.5" {...props} />,
+                                                        li: ({ node, ...props }) => <li className="my-0" {...props} />,
+                                                        table: ({ node, ...props }) => <div className="overflow-x-auto my-2 rounded-lg border border-gray-200"><table className="w-full text-left text-sm" {...props} /></div>,
+                                                        thead: ({ node, ...props }) => <thead className="bg-gray-50" {...props} />,
+                                                        tbody: ({ node, ...props }) => <tbody className="divide-y divide-gray-100" {...props} />,
+                                                        tr: ({ node, ...props }) => <tr className="hover:bg-gray-50/50" {...props} />,
+                                                        th: ({ node, ...props }) => <th className="px-3 py-2 font-medium text-gray-500" {...props} />,
+                                                        td: ({ node, ...props }) => <td className="px-3 py-2 text-gray-600" {...props} />,
+                                                    }}
+                                                >
+                                                    {message.content}
+                                                </ReactMarkdown>
+                                            </div>
+
+                                            {isAssistant && (
+                                                <div className="mt-2 flex items-center gap-1 text-gray-400">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleAssistantFeedback(message.id, 'like')}
+                                                        className={`p-1.5 rounded-lg transition-colors ${feedback === 'like' ? 'bg-purple-50 text-[#7E57FF]' : 'hover:bg-gray-100 hover:text-gray-600'}`}
+                                                        title="赞"
+                                                    >
+                                                        <ThumbsUp size={14} />
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleAssistantFeedback(message.id, 'dislike')}
+                                                        className={`p-1.5 rounded-lg transition-colors ${feedback === 'dislike' ? 'bg-purple-50 text-[#7E57FF]' : 'hover:bg-gray-100 hover:text-gray-600'}`}
+                                                        title="踩"
+                                                    >
+                                                        <ThumbsDown size={14} />
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleRetryAssistantMessage(message.id)}
+                                                        disabled={sending}
+                                                        className="p-1.5 rounded-lg transition-colors hover:bg-gray-100 hover:text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                        title="重试"
+                                                    >
+                                                        <RotateCcw size={14} />
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleCopyAssistantMessage(message.content)}
+                                                        className="p-1.5 rounded-lg transition-colors hover:bg-gray-100 hover:text-gray-600"
+                                                        title="复制"
+                                                    >
+                                                        <Copy size={14} />
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                             {sending && (
-                                <div className="flex justify-start">
-                                    <div className="text-gray-400 py-2 flex items-center gap-1">
-                                        <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                                        <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                                        <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                                <div className="w-full max-w-3xl">
+                                    <div className="mb-2 flex items-center gap-2 text-xs text-gray-500">
+                                        <div className="w-6 h-6 rounded-lg bg-[#7E57FF]/10 text-[#7E57FF] flex items-center justify-center">
+                                            <Sparkles size={12} />
+                                        </div>
+                                        <span className="font-medium text-gray-700">小馋嘴</span>
+                                    </div>
+                                    <div className="inline-flex rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+                                        <div className="text-gray-400 flex items-center gap-1">
+                                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                                            <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                                        </div>
                                     </div>
                                 </div>
                             )}

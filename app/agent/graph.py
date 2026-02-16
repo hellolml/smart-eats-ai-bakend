@@ -98,6 +98,14 @@ def _observe_recovery(state: ChatState, tool_name: str | None, result: Any) -> N
         state.recovery_path.append(step)
 
 
+def _iter_delta_chunks(text: str, chunk_size: int = 8) -> list[str]:
+    if not text:
+        return []
+    if len(text) <= chunk_size:
+        return [text]
+    return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+
 async def _refresh_observation_context(
     db: AsyncSession,
     redis_client: redis.Redis,
@@ -972,7 +980,9 @@ async def run_chat_stream(
                     yield {"event": "final", "data": {"stopped": True}}
                     return
                 assistant_chunks.append(delta)
-                yield {"event": "delta", "data": {"token": delta}}
+                for piece in _iter_delta_chunks(delta):
+                    yield {"event": "delta", "data": {"token": piece}}
+                    await asyncio.sleep(0)
         finally:
             reset_llm_log_context(token)
 
