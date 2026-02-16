@@ -83,6 +83,11 @@ class UpdateMeRequest(BaseModel):
     current_state: str | None = None
 
 
+class GoalStateUpdateRequest(BaseModel):
+    health_goal: str | None = None
+    current_state: str | None = None
+
+
 class MePreferencesUpdateRequest(BaseModel):
     tastes: list[str] | None = None
     taboos: list[str] | None = None

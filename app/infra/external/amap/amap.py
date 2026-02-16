@@ -93,6 +93,48 @@ def _extract_ip_location(payload: Any) -> tuple[dict[str, float] | None, str | N
     return location, city
 
 
+def _extract_regeo_region(payload: Any) -> dict[str, str] | None:
+    payload = _parse_json_payload(payload)
+    if isinstance(payload, list) and payload:
+        payload = payload[0] if isinstance(payload[0], dict) else payload
+    if not isinstance(payload, dict):
+        return None
+
+    regeo = payload.get("regeocode")
+    if isinstance(regeo, dict):
+        payload = regeo
+
+    component = payload.get("addressComponent") if isinstance(payload.get("addressComponent"), dict) else payload
+
+    def _pick(value: Any) -> str | None:
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    district = _pick(component.get("district"))
+    city = _pick(component.get("city"))
+    province = _pick(component.get("province"))
+
+    if not district:
+        district = _pick(payload.get("district"))
+    if not city:
+        city = _pick(payload.get("city"))
+    if not province:
+        province = _pick(payload.get("province"))
+
+    region = {k: v for k, v in {"district": district, "city": city, "province": province}.items() if v}
+    return region or None
+
+
+def _extract_regeo_city(payload: Any) -> str | None:
+    region = _extract_regeo_region(payload)
+    if not region:
+        return None
+    return region.get("district") or region.get("city") or region.get("province")
+
+
 def _extract_geocode(payload: Any) -> dict[str, float] | None:
     payload = _parse_json_payload(payload)
     if isinstance(payload, dict):
@@ -317,6 +359,45 @@ def _weather_fallback(city: str | None) -> dict[str, Any]:
     return {"city": city or "unknown", "status": "sunny", "temperature_c": 26}
 
 
+def _extract_weather_payload(payload: Any) -> dict[str, Any]:
+    parsed = _parse_json_payload(payload)
+    if not isinstance(parsed, dict):
+        return {}
+
+    weather_payload = parsed
+
+    lives = parsed.get("lives")
+    if isinstance(lives, list) and lives and isinstance(lives[0], dict):
+        weather_payload = lives[0]
+
+    forecasts = parsed.get("forecasts")
+    if isinstance(forecasts, list) and forecasts and isinstance(forecasts[0], dict):
+        first = forecasts[0]
+        first_casts = first.get("casts")
+        if isinstance(first_casts, list) and first_casts and isinstance(first_casts[0], dict):
+            weather_payload = first_casts[0]
+        else:
+            first_forecasts = first.get("forecasts")
+            if isinstance(first_forecasts, list) and first_forecasts and isinstance(first_forecasts[0], dict):
+                weather_payload = first_forecasts[0]
+            else:
+                weather_payload = first
+
+    if isinstance(parsed.get("data"), dict):
+        data = parsed["data"]
+        data_lives = data.get("lives")
+        if isinstance(data_lives, list) and data_lives and isinstance(data_lives[0], dict):
+            weather_payload = data_lives[0]
+        else:
+            data_forecasts = data.get("forecasts")
+            if isinstance(data_forecasts, list) and data_forecasts and isinstance(data_forecasts[0], dict):
+                weather_payload = data_forecasts[0]
+            else:
+                weather_payload = data
+
+    return weather_payload if isinstance(weather_payload, dict) else {}
+
+
 async def get_ip_location(
     ip: str,
     *,
@@ -327,6 +408,39 @@ async def get_ip_location(
     if payload is None:
         return None, None
     return _extract_ip_location(payload)
+
+
+async def reverse_geocode_region(
+    location: dict[str, float],
+    *,
+    servers_path: str | None,
+) -> dict[str, str] | None:
+    normalized = _normalize_coord_pair(location)
+    lat = normalized.get("lat")
+    lng = normalized.get("lng")
+    if lat is None or lng is None:
+        return None
+
+    args = {"location": f"{lng},{lat}"}
+    for tool_key in ("maps_regeo", "maps_regeocode", "maps_reverse_geocode"):
+        payload = await _fetch_tool_payload(tool_key, args, servers_path)
+        if payload is None:
+            continue
+        region = _extract_regeo_region(payload)
+        if region:
+            return region
+    return None
+
+
+async def reverse_geocode_city(
+    location: dict[str, float],
+    *,
+    servers_path: str | None,
+) -> str | None:
+    region = await reverse_geocode_region(location, servers_path=servers_path)
+    if not region:
+        return None
+    return region.get("city") or region.get("province") or region.get("district")
 
 
 async def geocode_address(
@@ -404,19 +518,43 @@ async def get_weather(
     payload = await _fetch_tool_payload("maps_weather", args, servers_path)
     if payload is None:
         return _weather_fallback(city)
-    status = None
-    temperature = None
-    if isinstance(payload, dict):
-        status = payload.get("weather") or payload.get("status")
-        temperature = payload.get("temperature") or payload.get("temp")
-        if temperature is not None:
-            try:
-                temperature = float(temperature)
-            except (TypeError, ValueError):
-                temperature = None
+
+    weather_payload = _extract_weather_payload(payload)
+
+    status = (
+        weather_payload.get("weather")
+        or weather_payload.get("status")
+        or weather_payload.get("text")
+        or weather_payload.get("dayweather")
+        or weather_payload.get("nightweather")
+    )
+    temperature = (
+        weather_payload.get("temperature")
+        or weather_payload.get("temp")
+        or weather_payload.get("daytemp")
+        or weather_payload.get("nighttemp")
+    )
+    payload_city = (
+        weather_payload.get("city")
+        or weather_payload.get("province")
+        or weather_payload.get("district")
+    )
+
+    if temperature is not None:
+        try:
+            temperature = float(temperature)
+        except (TypeError, ValueError):
+            temperature = None
+
+    if temperature is None and weather_payload.get("daytemp_float") is not None:
+        try:
+            temperature = float(weather_payload.get("daytemp_float"))
+        except (TypeError, ValueError):
+            temperature = None
+
     return {
-        "city": city or "",
-        "status": status or "unknown",
+        "city": payload_city or city or "",
+        "status": str(status).strip() if isinstance(status, str) and status.strip() else "sunny",
         "temperature_c": temperature,
         "raw": payload,
     }

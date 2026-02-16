@@ -33,6 +33,23 @@ export interface AppPreferences {
     allergens?: string[] | string;
 }
 
+export interface AppHomeOverview {
+    name?: string;
+    health_goal?: string;
+    current_state?: string;
+    weather?: {
+        city?: string;
+        temperature_c?: number | null;
+        status?: string;
+        temperature_text?: string;
+        display?: string;
+        location?: {
+            lat?: number;
+            lng?: number;
+        } | null;
+    };
+}
+
 export interface AppChatSession {
     id?: string;
     session_id?: string;
@@ -351,6 +368,33 @@ export const appApi = {
                 expiresAt: Date.now() + ME_CACHE_TTL_MS
             };
             return updated;
+        },
+        async updateGoalState(payload: { health_goal?: string; current_state?: string }) {
+            const updated = await request<{ health_goal?: string; current_state?: string }>('/me/goal-state', {
+                method: 'PATCH',
+                body: payload
+            });
+            if (meCache) {
+                meCache = {
+                    data: {
+                        ...meCache.data,
+                        health_goal: updated.health_goal,
+                        current_state: updated.current_state
+                    },
+                    expiresAt: Date.now() + ME_CACHE_TTL_MS
+                };
+            }
+            return updated;
+        },
+        async getHomeOverview(location?: { lat: number; lng: number }) {
+            if (!location) {
+                return request<AppHomeOverview>('/home/overview');
+            }
+            const search = new URLSearchParams({
+                lat: String(location.lat),
+                lng: String(location.lng)
+            });
+            return request<AppHomeOverview>(`/home/overview?${search.toString()}`);
         }
     },
 

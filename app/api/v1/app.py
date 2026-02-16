@@ -24,6 +24,7 @@ from app.domain.app.schemas import (
     LoginRequest,
     LogoutRequest,
     MePreferencesUpdateRequest,
+    GoalStateUpdateRequest,
     RefreshRequest,
     RegisterRequest,
     ScanApplyRequest,
@@ -97,6 +98,39 @@ async def update_me(
     user_id: str = Depends(get_current_user_id),
 ):
     data = await AppBffService.update_me(user_id, payload.model_dump(exclude_unset=True), db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.patch("/me/goal-state")
+async def update_goal_state(
+    payload: GoalStateUpdateRequest,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.update_goal_state(user_id, payload.model_dump(exclude_unset=True), db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/home/overview")
+async def get_home_overview(
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+    lat: float | None = Query(default=None),
+    lng: float | None = Query(default=None),
+):
+    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "unknown"
+
+    location = None
+    if lat is not None and lng is not None:
+        location = {"lat": lat, "lng": lng}
+
+    data = await AppBffService.get_home_overview(user_id, client_ip, db, location=location)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 

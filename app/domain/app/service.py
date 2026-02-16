@@ -37,6 +37,7 @@ from app.infra.models.fridge import FridgeItem, FridgePhoto, RecognitionJob
 from app.infra.models.game import BlindboxRoll, WheelConfig, WheelSpin
 from app.infra.models.preference import UserPreference, UserProfile
 from app.infra.models.user import User
+from app.infra.external.amap import amap
 
 
 class AppBffService:
@@ -218,6 +219,99 @@ class AppBffService:
         await db.commit()
         pref = await AppBffService._get_or_create_preferences(user_id, db)
         return map_me(user, profile, pref)
+
+    @staticmethod
+    async def update_goal_state(
+        user_id: str,
+        payload: dict[str, Any],
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        profile = await AppBffService._get_or_create_profile(user_id, db)
+
+        if "health_goal" in payload:
+            profile.health_goal = payload["health_goal"]
+        if "current_state" in payload:
+            profile.current_state = payload["current_state"]
+
+        await db.commit()
+        return {
+            "health_goal": profile.health_goal,
+            "current_state": profile.current_state,
+        }
+
+    @staticmethod
+    async def get_home_overview(
+        user_id: str,
+        request_client_ip: str,
+        db: AsyncSession,
+        location: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        user = await AppBffService._get_user(user_id, db)
+        profile = await AppBffService._get_or_create_profile(user_id, db)
+
+        default_city = "北京"
+        weather_query_city = default_city
+        weather_display_city = default_city
+        resolved_location = location
+
+        if resolved_location:
+            regeo_region = await amap.reverse_geocode_region(
+                resolved_location,
+                servers_path=settings.MCP_SERVERS_CONFIG_PATH,
+            )
+            if isinstance(regeo_region, dict):
+                district = regeo_region.get("district")
+                city = regeo_region.get("city")
+                province = regeo_region.get("province")
+                if isinstance(district, str) and district.strip():
+                    weather_display_city = district.strip()
+                elif isinstance(city, str) and city.strip():
+                    weather_display_city = city.strip()
+                elif isinstance(province, str) and province.strip():
+                    weather_display_city = province.strip()
+
+                if isinstance(city, str) and city.strip():
+                    weather_query_city = city.strip()
+                elif isinstance(province, str) and province.strip():
+                    weather_query_city = province.strip()
+        elif request_client_ip not in {"unknown", "testclient", "test", "localhost", "127.0.0.1", "::1"}:
+            ip_location, ip_city = await amap.get_ip_location(
+                request_client_ip,
+                servers_path=settings.MCP_SERVERS_CONFIG_PATH,
+            )
+            if ip_location:
+                resolved_location = ip_location
+            if isinstance(ip_city, str) and ip_city.strip():
+                value = ip_city.strip()
+                weather_query_city = value
+                weather_display_city = value
+
+        weather = await amap.get_weather(weather_query_city, servers_path=settings.MCP_SERVERS_CONFIG_PATH)
+        temperature = weather.get("temperature_c") if isinstance(weather, dict) else None
+
+        if isinstance(temperature, (int, float)):
+            temperature_text = f"{int(round(float(temperature)))}°"
+        else:
+            temperature_text = "--°"
+
+        weather_status = ""
+        if isinstance(weather, dict):
+            status = weather.get("status")
+            weather_status = str(status) if isinstance(status, str) else ""
+
+        return {
+            "name": user.nickname,
+            "health_goal": profile.health_goal,
+            "current_state": profile.current_state,
+            "weather": {
+                "city": weather_display_city,
+                "temperature_c": temperature,
+                "status": weather_status,
+                "temperature_text": temperature_text,
+                "display": f"{temperature_text}{weather_status}" if weather_status else temperature_text,
+                "location": resolved_location,
+            },
+        }
 
     @staticmethod
     async def get_preferences(user_id: str, db: AsyncSession) -> dict[str, Any]:
