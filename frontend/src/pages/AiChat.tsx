@@ -11,7 +11,9 @@ import {
     ThumbsUp,
     ThumbsDown,
     RotateCcw,
-    Copy
+    Copy,
+    Mic,
+    Square
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
@@ -24,6 +26,12 @@ interface ChatMessageUi {
     id: string;
     role: ChatRole;
     content: string;
+}
+
+function getSpeechRecognitionCtor(): any {
+    if (typeof window === 'undefined') return null;
+    const w = window as any;
+    return w.SpeechRecognition || w.webkitSpeechRecognition || null;
 }
 
 function makeId(): string {
@@ -278,8 +286,11 @@ const AiChat = () => {
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
     const [editTitle, setEditTitle] = useState('');
     const [assistantFeedback, setAssistantFeedback] = useState<Record<string, 'like' | 'dislike'>>({});
+    const [speechSupported, setSpeechSupported] = useState(false);
+    const [isListening, setIsListening] = useState(false);
     const messagesScrollRef = React.useRef<HTMLDivElement>(null);
     const scrollRafRef = React.useRef<number | null>(null);
+    const recognitionRef = React.useRef<any>(null);
     const lastAutoScrollAtRef = React.useRef(0);
 
     const scheduleAutoScrollToBottom = React.useCallback((force = false) => {
@@ -367,11 +378,83 @@ const AiChat = () => {
         return Boolean(inputValue.trim()) && Boolean(sessionId) && !sending;
     }, [inputValue, sessionId, sending]);
 
+    const handleToggleVoiceInput = React.useCallback(() => {
+        if (isListening) {
+            const active = recognitionRef.current;
+            if (active) {
+                try {
+                    active.stop();
+                } catch {
+                    // ignore stop errors
+                }
+            }
+            return;
+        }
+
+        const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+        if (!SpeechRecognitionCtor) {
+            toast.error('当前浏览器不支持语音输入');
+            return;
+        }
+
+        const recognition = new SpeechRecognitionCtor();
+        recognition.lang = 'zh-CN';
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+            setIsListening(true);
+        };
+
+        recognition.onresult = (event: any) => {
+            const transcript = (event?.results?.[0]?.[0]?.transcript || '').trim();
+            if (!transcript) return;
+            setInputValue((prev) => {
+                const base = prev.trim();
+                return base ? `${base} ${transcript}` : transcript;
+            });
+            textareaRef.current?.focus();
+        };
+
+        recognition.onerror = (event: any) => {
+            if (event?.error && event.error !== 'aborted' && event.error !== 'no-speech') {
+                toast.error('语音识别失败，请重试');
+            }
+        };
+
+        recognition.onend = () => {
+            setIsListening(false);
+            recognitionRef.current = null;
+        };
+
+        recognitionRef.current = recognition;
+        try {
+            recognition.start();
+        } catch {
+            recognitionRef.current = null;
+            setIsListening(false);
+            toast.error('语音识别启动失败');
+        }
+    }, [isListening]);
+
     useEffect(() => {
+        const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+        setSpeechSupported(Boolean(SpeechRecognitionCtor));
+
         return () => {
             if (scrollRafRef.current !== null) {
                 cancelAnimationFrame(scrollRafRef.current);
             }
+            const active = recognitionRef.current;
+            if (active) {
+                try {
+                    active.stop();
+                } catch {
+                    // ignore stop errors
+                }
+            }
+            recognitionRef.current = null;
         };
     }, []);
 
@@ -447,6 +530,15 @@ const AiChat = () => {
     const handleSend = async () => {
         const question = inputValue.trim();
         if (!question || !sessionId || sending) return;
+
+        const activeRecognition = recognitionRef.current;
+        if (activeRecognition) {
+            try {
+                activeRecognition.stop();
+            } catch {
+                // ignore stop errors
+            }
+        }
 
         const hadNoMessages = messages.length === 0;
         const assistantMessageId = makeId();
@@ -874,6 +966,23 @@ const AiChat = () => {
                             className="flex-1 bg-transparent border-none outline-none resize-none max-h-[120px] min-h-[24px] py-2 px-2 text-sm text-gray-800 placeholder:text-gray-400 leading-normal"
                             rows={1}
                         />
+                        {speechSupported && (
+                            <button
+                                type="button"
+                                onClick={handleToggleVoiceInput}
+                                disabled={sending}
+                                className={`
+                                    mb-0.5 p-2 rounded-xl transition-all duration-200
+                                    ${isListening
+                                        ? 'bg-red-500 text-white shadow-md hover:shadow-lg active:scale-95'
+                                        : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-100'}
+                                    ${sending ? 'opacity-50 cursor-not-allowed' : ''}
+                                `}
+                                title={isListening ? '停止语音输入' : '语音输入'}
+                            >
+                                {isListening ? <Square size={16} /> : <Mic size={16} />}
+                            </button>
+                        )}
                         <button
                             onClick={() => void handleSend()}
                             disabled={!canSend}
