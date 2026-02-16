@@ -98,7 +98,7 @@ def _observe_recovery(state: ChatState, tool_name: str | None, result: Any) -> N
         state.recovery_path.append(step)
 
 
-def _iter_delta_chunks(text: str, chunk_size: int = 8) -> list[str]:
+def _iter_delta_chunks(text: str, chunk_size: int = 4) -> list[str]:
     if not text:
         return []
     if len(text) <= chunk_size:

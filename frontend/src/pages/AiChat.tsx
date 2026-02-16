@@ -132,6 +132,8 @@ async function streamChatReply(
     const response = await fetch(url, {
         method: 'POST',
         headers: {
+            'Accept': 'text/event-stream',
+            'Cache-Control': 'no-cache',
             'Content-Type': 'application/json',
             ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
@@ -152,9 +154,9 @@ async function streamChatReply(
     let buffer = '';
     let collected = '';
 
-    const sleepToNextFrame = () =>
+    const sleep = (ms: number) =>
         new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
+            setTimeout(resolve, ms);
         });
 
     const emitDeltaSmoothly = async (rawText: string) => {
@@ -162,15 +164,15 @@ async function streamChatReply(
         if (!text) return;
 
         const chars = Array.from(text);
-        const shouldAnimate = chars.length >= 16;
-        const chunkSize = shouldAnimate ? 2 : chars.length;
+        const shouldAnimate = chars.length >= 8;
+        const chunkSize = 1;
 
         for (let i = 0; i < chars.length; i += chunkSize) {
             const piece = chars.slice(i, i + chunkSize).join('');
             collected += piece;
             options.onDelta?.(collected, piece);
             if (shouldAnimate) {
-                await sleepToNextFrame();
+                await sleep(12);
             }
         }
     };
