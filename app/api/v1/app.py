@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
-from typing import AsyncGenerator
+from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.agent.graph import run_chat_stream
-from app.api.deps import db_dep, get_current_user_id, minio_dep, redis_dep
+from app.api.deps import db_dep, get_current_user_id, minio_dep, parse_restaurants_query, redis_dep
 from app.common.config import settings
 from app.common.errors import envelope
 from app.common.sse import sse_event
@@ -27,6 +27,7 @@ from app.domain.app.schemas import (
     GoalStateUpdateRequest,
     RefreshRequest,
     RegisterRequest,
+    RestaurantsQuery,
     ScanApplyRequest,
     UpdateMeRequest,
     WheelCurrentUpdateRequest,
@@ -335,20 +336,16 @@ async def get_today_card(
 async def list_restaurants(
     request: Request,
     redis: redis_dep,
+    parsed: Annotated[RestaurantsQuery, Depends(parse_restaurants_query)],
     _user_id: str = Depends(get_current_user_id),
-    q: str | None = Query(default=None),
-    sort: str | None = Query(default=None),
-    tag: str | None = Query(default=None),
-    lat: float | None = Query(default=None),
-    lng: float | None = Query(default=None),
 ):
     data = await AppBffService.list_restaurants(
         redis_client=redis,
-        q=q,
-        tag=tag,
-        lat=lat,
-        lng=lng,
-        sort=sort,
+        q=parsed.q,
+        tag=parsed.tag,
+        lat=parsed.lat,
+        lng=parsed.lng,
+        sort=parsed.sort,
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
 

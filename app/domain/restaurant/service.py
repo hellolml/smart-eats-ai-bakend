@@ -32,8 +32,17 @@ class RestaurantService:
             if cached_results:
                 return cached_results
 
-        keywords = query or tag or "美食"
-        types = tag or "050000"
+        query_text = (query or "").strip()
+        tag_text = (tag or "").strip()
+
+        keywords = query_text or "美食"
+        types = "050000"
+
+        if tag_text:
+            if _is_amap_typecode(tag_text):
+                types = tag_text
+            elif tag_text not in keywords:
+                keywords = f"{keywords} {tag_text}".strip()
         if lat is not None and lng is not None:
             pois = await amap.around_search(
                 f"{lng},{lat}",
@@ -144,25 +153,7 @@ class RestaurantService:
                 )
                 return payload
 
-        payload = {
-            "id": str(uuid4()),
-            "provider": provider,
-            "provider_id": provider_id,
-            "name": f"Restaurant {provider_id}",
-            "geo": None,
-            "rating": None,
-            "price": None,
-            "tags": [],
-            "raw": {"mock": True},
-            "navigation": None,
-            "ai_tags": [],
-        }
-        await redis_client.setex(
-            cache_key,
-            settings.RESTAURANT_DETAIL_CACHE_TTL_SECONDS,
-            json.dumps(payload, ensure_ascii=True),
-        )
-        return payload
+        return None
 
 
 def _build_navigation(geo: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -213,6 +204,10 @@ def _normalize_poi(item: dict[str, Any]) -> dict[str, Any]:
         "raw": item,
         "typecode": item.get("typecode"),
     }
+
+
+def _is_amap_typecode(value: str) -> bool:
+    return len(value) == 6 and value.isdigit()
 
 
 def _is_food_poi(item: dict[str, Any]) -> bool:

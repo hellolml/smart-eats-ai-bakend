@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from typing import Annotated
 
-from app.api.deps import db_dep, redis_dep
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from app.api.deps import db_dep, parse_restaurants_query, redis_dep
 from app.common.errors import envelope
+from app.domain.app.schemas import RestaurantsQuery
 from app.domain.restaurant.service import RestaurantService
 
 router = APIRouter()
@@ -13,13 +16,16 @@ router = APIRouter()
 async def search_restaurants(
     request: Request,
     redis: redis_dep,
-    q: str | None = None,
-    sort: str | None = None,
-    tag: str | None = None,
-    lat: float | None = None,
-    lng: float | None = None,
+    parsed: Annotated[RestaurantsQuery, Depends(parse_restaurants_query)],
 ):
-    results = await RestaurantService.search(redis, q, tag, lat, lng, sort)
+    results = await RestaurantService.search(
+        redis,
+        parsed.q,
+        parsed.tag,
+        parsed.lat,
+        parsed.lng,
+        parsed.sort,
+    )
     trace_id = getattr(request.state, "trace_id", "")
     return envelope(results, trace_id)
 
