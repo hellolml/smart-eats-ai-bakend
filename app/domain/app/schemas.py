@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, ValidationInfo, field_validator, model_validator
 
 
 class RegisterRequest(BaseModel):
@@ -123,10 +123,35 @@ class HomeChefRecipeGenerateRequest(BaseModel):
 
 class RestaurantsQuery(BaseModel):
     q: str | None = None
-    sort: str | None = None
+    sort: Literal["nearest", "rating_desc", "price_asc"] | None = None
     tag: str | None = None
     lat: float | None = None
     lng: float | None = None
+
+    @field_validator("q", "tag", mode="before")
+    @classmethod
+    def normalize_text(cls, value: Any):
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("lat", "lng")
+    @classmethod
+    def validate_coordinate_range(cls, value: float | None, info: ValidationInfo):
+        if value is None:
+            return value
+        if info.field_name == "lat" and not (-90 <= value <= 90):
+            raise ValueError("lat must be between -90 and 90")
+        if info.field_name == "lng" and not (-180 <= value <= 180):
+            raise ValueError("lng must be between -180 and 180")
+        return value
+
+    @model_validator(mode="after")
+    def validate_coordinate_pair(self):
+        if (self.lat is None) != (self.lng is None):
+            raise ValueError("lat and lng must be provided together")
+        return self
 
 
 class BlindBoxDrawRequest(BaseModel):

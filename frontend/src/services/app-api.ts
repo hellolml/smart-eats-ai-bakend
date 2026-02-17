@@ -64,6 +64,29 @@ export interface AppChatMessage {
     created_at?: string;
 }
 
+export type AppRestaurantSort = 'nearest' | 'rating_desc' | 'price_asc';
+
+export interface AppRestaurant {
+    id?: string;
+    provider?: string;
+    provider_id?: string;
+    name?: string;
+    rating?: number | null;
+    distance_m?: number | null;
+    distance_text?: string;
+    price_text?: string;
+    tag?: string;
+    tags?: string[];
+    lat?: number | null;
+    lng?: number | null;
+    navigation_url?: string | null;
+    source?: string;
+}
+
+export interface AppRestaurantDetail extends AppRestaurant {
+    raw?: unknown;
+}
+
 export interface AuthPayload {
     access_token?: string;
     refresh_token?: string;
@@ -407,6 +430,28 @@ export const appApi = {
                 method: 'PATCH',
                 body: payload
             });
+        }
+    },
+
+    restaurants: {
+        async list(params: {
+            q?: string;
+            sort?: AppRestaurantSort;
+            tag?: string;
+            lat?: number;
+            lng?: number;
+        } = {}) {
+            const search = new URLSearchParams();
+            if (params.q) search.set('q', params.q);
+            if (params.sort) search.set('sort', params.sort);
+            if (params.tag) search.set('tag', params.tag);
+            if (typeof params.lat === 'number') search.set('lat', String(params.lat));
+            if (typeof params.lng === 'number') search.set('lng', String(params.lng));
+            const query = search.toString();
+            return request<AppRestaurant[]>(`/restaurants${query ? `?${query}` : ''}`);
+        },
+        async detail(provider: string, providerId: string) {
+            return request<AppRestaurantDetail>(`/restaurants/${provider}/${providerId}`);
         }
     },
 

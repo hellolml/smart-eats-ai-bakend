@@ -606,6 +606,45 @@ class AppBffService:
         return base
 
     @staticmethod
+    def _extract_price_value(price_text: Any) -> float | None:
+        if isinstance(price_text, (int, float)):
+            value = float(price_text)
+            return value if value > 0 else None
+        if not isinstance(price_text, str):
+            return None
+        numeric = "".join(ch for ch in price_text if ch.isdigit() or ch == ".")
+        if not numeric:
+            return None
+        try:
+            value = float(numeric)
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    @staticmethod
+    def _sort_restaurants(rows: list[dict[str, Any]], sort: str | None) -> list[dict[str, Any]]:
+        sort_key = (sort or "").strip().lower()
+        if sort_key in {"nearest", "distance", "distance_asc"}:
+            return sorted(rows, key=lambda row: (row.get("distance_m") is None, row.get("distance_m") or 0))
+        if sort_key in {"rating_desc", "rating", "score_desc"}:
+            return sorted(
+                rows,
+                key=lambda row: (
+                    row.get("rating") is None,
+                    -(float(row.get("rating"))) if isinstance(row.get("rating"), (int, float)) else 0,
+                ),
+            )
+        if sort_key in {"price_asc", "price", "cost_asc"}:
+            return sorted(
+                rows,
+                key=lambda row: (
+                    AppBffService._extract_price_value(row.get("price_text")) is None,
+                    AppBffService._extract_price_value(row.get("price_text")) or 0,
+                ),
+            )
+        return rows
+
+    @staticmethod
     async def list_restaurants(
         redis_client: redis.Redis,
         q: str | None,
@@ -615,15 +654,18 @@ class AppBffService:
         sort: str | None,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
+        service_failed = False
         try:
             results = await RestaurantService.search(redis_client, q, tag, lat, lng, sort)
         except Exception:
+            service_failed = True
             results = []
 
-        if not results and settings.APP_FALLBACK_ENABLED:
+        if service_failed and not results and settings.APP_FALLBACK_ENABLED:
             results = AppBffService._fallback_restaurants(lat, lng)
 
-        return [map_restaurant(item, lat, lng) for item in results]
+        mapped_rows = [map_restaurant(item, lat, lng) for item in results]
+        return AppBffService._sort_restaurants(mapped_rows, sort)
 
     @staticmethod
     async def restaurant_detail(
@@ -633,12 +675,14 @@ class AppBffService:
         redis_client: redis.Redis,
     ) -> dict[str, Any]:
         detail = None
+        service_failed = False
         try:
             detail = await RestaurantService.get_detail(db, redis_client, provider, provider_id)
         except Exception:
+            service_failed = True
             detail = None
 
-        if not detail and settings.APP_FALLBACK_ENABLED:
+        if service_failed and not detail and settings.APP_FALLBACK_ENABLED:
             detail = {
                 "provider": provider,
                 "provider_id": provider_id,

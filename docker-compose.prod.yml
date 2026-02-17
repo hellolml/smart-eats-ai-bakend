@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: smart-eats-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-smart_eats}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-smart_eats}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smart-eats-net
+
+  redis:
+    image: redis:7
+    container_name: smart-eats-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smart-eats-net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: smart-eats-backend:${IMAGE_TAG:-latest}
+    container_name: smart-eats-backend
+    restart: unless-stopped
+    env_file:
+      - ${ENV_FILE:-.env.prod}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-smart_eats}
+      REDIS_URL: redis://redis:6379/0
+      LANGGRAPH_CHECKPOINT_DB: /app/.langgraph/.langgraph_checkpoints.sqlite
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - minio_stub_data:/app/.minio_stub
+      - langgraph_data:/app/.langgraph
+      - ./mcp_servers.json:/app/mcp_servers.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smart-eats-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        APP_API_BASE_URL: ${APP_API_BASE_URL:-http://localhost:8000}
+    image: smart-eats-frontend:${IMAGE_TAG:-latest}
+    container_name: smart-eats-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_HOST_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smart-eats-net
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_stub_data:
+  langgraph_data:
+
+networks:
+  smart-eats-net:
+    driver: bridge
