@@ -125,9 +125,20 @@ function getStreamBaseUrl(): string {
     return explicitApiBase;
 }
 
+const DEVICE_LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
+const LOCATION_DENY_TOAST_FLAG = 'ai-chat:geo-deny-toast';
+
+type DeviceLocation = {
+    lat: number;
+    lng: number;
+    accuracy?: number;
+    timestamp: number;
+};
+
 type StreamChatReplyOptions = {
     onDelta?: (partialText: string, deltaText: string) => void;
     onFinal?: () => void;
+    clientContextOverrides?: Record<string, unknown>;
 };
 
 async function streamChatReply(
@@ -137,6 +148,13 @@ async function streamChatReply(
 ): Promise<string> {
     const token = authStore.getAccessToken();
     const url = `${getStreamBaseUrl()}/api/v1/chat/sessions/${sessionId}/stream`;
+    const requestBody: Record<string, unknown> = {
+        message: input
+    };
+    if (options.clientContextOverrides) {
+        requestBody.client_context_overrides = options.clientContextOverrides;
+    }
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -145,9 +163,7 @@ async function streamChatReply(
             'Content-Type': 'application/json',
             ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
-        body: JSON.stringify({
-            message: input
-        })
+        body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
@@ -288,6 +304,10 @@ const AiChat = () => {
     const [assistantFeedback, setAssistantFeedback] = useState<Record<string, 'like' | 'dislike'>>({});
     const [speechSupported, setSpeechSupported] = useState(false);
     const [isListening, setIsListening] = useState(false);
+    const [deviceLocation, setDeviceLocation] = useState<DeviceLocation | null>(null);
+    const locationDeniedToastShownRef = React.useRef(
+        typeof window !== 'undefined' && window.sessionStorage.getItem(LOCATION_DENY_TOAST_FLAG) === '1'
+    );
     const messagesScrollRef = React.useRef<HTMLDivElement>(null);
     const scrollRafRef = React.useRef<number | null>(null);
     const recognitionRef = React.useRef<any>(null);
@@ -442,6 +462,32 @@ const AiChat = () => {
         const SpeechRecognitionCtor = getSpeechRecognitionCtor();
         setSpeechSupported(Boolean(SpeechRecognitionCtor));
 
+        if (typeof window !== 'undefined' && window.navigator.geolocation) {
+            window.navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    setDeviceLocation({
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude,
+                        accuracy: position.coords.accuracy,
+                        timestamp: Date.now()
+                    });
+                },
+                (geoError) => {
+                    if (geoError.code === 1 && !locationDeniedToastShownRef.current) {
+                        locationDeniedToastShownRef.current = true;
+                        if (typeof window !== 'undefined') {
+                            window.sessionStorage.setItem(LOCATION_DENY_TOAST_FLAG, '1');
+                        }
+                        toast('未授权定位，已自动降级为IP定位', { duration: 2200 });
+                    }
+                },
+                {
+                    timeout: 5000,
+                    maximumAge: DEVICE_LOCATION_MAX_AGE_MS
+                }
+            );
+        }
+
         return () => {
             if (scrollRafRef.current !== null) {
                 cancelAnimationFrame(scrollRafRef.current);
@@ -552,8 +598,23 @@ const AiChat = () => {
         scheduleAutoScrollToBottom(true);
         setSending(true);
 
+        const locationFresh = deviceLocation && Date.now() - deviceLocation.timestamp <= DEVICE_LOCATION_MAX_AGE_MS;
+        const clientContextOverrides = locationFresh
+            ? {
+                environment: {
+                    location: {
+                        lat: deviceLocation.lat,
+                        lng: deviceLocation.lng,
+                        accuracy: deviceLocation.accuracy,
+                        source: 'device'
+                    }
+                }
+            }
+            : undefined;
+
         try {
             const reply = await streamChatReply(sessionId, question, {
+                clientContextOverrides,
                 onDelta: (partialText) => {
                     setMessages((prev) =>
                         prev.map((message) =>
@@ -638,8 +699,23 @@ const AiChat = () => {
 
         setSending(true);
         scheduleAutoScrollToBottom(true);
+        const locationFresh = deviceLocation && Date.now() - deviceLocation.timestamp <= DEVICE_LOCATION_MAX_AGE_MS;
+        const clientContextOverrides = locationFresh
+            ? {
+                environment: {
+                    location: {
+                        lat: deviceLocation.lat,
+                        lng: deviceLocation.lng,
+                        accuracy: deviceLocation.accuracy,
+                        source: 'device'
+                    }
+                }
+            }
+            : undefined;
+
         try {
             const reply = await streamChatReply(sessionId, previousUser.content, {
+                clientContextOverrides,
                 onDelta: (partialText) => {
                     setMessages((prev) =>
                         prev.map((message) =>

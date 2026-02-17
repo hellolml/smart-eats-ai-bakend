@@ -22,6 +22,14 @@ def _normalize_coord(value: Any) -> float | None:
     return value
 
 
+def _extract_location_from_context(context: Any) -> tuple[float | None, float | None]:
+    if not isinstance(context, dict):
+        return None, None
+    environment = context.get("environment") if isinstance(context.get("environment"), dict) else {}
+    location = environment.get("location") if isinstance(environment.get("location"), dict) else {}
+    return _normalize_coord(location.get("lat")), _normalize_coord(location.get("lng"))
+
+
 @register_tool(
     name="search_restaurants",
     description=(
@@ -77,10 +85,14 @@ async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dic
     
     session_id = args.get("session_id")
     
-    # 验证必要的坐标参数
+    # 优先使用显式坐标，缺失时回退到上下文里的设备定位
     lat = _normalize_coord(args.get("lat"))
     lng = _normalize_coord(args.get("lng"))
-    
+    if lat is None or lng is None:
+        ctx_lat, ctx_lng = _extract_location_from_context(args.get("context"))
+        lat = lat if lat is not None else ctx_lat
+        lng = lng if lng is not None else ctx_lng
+
     if lat is None or lng is None:
         return {"error": "missing_location"}
     

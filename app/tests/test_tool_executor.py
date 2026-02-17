@@ -6,6 +6,7 @@ import pytest
 
 from app.agent.state import ChatState
 from app.agent.tool_executor import ToolExecutor
+from app.agent.tools.search_restaurants import search_restaurants
 
 
 class _FakeTool:
@@ -94,3 +95,87 @@ async def test_execute_calls_serializes_location_dependency(monkeypatch):
     assert results[0]["name"] == "get_ip_location"
     assert results[1]["name"] == "search_restaurants"
     assert isinstance(results[1]["result"], list)
+
+
+@pytest.mark.asyncio
+async def test_search_restaurants_uses_context_location_when_coords_missing(override_redis, monkeypatch):
+    captured: dict[str, float | None] = {"lat": None, "lng": None}
+
+    async def _fake_search(
+        _redis_client,
+        _query,
+        _tag,
+        lat,
+        lng,
+        _sort,
+        _city,
+    ):
+        captured["lat"] = lat
+        captured["lng"] = lng
+        return [{"name": "ok", "provider": "amap", "provider_id": "1"}]
+
+    monkeypatch.setattr("app.agent.tools.search_restaurants.RestaurantService.search", _fake_search)
+
+    result = await search_restaurants(
+        {
+            "redis_client": override_redis,
+            "session_id": "s1",
+            "query": "火锅",
+            "context": {
+                "environment": {
+                    "location": {
+                        "lat": 31.2304,
+                        "lng": 121.4737,
+                        "source": "device",
+                    }
+                }
+            },
+        }
+    )
+
+    assert isinstance(result, list)
+    assert captured["lat"] == 31.2304
+    assert captured["lng"] == 121.4737
+
+
+@pytest.mark.asyncio
+async def test_search_restaurants_prefers_explicit_coords_over_context(override_redis, monkeypatch):
+    captured: dict[str, float | None] = {"lat": None, "lng": None}
+
+    async def _fake_search(
+        _redis_client,
+        _query,
+        _tag,
+        lat,
+        lng,
+        _sort,
+        _city,
+    ):
+        captured["lat"] = lat
+        captured["lng"] = lng
+        return [{"name": "ok", "provider": "amap", "provider_id": "1"}]
+
+    monkeypatch.setattr("app.agent.tools.search_restaurants.RestaurantService.search", _fake_search)
+
+    result = await search_restaurants(
+        {
+            "redis_client": override_redis,
+            "session_id": "s1",
+            "query": "火锅",
+            "lat": 39.9042,
+            "lng": 116.4074,
+            "context": {
+                "environment": {
+                    "location": {
+                        "lat": 31.2304,
+                        "lng": 121.4737,
+                        "source": "device",
+                    }
+                }
+            },
+        }
+    )
+
+    assert isinstance(result, list)
+    assert captured["lat"] == 39.9042
+    assert captured["lng"] == 116.4074

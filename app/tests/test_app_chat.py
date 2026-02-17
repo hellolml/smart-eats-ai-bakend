@@ -58,3 +58,47 @@ async def test_app_chat_stream_stop(client):
     resp = await client.get(f"/api/v1/app/chat/session/{session_id}/messages", headers=headers)
     assert resp.status_code == 200
     assert "messages" in resp.json()["data"]
+
+
+@pytest.mark.asyncio
+async def test_app_chat_stream_accepts_client_location_overrides(client):
+    resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_chat_geo@example.com", "password": "secret123", "name": "geo chatter"},
+    )
+    assert resp.status_code == 200
+    headers = {"Authorization": f"Bearer {resp.json()['data']['access_token']}"}
+
+    resp = await client.post("/api/v1/app/chat/session", headers=headers)
+    assert resp.status_code == 200
+    session_id = resp.json()["data"]["session_id"]
+
+    got_final = False
+    current_event = None
+
+    async with client.stream(
+        "POST",
+        f"/api/v1/app/chat/session/{session_id}/stream",
+        headers=headers,
+        json={
+            "message": "附近吃什么",
+            "client_context_overrides": {
+                "environment": {
+                    "location": {
+                        "lat": 31.2304,
+                        "lng": 121.4737,
+                        "source": "device"
+                    }
+                }
+            }
+        },
+    ) as response:
+        async for line in response.aiter_lines():
+            if line.startswith("event:"):
+                current_event = line.split(":", 1)[1].strip()
+                continue
+            if line.startswith("data:") and current_event == "final":
+                got_final = True
+                break
+
+    assert got_final

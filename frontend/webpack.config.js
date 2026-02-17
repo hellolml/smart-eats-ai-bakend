@@ -4,10 +4,12 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const webpack = require('webpack');
 
 module.exports = {
+    context: __dirname,
     entry: './src/main.tsx',
     output: {
         path: path.resolve(__dirname, 'dist'),
-        filename: 'bundle.js'
+        filename: 'bundle.js',
+        publicPath: '/'
     },
     devServer:{
         static: {
@@ -52,7 +54,9 @@ module.exports = {
     plugins: [
         new HtmlWebpackPlugin({
             template: './index.html',
-            inject: 'body'
+            inject: 'body',
+            favicon: path.resolve(__dirname, 'smart-eats.png'),
+            hash: true
         }),
         new webpack.DefinePlugin({
             'process.env.APP_API_BASE_URL': JSON.stringify(process.env.APP_API_BASE_URL || '')
