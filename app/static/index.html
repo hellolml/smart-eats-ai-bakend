@@ -1,678 +1,776 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Smart Eats Chat</title>
-    <style>
-      @import url("https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap");
 
-      :root {
-        color-scheme: light;
-        --bg: #f4f1ed;
-        --paper: #ffffff;
-        --ink: #151515;
-        --muted: #6c6c6c;
-        --accent: #1c1b1a;
-        --line: #e6e1dc;
-      }
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Smart Eats Chat</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap");
 
-      * {
-        box-sizing: border-box;
-      }
+    :root {
+      color-scheme: light;
+      --bg: #f4f1ed;
+      --paper: #ffffff;
+      --ink: #151515;
+      --muted: #6c6c6c;
+      --accent: #1c1b1a;
+      --line: #e6e1dc;
+    }
 
-      body {
-        margin: 0;
-        background: radial-gradient(circle at top left, #ffffff 0%, #f4f1ed 55%, #ece7e1 100%);
-        color: var(--ink);
-        font-family: "Crimson Pro", "Times New Roman", serif;
-      }
+    * {
+      box-sizing: border-box;
+    }
 
-      header {
-        padding: 20px 28px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        border-bottom: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.9);
-        position: sticky;
-        top: 0;
-        backdrop-filter: blur(6px);
-      }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, #ffffff 0%, #f4f1ed 55%, #ece7e1 100%);
+      color: var(--ink);
+      font-family: "Crimson Pro", "Times New Roman", serif;
+    }
 
-      header strong {
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 16px;
-        letter-spacing: 0.04em;
-      }
+    header {
+      padding: 20px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.9);
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(6px);
+    }
 
-      header .status {
-        font-size: 12px;
-        color: var(--muted);
-      }
+    header strong {
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 16px;
+      letter-spacing: 0.04em;
+    }
 
+    header .status {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .layout {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px 24px 32px;
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: calc(100vh - 80px);
+    }
+
+    .sidebar {
+      background: #fbfaf8;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .sidebar h3 {
+      margin: 0;
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 200px;
+    }
+
+    .panel h2 {
+      margin: 0;
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--muted);
+    }
+
+    .messages {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 360px;
+      max-height: 420px;
+      overflow-y: auto;
+      padding-right: 6px;
+    }
+
+    .bubble {
+      padding: 14px 16px;
+      border-radius: 16px;
+      line-height: 1.55;
+      font-size: 16px;
+      max-width: 75%;
+    }
+
+    /* Markdown 样式 */
+    .bubble.ai p {
+      margin: 0 0 8px;
+    }
+
+    .bubble.ai p:last-child {
+      margin-bottom: 0;
+    }
+
+    .bubble.ai ul,
+    .bubble.ai ol {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+
+    .bubble.ai li {
+      margin: 4px 0;
+    }
+
+    .bubble.ai code {
+      background: rgba(0, 0, 0, 0.06);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+
+    .bubble.ai pre {
+      background: rgba(0, 0, 0, 0.06);
+      padding: 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 8px 0;
+    }
+
+    .bubble.ai pre code {
+      background: none;
+      padding: 0;
+    }
+
+    .bubble.ai strong {
+      font-weight: 600;
+    }
+
+    .bubble.ai h1,
+    .bubble.ai h2,
+    .bubble.ai h3 {
+      margin: 12px 0 8px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .bubble.ai blockquote {
+      border-left: 3px solid var(--line);
+      margin: 8px 0;
+      padding-left: 12px;
+      color: var(--muted);
+    }
+
+    .bubble.user {
+      align-self: flex-end;
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .bubble.ai {
+      align-self: flex-start;
+      background: #f2efe9;
+      color: var(--ink);
+    }
+
+    .composer {
+      display: grid;
+      gap: 10px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 90px;
+      resize: vertical;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 14px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .secondary.small {
+      padding: 8px 10px;
+    }
+
+    button {
+      border-radius: 10px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      padding: 10px 14px;
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #fff;
+      color: var(--accent);
+    }
+
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .model-picker {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      position: relative;
+      max-width: 320px;
+    }
+
+    .history {
+      display: grid;
+      gap: 8px;
+    }
+
+    .history-list {
+      display: grid;
+      gap: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .history-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 12px;
+      color: var(--ink);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .history-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .history-actions button {
+      padding: 4px 6px;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+    }
+
+    .history-item small {
+      color: var(--muted);
+    }
+
+    .history-item.active {
+      background: #f6f2ed;
+      border-color: #e1d7cd;
+    }
+
+    .history-footer {
+      display: flex;
+      justify-content: flex-start;
+    }
+
+    .history-search input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 12px;
+    }
+
+    .model-label {
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .picker-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: #fff;
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+      font-size: 14px;
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .picker-button span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .picker-chevron {
+      width: 10px;
+      height: 10px;
+      border-right: 1.6px solid var(--muted);
+      border-bottom: 1.6px solid var(--muted);
+      transform: rotate(45deg);
+      margin-top: -2px;
+    }
+
+    .picker-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      width: 100%;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 20px 40px rgba(18, 18, 18, 0.08);
+      padding: 8px;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 10;
+    }
+
+    .picker-menu.open {
+      display: flex;
+    }
+
+    .picker-item {
+      border-radius: 12px;
+      padding: 10px 12px;
+      cursor: pointer;
+      display: grid;
+      gap: 4px;
+      font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
+    }
+
+    .picker-item:hover {
+      background: #f6f2ed;
+    }
+
+    .picker-item strong {
+      font-size: 14px;
+      color: var(--ink);
+    }
+
+    .picker-item small {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .picker-item.active {
+      background: #f0ebe3;
+      border: 1px solid #e1d7cd;
+    }
+
+    @media (max-width: 980px) {
       .layout {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 24px 24px 32px;
-        display: grid;
-        gap: 18px;
-        grid-template-columns: 280px minmax(0, 1fr);
-        min-height: calc(100vh - 80px);
+        grid-template-columns: 1fr;
       }
+    }
+  </style>
+</head>
 
-      .sidebar {
-        background: #fbfaf8;
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
-      }
-
-      .sidebar h3 {
-        margin: 0;
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 13px;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-
-      .panel {
-        background: var(--paper);
-        border: 1px solid var(--line);
-        border-radius: 16px;
-        padding: 18px;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        min-height: 200px;
-      }
-
-      .panel h2 {
-        margin: 0;
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 14px;
-        text-transform: uppercase;
-        letter-spacing: 0.2em;
-        color: var(--muted);
-      }
-
-      .messages {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        min-height: 360px;
-        max-height: 420px;
-        overflow-y: auto;
-        padding-right: 6px;
-      }
-
-      .bubble {
-        padding: 14px 16px;
-        border-radius: 16px;
-        line-height: 1.45;
-        font-size: 16px;
-        white-space: pre-wrap;
-        max-width: 75%;
-      }
-
-      .bubble.user {
-        align-self: flex-end;
-        background: var(--accent);
-        color: #fff;
-      }
-
-      .bubble.ai {
-        align-self: flex-start;
-        background: #f2efe9;
-        color: var(--ink);
-      }
-
-      .composer {
-        display: grid;
-        gap: 10px;
-      }
-
-      textarea {
-        width: 100%;
-        min-height: 90px;
-        resize: vertical;
-        padding: 12px 14px;
-        border-radius: 12px;
-        border: 1px solid var(--line);
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 14px;
-      }
-
-      .actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        align-items: center;
-      }
-
-      .secondary.small {
-        padding: 8px 10px;
-      }
-
-      button {
-        border-radius: 10px;
-        border: 1px solid var(--accent);
-        background: var(--accent);
-        color: #fff;
-        padding: 10px 14px;
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 13px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        cursor: pointer;
-      }
-
-      button.secondary {
-        background: #fff;
-        color: var(--accent);
-      }
-
-      .stream-box,
-      .log-box {
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 12px;
-        background: #111010;
-        color: #f0eee9;
-        border-radius: 12px;
-        padding: 12px;
-        min-height: 160px;
-        white-space: pre-wrap;
-        overflow-y: auto;
-      }
-
-      .log-box {
-        background: #1a1918;
-      }
-
-      .meta {
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .model-picker {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        position: relative;
-        max-width: 320px;
-      }
-
-      .history {
-        display: grid;
-        gap: 8px;
-      }
-
-      .history-list {
-        display: grid;
-        gap: 6px;
-        max-height: 200px;
-        overflow-y: auto;
-      }
-
-      .history-item {
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 8px 10px;
-        cursor: pointer;
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 12px;
-        color: var(--ink);
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-
-      .history-actions {
-        display: flex;
-        gap: 6px;
-      }
-
-      .history-actions button {
-        padding: 4px 6px;
-        font-size: 10px;
-        letter-spacing: 0.06em;
-      }
-
-      .history-item small {
-        color: var(--muted);
-      }
-
-      .history-item.active {
-        background: #f6f2ed;
-        border-color: #e1d7cd;
-      }
-
-      .history-footer {
-        display: flex;
-        justify-content: flex-start;
-      }
-
-      .history-search input {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 8px 10px;
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 12px;
-      }
-
-      .model-label {
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 12px;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-
-      .picker-button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        padding: 12px 14px;
-        border-radius: 14px;
-        border: 1px solid var(--line);
-        background: #fff;
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-        font-size: 14px;
-        color: var(--ink);
-        cursor: pointer;
-      }
-
-      .picker-button span {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .picker-chevron {
-        width: 10px;
-        height: 10px;
-        border-right: 1.6px solid var(--muted);
-        border-bottom: 1.6px solid var(--muted);
-        transform: rotate(45deg);
-        margin-top: -2px;
-      }
-
-      .picker-menu {
-        position: absolute;
-        top: calc(100% + 8px);
-        left: 0;
-        width: 100%;
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 16px;
-        box-shadow: 0 20px 40px rgba(18, 18, 18, 0.08);
-        padding: 8px;
-        display: none;
-        flex-direction: column;
-        gap: 6px;
-        z-index: 10;
-      }
-
-      .picker-menu.open {
-        display: flex;
-      }
-
-      .picker-item {
-        border-radius: 12px;
-        padding: 10px 12px;
-        cursor: pointer;
-        display: grid;
-        gap: 4px;
-        font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
-      }
-
-      .picker-item:hover {
-        background: #f6f2ed;
-      }
-
-      .picker-item strong {
-        font-size: 14px;
-        color: var(--ink);
-      }
-
-      .picker-item small {
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .picker-item.active {
-        background: #f0ebe3;
-        border: 1px solid #e1d7cd;
-      }
-
-      @media (max-width: 980px) {
-        .layout {
-          grid-template-columns: 1fr;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <header>
-      <strong>Smart Eats Chat</strong>
-      <div class="status" id="status">Idle</div>
-    </header>
-    <div class="layout">
-      <aside class="sidebar">
-        <button id="new-session-sidebar" class="secondary" type="button">New Chat</button>
-        <div class="history-search">
-          <input id="history-search" placeholder="Search chat titles" />
-        </div>
-        <div class="history">
-          <h3>Your Chats</h3>
-          <div class="history-list" id="history-list"></div>
-          <div class="history-footer">
-            <button id="load-more" class="secondary" type="button">Load More</button>
-          </div>
-        </div>
-      </aside>
-      <div class="content">
-        <section class="panel">
-          <h2>Chat</h2>
-          <div class="model-picker" id="model-picker">
-            <div class="model-label">Model</div>
-            <button class="picker-button" id="picker-button" type="button">
-              <span id="picker-label">Auto</span>
-              <span class="picker-chevron"></span>
-            </button>
-            <div class="picker-menu" id="picker-menu"></div>
-          </div>
-          <div class="messages" id="messages"></div>
-          <div class="composer">
-            <textarea id="message" placeholder="Ask about dinner ideas"></textarea>
-            <div class="actions">
-              <button id="send">Send</button>
-              <button id="stop" class="secondary">Stop</button>
-              <button id="new-session" class="secondary small" type="button">New Session</button>
-              <button id="clear" class="secondary small" type="button">Clear</button>
-            </div>
-          </div>
-          <div class="meta" id="session">Session: -</div>
-        </section>
-        <section class="panel">
-          <h2>Stream</h2>
-          <div class="stream-box" id="stream"></div>
-          <h2>Log</h2>
-          <div class="log-box" id="log"></div>
-        </section>
+<body>
+  <header>
+    <strong>Smart Eats Chat</strong>
+    <div class="status" id="status">Idle</div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <button id="new-session-sidebar" class="secondary" type="button">New Chat</button>
+      <div class="history-search">
+        <input id="history-search" placeholder="Search chat titles" />
       </div>
+      <div class="history">
+        <h3>Your Chats</h3>
+        <div class="history-list" id="history-list"></div>
+        <div class="history-footer">
+          <button id="load-more" class="secondary" type="button">Load More</button>
+        </div>
+      </div>
+    </aside>
+    <div class="content">
+      <section class="panel">
+        <h2>Chat</h2>
+        <div class="model-picker" id="model-picker">
+          <div class="model-label">Model</div>
+          <button class="picker-button" id="picker-button" type="button">
+            <span id="picker-label">Auto</span>
+            <span class="picker-chevron"></span>
+          </button>
+          <div class="picker-menu" id="picker-menu"></div>
+        </div>
+        <div class="messages" id="messages"></div>
+        <div class="composer">
+          <textarea id="message" placeholder="Ask about dinner ideas"></textarea>
+          <div class="actions">
+            <button id="send">Send</button>
+            <button id="stop" class="secondary">Stop</button>
+            <button id="device-location" class="secondary small" type="button">Use Device Location</button>
+            <button id="new-session" class="secondary small" type="button">New Session</button>
+            <button id="clear" class="secondary small" type="button">Clear</button>
+          </div>
+          <div class="meta" id="location-meta">Location: not set</div>
+        </div>
+        <div class="meta" id="session">Session: -</div>
+      </section>
     </div>
+  </div>
 
-    <script>
-      const messagesEl = document.getElementById("messages");
-      const logEl = document.getElementById("log");
-      const streamEl = document.getElementById("stream");
-      const statusEl = document.getElementById("status");
-      const messageEl = document.getElementById("message");
-      const pickerButton = document.getElementById("picker-button");
-      const pickerMenu = document.getElementById("picker-menu");
-      const pickerLabel = document.getElementById("picker-label");
-      const historyListEl = document.getElementById("history-list");
-      const loadMoreBtn = document.getElementById("load-more");
-      const historySearchEl = document.getElementById("history-search");
-      const newSessionSidebarBtn = document.getElementById("new-session-sidebar");
-      const sendBtn = document.getElementById("send");
-      const stopBtn = document.getElementById("stop");
-      const newSessionBtn = document.getElementById("new-session");
-      const clearBtn = document.getElementById("clear");
-      const sessionEl = document.getElementById("session");
+  <script>
+    const messagesEl = document.getElementById("messages");
+    const statusEl = document.getElementById("status");
+    const messageEl = document.getElementById("message");
+    const pickerButton = document.getElementById("picker-button");
+    const pickerMenu = document.getElementById("picker-menu");
+    const pickerLabel = document.getElementById("picker-label");
+    const historyListEl = document.getElementById("history-list");
+    const loadMoreBtn = document.getElementById("load-more");
+    const historySearchEl = document.getElementById("history-search");
+    const newSessionSidebarBtn = document.getElementById("new-session-sidebar");
+    const sendBtn = document.getElementById("send");
+    const stopBtn = document.getElementById("stop");
+    const deviceLocationBtn = document.getElementById("device-location");
+    const newSessionBtn = document.getElementById("new-session");
+    const clearBtn = document.getElementById("clear");
+    const sessionEl = document.getElementById("session");
+    const locationMetaEl = document.getElementById("location-meta");
 
-      let sessionId = null;
-      let abortController = null;
-      let selectedProvider = null;
-      let historyOffset = 0;
-      const historyLimit = 10;
-      let historyQuery = "";
+    let sessionId = null;
+    let abortController = null;
+    let selectedProvider = null;
+    let historyOffset = 0;
+    const historyLimit = 10;
+    let historyQuery = "";
+    let useDeviceLocation = true;
+    let deviceLocation = null;
 
-      function addMessage(role, text) {
-        const div = document.createElement("div");
-        div.className = `bubble ${role}`;
+    function addMessage(role, text, useMarkdown = true) {
+      const div = document.createElement("div");
+      div.className = `bubble ${role}`;
+      if (role === "ai" && useMarkdown && typeof marked !== "undefined") {
+        div.innerHTML = marked.parse(text);
+      } else {
         div.textContent = text;
-        messagesEl.appendChild(div);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-        return div;
+      }
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    async function createSession() {
+      const resp = await fetch("/api/v1/chat/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const payload = await resp.json();
+      sessionId = payload.data.session_id;
+      sessionEl.textContent = `Session: ${sessionId}`;
+      historyOffset = 0;
+      await loadHistory(true);
+      return sessionId;
+    }
+
+    async function streamChat() {
+      if (!sessionId) {
+        await createSession();
       }
 
-      function log(line) {
-        logEl.textContent += line + "\n";
-        logEl.scrollTop = logEl.scrollHeight;
+      abortController = new AbortController();
+      statusEl.textContent = `Streaming ${sessionId}`;
+
+      const userText = messageEl.value.trim();
+      const contextOverrides = await buildContextOverrides();
+      if (userText) {
+        addMessage("user", userText);
       }
+      messageEl.value = "";
+      const aiBubble = addMessage("ai", "");
 
-      function stream(line) {
-        streamEl.textContent += line;
-        streamEl.scrollTop = streamEl.scrollHeight;
-      }
+      const resp = await fetch(`/api/v1/chat/sessions/${sessionId}/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userText,
+          provider: selectedProvider,
+          client_context_overrides: contextOverrides,
+        }),
+        signal: abortController.signal,
+      });
 
-      async function createSession() {
-        const resp = await fetch("/api/v1/chat/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
-        const payload = await resp.json();
-        sessionId = payload.data.session_id;
-        sessionEl.textContent = `Session: ${sessionId}`;
-        historyOffset = 0;
-        await loadHistory(true);
-        return sessionId;
-      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
 
-      async function streamChat() {
-        if (!sessionId) {
-          await createSession();
-        }
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop();
+        for (const part of parts) {
+          const lines = part.split("\n");
+          let event = "message";
+          let data = "";
+          for (const line of lines) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            if (line.startsWith("data:")) data = line.slice(5).trim();
+          }
 
-        abortController = new AbortController();
-        statusEl.textContent = `Streaming ${sessionId}`;
-
-        const userText = messageEl.value.trim();
-        if (userText) {
-          addMessage("user", userText);
-        }
-        messageEl.value = "";
-        const aiBubble = addMessage("ai", "");
-        streamEl.textContent = "";
-
-        const resp = await fetch(`/api/v1/chat/sessions/${sessionId}/stream`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: userText,
-            provider: selectedProvider,
-          }),
-          signal: abortController.signal,
-        });
-
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let buffer = "";
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop();
-          for (const part of parts) {
-            const lines = part.split("\n");
-            let event = "message";
-            let data = "";
-            for (const line of lines) {
-              if (line.startsWith("event:")) event = line.slice(6).trim();
-              if (line.startsWith("data:")) data = line.slice(5).trim();
+          if (event === "delta") {
+            let text = data;
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed && typeof parsed.token === "string") {
+                text = parsed.token;
+              }
+            } catch (err) {
+              text = data.replace(/^"|"/g, "");
             }
-
-            if (event === "delta") {
-              let text = data;
-              try {
-                const parsed = JSON.parse(data);
-                if (parsed && typeof parsed.token === "string") {
-                  text = parsed.token;
-                }
-              } catch (err) {
-                text = data.replace(/^\"|\"$/g, "");
-              }
-              aiBubble.textContent += text;
-              stream(text);
-            } else if (event === "final") {
-              statusEl.textContent = "Completed";
-              try {
-                const parsed = JSON.parse(data);
-                const isFallback = parsed?.answer?.recommendations?.some(
-                  (item) => item?.reason === "fallback"
-                );
-                if (isFallback) {
-                  log("[final][fallback] request used fallback response");
-                }
-              } catch (err) {
-                // ignore parse errors
-              }
-              log(`[final] ${data}`);
+            aiBubble.dataset.fullText = (aiBubble.dataset.fullText || "") + text;
+            if (typeof marked !== "undefined") {
+              aiBubble.innerHTML = marked.parse(aiBubble.dataset.fullText);
             } else {
-              log(`[${event}] ${data}`);
+              aiBubble.textContent += text;
             }
+          } else if (event === "final") {
+            statusEl.textContent = "Completed";
           }
         }
-        await loadHistory(true);
       }
+      await loadHistory(true);
+    }
 
-      async function stopChat() {
-        if (!sessionId) return;
-        await fetch(`/api/v1/chat/sessions/${sessionId}/stop`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
-        statusEl.textContent = "Stop requested";
-        if (abortController) abortController.abort();
+    async function stopChat() {
+      if (!sessionId) return;
+      await fetch(`/api/v1/chat/sessions/${sessionId}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      statusEl.textContent = "Stop requested";
+      if (abortController) abortController.abort();
+    }
+
+    sendBtn.addEventListener("click", async () => {
+      try {
+        await streamChat();
+      } catch (err) {
+        statusEl.textContent = "Error";
       }
+    });
 
-      sendBtn.addEventListener("click", async () => {
+    messageEl.addEventListener("keydown", async (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
         try {
           await streamChat();
         } catch (err) {
-          log(`error: ${err}`);
           statusEl.textContent = "Error";
         }
-      });
+      }
+    });
 
-      messageEl.addEventListener("keydown", async (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
-          event.preventDefault();
-          try {
-            await streamChat();
-          } catch (err) {
-            log(`error: ${err}`);
-            statusEl.textContent = "Error";
-          }
-        }
-      });
+    stopBtn.addEventListener("click", async () => {
+      await stopChat();
+    });
 
-      stopBtn.addEventListener("click", async () => {
-        await stopChat();
-      });
+    deviceLocationBtn.addEventListener("click", async () => {
+      useDeviceLocation = !useDeviceLocation;
+      updateDeviceLocationButton();
+      if (!useDeviceLocation) {
+        deviceLocation = null;
+        locationMetaEl.textContent = "Location: not set";
+        return;
+      }
+      await refreshDeviceLocation();
+    });
 
-      newSessionBtn.addEventListener("click", async () => {
-        sessionId = null;
-        sessionEl.textContent = "Session: -";
-        statusEl.textContent = "Idle";
-        messagesEl.textContent = "";
-      });
+    newSessionBtn.addEventListener("click", async () => {
+      sessionId = null;
+      sessionEl.textContent = "Session: -";
+      statusEl.textContent = "Idle";
+      messagesEl.textContent = "";
+    });
 
-      newSessionSidebarBtn.addEventListener("click", async () => {
-        sessionId = null;
-        sessionEl.textContent = "Session: -";
-        statusEl.textContent = "Idle";
-        messagesEl.textContent = "";
-      });
+    newSessionSidebarBtn.addEventListener("click", async () => {
+      sessionId = null;
+      sessionEl.textContent = "Session: -";
+      statusEl.textContent = "Idle";
+      messagesEl.textContent = "";
+    });
 
-      clearBtn.addEventListener("click", () => {
-        messagesEl.textContent = "";
-        logEl.textContent = "";
-        streamEl.textContent = "";
-      });
+    clearBtn.addEventListener("click", () => {
+      messagesEl.textContent = "";
+    });
 
-      async function loadProviders() {
-        try {
-          const resp = await fetch("/api/v1/chat/providers");
-          const data = await resp.json();
-          const providers = data?.data?.providers || [];
-          const options = [
-            { value: "qwen", label: "Auto", hint: "Default: Qwen" },
-            ...providers.map((name) => {
-              const label = name === "openai" ? "OpenAI" : name === "deepseek" ? "DeepSeek" : name === "qwen" ? "Qwen" : name;
-              return { value: name, label, hint: `Provider: ${name}` };
-            }),
-          ];
+    function updateDeviceLocationButton() {
+      deviceLocationBtn.textContent = useDeviceLocation ? "Using Device Location" : "Use Device Location";
+    }
 
-          pickerMenu.innerHTML = "";
-          options.forEach((item) => {
-            const entry = document.createElement("div");
-            entry.className = "picker-item";
-            entry.dataset.value = item.value ?? "";
-            entry.innerHTML = `<strong>${item.label}</strong><small>${item.hint}</small>`;
-            entry.addEventListener("click", () => {
-              selectedProvider = item.value;
-              pickerLabel.textContent = item.label;
-              document.querySelectorAll(".picker-item").forEach((node) => {
-                node.classList.toggle("active", node === entry);
-              });
-              pickerMenu.classList.remove("open");
-            });
-            pickerMenu.appendChild(entry);
+    function buildLocationMeta(location) {
+      if (!location) return "Location: not set";
+      const lat = Number(location.lat);
+      const lng = Number(location.lng);
+      const accuracy = location.accuracy_m;
+      const accuracyText = typeof accuracy === "number" ? ` +/-${Math.round(accuracy)}m` : "";
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return "Location: unavailable";
+      return `Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}${accuracyText}`;
+    }
+
+    async function refreshDeviceLocation() {
+      if (!("geolocation" in navigator)) {
+        locationMetaEl.textContent = "Location: geolocation unsupported";
+        useDeviceLocation = false;
+        updateDeviceLocationButton();
+        return null;
+      }
+      try {
+        const position = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 8000,
+            maximumAge: 30000,
           });
-          if (!selectedProvider) {
-            selectedProvider = "qwen";
-            pickerLabel.textContent = "Auto";
-          }
-          pickerMenu.firstChild?.classList.add("active");
-        } catch (err) {
-          log(`error: ${err}`);
-        }
+        });
+        deviceLocation = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          accuracy_m: position.coords.accuracy,
+          source: "device",
+          captured_at: new Date().toISOString(),
+        };
+        locationMetaEl.textContent = buildLocationMeta(deviceLocation);
+        return deviceLocation;
+      } catch (err) {
+        deviceLocation = null;
+        locationMetaEl.textContent = "Location: unavailable";
+        useDeviceLocation = false;
+        updateDeviceLocationButton();
+        return null;
       }
+    }
 
-      pickerButton.addEventListener("click", () => {
-        pickerMenu.classList.toggle("open");
-      });
+    async function buildContextOverrides() {
+      if (!useDeviceLocation) return null;
+      const location = await refreshDeviceLocation();
+      if (!location) return null;
+      return {
+        environment: {
+          location: {
+            lat: location.lat,
+            lng: location.lng,
+            accuracy_m: location.accuracy_m,
+            source: location.source,
+            captured_at: location.captured_at,
+          },
+        },
+      };
+    }
 
-      document.addEventListener("click", (event) => {
-        if (!pickerButton.contains(event.target) && !pickerMenu.contains(event.target)) {
-          pickerMenu.classList.remove("open");
+    async function loadProviders() {
+      try {
+        const resp = await fetch("/api/v1/chat/providers");
+        const data = await resp.json();
+        const providers = data?.data?.providers || [];
+        const options = [
+          { value: "qwen", label: "Auto", hint: "Default: Qwen" },
+          ...providers.map((name) => {
+            const label = name === "openai" ? "OpenAI" : name === "deepseek" ? "DeepSeek" : name === "qwen" ? "Qwen" : name;
+            return { value: name, label, hint: `Provider: ${name}` };
+          }),
+        ];
+
+        pickerMenu.innerHTML = "";
+        options.forEach((item) => {
+          const entry = document.createElement("div");
+          entry.className = "picker-item";
+          entry.dataset.value = item.value ?? "";
+          entry.innerHTML = `<strong>${item.label}</strong><small>${item.hint}</small>`;
+          entry.addEventListener("click", () => {
+            selectedProvider = item.value;
+            pickerLabel.textContent = item.label;
+            document.querySelectorAll(".picker-item").forEach((node) => {
+              node.classList.toggle("active", node === entry);
+            });
+            pickerMenu.classList.remove("open");
+          });
+          pickerMenu.appendChild(entry);
+        });
+        if (!selectedProvider) {
+          selectedProvider = "qwen";
+          pickerLabel.textContent = "Auto";
         }
-      });
-
-      function formatTime(value) {
-        if (!value) return "";
-        if (value.includes("T")) {
-          const core = value.split(/[.+Z]/)[0];
-          return core.replace("T", " ");
-        }
-        return value;
+        pickerMenu.firstChild?.classList.add("active");
+      } catch (err) {
+        statusEl.textContent = "Error";
       }
+    }
 
-      async function loadHistory(reset = false) {
-        try {
-          if (reset) {
-            historyOffset = 0;
-            historyListEl.innerHTML = "";
-          }
-          const query = historyQuery ? `&q=${encodeURIComponent(historyQuery)}` : "";
-          const resp = await fetch(`/api/v1/chat/sessions?limit=${historyLimit}&offset=${historyOffset}${query}`);
-          const data = await resp.json();
-          const sessions = data?.data?.sessions || [];
-          sessions.forEach((item) => {
-            const entry = document.createElement("div");
-            entry.className = "history-item";
-            const title = item.title || "新会话";
-            entry.innerHTML = `
+    pickerButton.addEventListener("click", () => {
+      pickerMenu.classList.toggle("open");
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!pickerButton.contains(event.target) && !pickerMenu.contains(event.target)) {
+        pickerMenu.classList.remove("open");
+      }
+    });
+
+    function formatTime(value) {
+      if (!value) return "";
+      if (value.includes("T")) {
+        const core = value.split(/[.+Z]/)[0];
+        return core.replace("T", " ");
+      }
+      return value;
+    }
+
+    async function loadHistory(reset = false) {
+      try {
+        if (reset) {
+          historyOffset = 0;
+          historyListEl.innerHTML = "";
+        }
+        const query = historyQuery ? `&q=${encodeURIComponent(historyQuery)}` : "";
+        const resp = await fetch(`/api/v1/chat/sessions?limit=${historyLimit}&offset=${historyOffset}${query}`);
+        const data = await resp.json();
+        const sessions = data?.data?.sessions || [];
+        sessions.forEach((item) => {
+          const entry = document.createElement("div");
+          entry.className = "history-item";
+          const title = item.title || "新会话";
+          entry.innerHTML = `
               <div>${title}</div>
               <small>${formatTime(item.created_at)}</small>
               <div class="history-actions">
@@ -680,86 +778,89 @@
                 <button class="secondary" data-action="delete">Delete</button>
               </div>
             `;
-            entry.addEventListener("click", async () => {
-              sessionId = item.session_id;
-              sessionEl.textContent = `Session: ${sessionId}`;
-              document.querySelectorAll(".history-item").forEach((node) => {
-                node.classList.toggle("active", node === entry);
-              });
-              await loadMessages(sessionId);
+          entry.addEventListener("click", async () => {
+            sessionId = item.session_id;
+            sessionEl.textContent = `Session: ${sessionId}`;
+            document.querySelectorAll(".history-item").forEach((node) => {
+              node.classList.toggle("active", node === entry);
             });
-            entry.querySelector("[data-action=\"rename\"]").addEventListener("click", async (event) => {
-              event.stopPropagation();
-              const title = prompt("New title", item.title || "");
-              if (title === null) return;
-              await renameSession(item.session_id, title);
-              historyOffset = 0;
-              historyListEl.innerHTML = "";
-              await loadHistory(true);
-            });
-            entry.querySelector("[data-action=\"delete\"]").addEventListener("click", async (event) => {
-              event.stopPropagation();
-              const ok = confirm("Delete this session?");
-              if (!ok) return;
-              await deleteSession(item.session_id);
-              if (sessionId === item.session_id) {
-                sessionId = null;
-                sessionEl.textContent = "Session: -";
-                messagesEl.textContent = "";
-              }
-              historyOffset = 0;
-              historyListEl.innerHTML = "";
-              await loadHistory(true);
-            });
-            historyListEl.appendChild(entry);
+            await loadMessages(sessionId);
           });
-          historyOffset += sessions.length;
-        } catch (err) {
-          log(`error: ${err}`);
-        }
-      }
-
-      async function loadMessages(id) {
-        try {
-          const resp = await fetch(`/api/v1/chat/sessions/${id}/messages?limit=100&offset=0`);
-          const data = await resp.json();
-          const messages = data?.data?.messages || [];
-          messagesEl.textContent = "";
-          messages.forEach((msg) => {
-            if (!msg.content) return;
-            const role = msg.role === "assistant" ? "ai" : "user";
-            addMessage(role, msg.content);
+          entry.querySelector("[data-action=\"rename\"]").addEventListener("click", async (event) => {
+            event.stopPropagation();
+            const title = prompt("New title", item.title || "");
+            if (title === null) return;
+            await renameSession(item.session_id, title);
+            historyOffset = 0;
+            historyListEl.innerHTML = "";
+            await loadHistory(true);
           });
-        } catch (err) {
-          log(`error: ${err}`);
-        }
-      }
-
-      async function renameSession(id, title) {
-        await fetch(`/api/v1/chat/sessions/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title }),
+          entry.querySelector("[data-action=\"delete\"]").addEventListener("click", async (event) => {
+            event.stopPropagation();
+            const ok = confirm("Delete this session?");
+            if (!ok) return;
+            await deleteSession(item.session_id);
+            if (sessionId === item.session_id) {
+              sessionId = null;
+              sessionEl.textContent = "Session: -";
+              messagesEl.textContent = "";
+            }
+            historyOffset = 0;
+            historyListEl.innerHTML = "";
+            await loadHistory(true);
+          });
+          historyListEl.appendChild(entry);
         });
+        historyOffset += sessions.length;
+      } catch (err) {
+        statusEl.textContent = "Error";
       }
+    }
 
-      async function deleteSession(id) {
-        await fetch(`/api/v1/chat/sessions/${id}`, {
-          method: "DELETE",
+    async function loadMessages(id) {
+      try {
+        const resp = await fetch(`/api/v1/chat/sessions/${id}/messages?limit=100&offset=0`);
+        const data = await resp.json();
+        const messages = data?.data?.messages || [];
+        messagesEl.textContent = "";
+        messages.forEach((msg) => {
+          if (msg.role === "tool") return;
+          if (!msg.content) return;
+          const role = msg.role === "assistant" ? "ai" : "user";
+          addMessage(role, msg.content);
         });
+      } catch (err) {
+        statusEl.textContent = "Error";
       }
+    }
 
-      loadMoreBtn.addEventListener("click", async () => {
-        await loadHistory();
+    async function renameSession(id, title) {
+      await fetch(`/api/v1/chat/sessions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
       });
+    }
 
-      historySearchEl.addEventListener("input", async () => {
-        historyQuery = historySearchEl.value.trim();
-        await loadHistory(true);
+    async function deleteSession(id) {
+      await fetch(`/api/v1/chat/sessions/${id}`, {
+        method: "DELETE",
       });
+    }
 
-      loadHistory(true);
-      loadProviders();
-    </script>
-  </body>
+    loadMoreBtn.addEventListener("click", async () => {
+      await loadHistory();
+    });
+
+    historySearchEl.addEventListener("input", async () => {
+      historyQuery = historySearchEl.value.trim();
+      await loadHistory(true);
+    });
+
+    loadHistory(true);
+    loadProviders();
+    updateDeviceLocationButton();
+  </script>
+</body>
+
 </html>

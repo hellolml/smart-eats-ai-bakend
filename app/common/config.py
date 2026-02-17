@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     CHAT_HISTORY_LOCAL_CACHE_TTL_SECONDS: int = 30
     CHAT_HISTORY_CACHE_MODE: str = "local_validate"
     TOOL_HISTORY_KEEP: int = 3
-    TOOL_HISTORY_ALLOW: str = "get_ip_location,geocode_location,search_restaurants,plan_route,get_weather"
+    TOOL_HISTORY_ALLOW: str = "get_ip_location,geocode_location,search_restaurants,plan_route,get_weather,rag_search_recipes,search_recipes"
     CHAT_COMPACT_MIN_MESSAGES: int = 3
     CHAT_COMPACT_TRIGGER_RATIO: float = 0.9
     CHAT_COMPACT_TAIL_RATIO: float = 0.2
@@ -57,10 +57,10 @@ class Settings(BaseSettings):
     DEEPSEEK_MODEL_WRITER: str = "deepseek-chat"
     DASHSCOPE_API_KEY: str | None = None
     QWEN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    QWEN_MODEL_PLANNER: str = "qwen-plus"
-    QWEN_MODEL_WRITER: str = "qwen-plus"
+    QWEN_MODEL_PLANNER: str = "qwen3-max"
+    QWEN_MODEL_WRITER: str = "qwen3-max"
     LLM_REQUEST_LOG: str = "none"
-    AGENT_MAX_STEPS: int = 4
+    AGENT_MAX_STEPS: int = 6
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"
     LANGGRAPH_CHECKPOINT_BACKEND: str = "sqlite"
@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     AMAP_SEARCH_CACHE_TTL_SECONDS: int = 180
     RESTAURANT_DETAIL_CACHE_TTL_SECONDS: int = 300
     MCP_SERVERS_CONFIG_PATH: str | None = "mcp_servers.json"
+    APP_FALLBACK_ENABLED: bool = True
+    APP_RECIPE_GEN_TIMEOUT_SECONDS: int = 12
 
 
 settings = Settings()

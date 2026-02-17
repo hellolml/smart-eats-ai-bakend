@@ -10,6 +10,7 @@ local.db
 *.db-*
 
 .langgraph_checkpoints.sqlite
+.minio_stub/
 
 .pytest_cache/
 .coverage

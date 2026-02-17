@@ -62,12 +62,48 @@ def _build_observation_context(
         "checkpoint_ref": state.checkpoint_ref,
         "replay_from_checkpoint": state.replay_from_checkpoint,
     }
+    # 通过回调注入业务层上下文
+    if agent_config.context_extender:
+        extra = agent_config.context_extender(state)
+        if extra:
+            context = _merge_context(context, extra)
+    if isinstance(state.context_overrides, dict) and state.context_overrides:
+        context = _merge_context(context, state.context_overrides)
     context["system_prompt"] = agent_config.system_prompt_builder({"context": context})
     return context
 
 
+def _merge_context(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_context(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def _count_user_turns(history_items: list[dict[str, Any]]) -> int:
     return sum(1 for item in history_items if item.get("role") == "user")
+
+
+def _observe_recovery(state: ChatState, tool_name: str | None, result: Any) -> None:
+    if not isinstance(result, dict):
+        return
+    error = result.get("error")
+    if not error:
+        return
+    step = f"{tool_name}:{error}" if tool_name else str(error)
+    if step not in state.recovery_path:
+        state.recovery_path.append(step)
+
+
+def _iter_delta_chunks(text: str, chunk_size: int = 4) -> list[str]:
+    if not text:
+        return []
+    if len(text) <= chunk_size:
+        return [text]
+    return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
 
 
 async def _refresh_observation_context(
@@ -77,25 +113,31 @@ async def _refresh_observation_context(
     agent_config: AgentConfig,
     emit_context_event: bool = True,
 ) -> None:
+    should_log = False
     if state.message:
         should_log = not state.user_message_logged or state.last_user_message != state.message
-        if should_log:
-            await history.save_user_message(
-                db,
-                redis_client,
-                state.session_id,
-                state.message,
-            )
-            state.user_message_logged = True
-            state.last_user_message = state.message
 
     state.history = await history.load_history(
         db,
         redis_client,
         state.session_id,
         settings.CHAT_HISTORY_LIMIT,
-        state.message,
+        state.message if not should_log else None,
     )
+    if state.message and should_log:
+        logger.info(
+            "user_message session_id=%s message=%s",
+            state.session_id,
+            state.message,
+        )
+        await history.save_user_message(
+            db,
+            redis_client,
+            state.session_id,
+            state.message,
+        )
+        state.user_message_logged = True
+        state.last_user_message = state.message
     state.history, summary = await history.maybe_compress_history(
         redis_client,
         state.provider or settings.LLM_PROVIDER,
@@ -103,6 +145,11 @@ async def _refresh_observation_context(
         state.history,
     )
     state.turn_index = _count_user_turns(state.history) + (1 if state.message else 0)
+    if agent_config.intent_resolver:
+        state.intent = agent_config.intent_resolver(state) or "unknown"
+    elif not state.intent:
+        state.intent = "unknown"
+    
     memories = await memory.search_memories(db, state.user_id, state.message or "")
     state.context = _build_observation_context(
         state,
@@ -196,6 +243,18 @@ def _validate_args(
     return True, {}
 
 
+def _build_result_preview(
+    agent_config: AgentConfig,
+    tool_name: str | None,
+    result: Any,
+) -> Any:
+    if tool_name and agent_config.tool_result_previewer:
+        customized = agent_config.tool_result_previewer(tool_name, result)
+        if customized is not None:
+            return customized
+    return preview_result(result)
+
+
 
 
 def build_langgraph(
@@ -207,7 +266,14 @@ def build_langgraph(
     planner = OpenAIPlanner(provider=provider)
     agent_config = agent_config or get_agent_config(None)
     allowed_tools = agent_config.tool_names
-    tool_executor = ToolExecutor(allowed_tools, redis_client, db, max_workers=6)
+    tool_executor = ToolExecutor(
+        allowed_tools,
+        redis_client,
+        db,
+        max_workers=6,
+        args_normalizer=agent_config.tool_args_normalizer,
+        serial_execution_decider=agent_config.serial_execution_decider,
+    )
 
     async def observe_node(state: ChatState) -> ChatState:
         first_round = state.steps_left <= 0 and not state.tool_calls and not state.observations
@@ -222,11 +288,14 @@ def build_langgraph(
             emit_context_event=first_round,
         )
         logger.info(
-            "agent_observe session_id=%s history_count=%s observations_count=%s steps_left=%s",
+            "agent_observe session_id=%s history_count=%s observations_count=%s steps_left=%s intent=%s location_source=%s recovery_path=%s",
             state.session_id,
             len(state.history),
             len(state.observations),
             state.steps_left,
+            state.intent,
+            state.location_source,
+            state.recovery_path,
         )
 
         pause_key = f"chat:pause:{state.session_id}"
@@ -251,6 +320,25 @@ def build_langgraph(
         return state
 
     async def think_node(state: ChatState) -> ChatState:
+        routed_calls = agent_config.tool_plan_router(state) if agent_config.tool_plan_router else None
+        if routed_calls:
+            state.planner_retry_count = 0
+            state.action_type = "tool_calls"
+            state.pending_tool_calls = routed_calls
+            state.tool_plan = routed_calls
+            state.events.append(
+                {
+                    "event": "plan_step",
+                    "data": {"type": "tool_calls", "calls": routed_calls, "source": "intent_router"},
+                }
+            )
+            logger.info(
+                "agent_decision session_id=%s action_type=tool_calls source=intent_router intent=%s tool_plan=%s",
+                state.session_id,
+                state.intent,
+                routed_calls,
+            )
+            return state
         system = None
         if state.context:
             system = state.context.get("system_prompt")
@@ -294,8 +382,8 @@ def build_langgraph(
             final = action.answer
             state.final_json = final.model_dump() if isinstance(final, FinalAnswer) else final
             state.action_type = "final"
-            if user.strip().startswith("记住"):
-                await memory.store_memory(db, state.user_id, user.strip())
+            if agent_config.final_action_hook:
+                await agent_config.final_action_hook(state, state.final_json, db)
             await _log_plan_event(
                 db,
                 state,
@@ -382,6 +470,7 @@ def build_langgraph(
             state.action_type = "tool_calls"
             state.action = action
             state.pending_tool_calls = normalized_calls
+            state.tool_plan = normalized_calls
             state.events.append(
                 {
                     "event": "plan_step",
@@ -395,9 +484,11 @@ def build_langgraph(
                 {"calls": normalized_calls},
             )
             logger.info(
-                "agent_decision session_id=%s action_type=tool_calls tools=%s",
+                "agent_decision session_id=%s action_type=tool_calls tools=%s intent=%s tool_plan=%s",
                 state.session_id,
                 [item["name"] for item in normalized_calls],
+                state.intent,
+                normalized_calls,
             )
             return state
 
@@ -484,6 +575,7 @@ def build_langgraph(
         state.planner_retry_count = 0
         state.action_type = "tool"
         state.action = action
+        state.tool_plan = [{"name": tool_name, "args": args}]
         state.events.append(
             {
                 "event": "plan_step",
@@ -497,10 +589,12 @@ def build_langgraph(
             {"tool": tool_name, "args": args},
         )
         logger.info(
-            "agent_decision session_id=%s action_type=tool tool=%s args=%s",
+            "agent_decision session_id=%s action_type=tool tool=%s args=%s intent=%s tool_plan=%s",
             state.session_id,
             tool_name,
             args,
+            state.intent,
+            state.tool_plan,
         )
         return state
 
@@ -520,19 +614,13 @@ def build_langgraph(
                 args = item.get("args") or {}
                 latency_ms = item.get("latency_ms") or 0
                 result = item.get("result")
-                result_preview = preview_result(result)
-                if tool_name == "plan_route" and isinstance(result, dict):
-                    result_preview = {
-                        "distance_m": result.get("distance_m"),
-                        "duration_s": result.get("duration_s"),
-                        "origin": result.get("origin"),
-                        "destination": result.get("destination"),
-                        "mode": result.get("mode"),
-                        "fallback_from": result.get("fallback_from"),
-                        "error": result.get("error"),
-                    }
+                result_preview = _build_result_preview(agent_config, tool_name, result)
                 state.tool_calls.append({"name": tool_name, "args": args, "latency_ms": latency_ms})
                 state.observations.append({"tool": tool_name, "result": result})
+                _observe_recovery(state, tool_name, result)
+                # 通过回调处理工具结果（业务层逻辑）
+                if agent_config.tool_result_handler:
+                    agent_config.tool_result_handler(state, tool_name, result)
                 logger.info(
                     "tool_call session_id=%s trace_id=%s tool=%s latency_ms=%s",
                     state.session_id,
@@ -599,19 +687,10 @@ def build_langgraph(
         result = result_item.get("result")
         args = result_item.get("args") or args
 
-        result_preview = preview_result(result)
-        if tool_name == "plan_route" and isinstance(result, dict):
-            result_preview = {
-                "distance_m": result.get("distance_m"),
-                "duration_s": result.get("duration_s"),
-                "origin": result.get("origin"),
-                "destination": result.get("destination"),
-                "mode": result.get("mode"),
-                "fallback_from": result.get("fallback_from"),
-                "error": result.get("error"),
-            }
+        result_preview = _build_result_preview(agent_config, tool_name, result)
         state.tool_calls.append({"name": tool_name, "args": args, "latency_ms": latency_ms})
         state.observations.append({"tool": tool_name, "result": result})
+        _observe_recovery(state, tool_name, result)
         state.steps_left -= 1
         logger.info(
             "tool_call session_id=%s trace_id=%s tool=%s latency_ms=%s",
@@ -646,7 +725,7 @@ def build_langgraph(
                     "name": tool_name,
                     "args": args,
                     "latency_ms": latency_ms,
-                    "result_preview": preview_result(result),
+                    "result_preview": result_preview,
                 },
             }
         )
@@ -901,7 +980,9 @@ async def run_chat_stream(
                     yield {"event": "final", "data": {"stopped": True}}
                     return
                 assistant_chunks.append(delta)
-                yield {"event": "delta", "data": {"token": delta}}
+                for piece in _iter_delta_chunks(delta):
+                    yield {"event": "delta", "data": {"token": piece}}
+                    await asyncio.sleep(0)
         finally:
             reset_llm_log_context(token)
 

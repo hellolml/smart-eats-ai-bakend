@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib
 import pkgutil
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from app.agent.agents.base import (
     default_system_prompt,
@@ -13,6 +13,13 @@ from app.agent.agents.base import (
 
 
 ToolResultHandler = Callable[[Any, str, Any], dict[str, Any] | None]
+IntentResolver = Callable[[Any], str | None]
+ToolPlanRouter = Callable[[Any], list[dict[str, Any]] | None]
+ContextExtender = Callable[[Any], dict[str, Any]]
+ToolArgsNormalizer = Callable[[str, dict[str, Any]], dict[str, Any]]
+SerialExecutionDecider = Callable[[list[dict[str, Any]]], bool]
+ToolResultPreviewer = Callable[[str, Any], Any]
+FinalActionHook = Callable[[Any, dict[str, Any], Any], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -25,6 +32,13 @@ class AgentConfig:
     writer_prompt_builder: Callable[[dict[str, Any]], str] = default_writer_prompt
     tool_result_handler: ToolResultHandler | None = None
     action_normalizer: Callable[[str], Any] | None = normalize_action_from_raw
+    intent_resolver: IntentResolver | None = None
+    tool_plan_router: ToolPlanRouter | None = None
+    context_extender: ContextExtender | None = None
+    tool_args_normalizer: ToolArgsNormalizer | None = None
+    serial_execution_decider: SerialExecutionDecider | None = None
+    tool_result_previewer: ToolResultPreviewer | None = None
+    final_action_hook: FinalActionHook | None = None
 
 
 AGENTS: dict[str, AgentConfig] = {}
@@ -38,6 +52,13 @@ def create_agent_config(
     writer_prompt_builder: Callable[[dict[str, Any]], str] = default_writer_prompt,
     tool_result_handler: ToolResultHandler | None = None,
     action_normalizer: Callable[[str], Any] | None = normalize_action_from_raw,
+    intent_resolver: IntentResolver | None = None,
+    tool_plan_router: ToolPlanRouter | None = None,
+    context_extender: ContextExtender | None = None,
+    tool_args_normalizer: ToolArgsNormalizer | None = None,
+    serial_execution_decider: SerialExecutionDecider | None = None,
+    tool_result_previewer: ToolResultPreviewer | None = None,
+    final_action_hook: FinalActionHook | None = None,
 ) -> AgentConfig:
     return AgentConfig(
         name=name,
@@ -48,6 +69,13 @@ def create_agent_config(
         writer_prompt_builder=writer_prompt_builder,
         tool_result_handler=tool_result_handler,
         action_normalizer=action_normalizer,
+        intent_resolver=intent_resolver,
+        tool_plan_router=tool_plan_router,
+        context_extender=context_extender,
+        tool_args_normalizer=tool_args_normalizer,
+        serial_execution_decider=serial_execution_decider,
+        tool_result_previewer=tool_result_previewer,
+        final_action_hook=final_action_hook,
     )
 
 

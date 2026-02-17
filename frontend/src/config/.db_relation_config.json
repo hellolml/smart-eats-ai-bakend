@@ -1,0 +1,34 @@
+{
+    "ingredients": {
+        "category": {
+            "type": "Select",
+            "options": [
+                {"label": "Vegetable", "value": "vegetable"},
+                {"label": "Fruit", "value": "fruit"},
+                {"label": "Grain", "value": "grain"},
+                {"label": "Protein", "value": "protein"},
+                {"label": "Dairy", "value": "dairy"}
+            ]
+        }
+    },
+    "users": {
+        "health_goal": {
+            "type": "Select",
+            "options": [
+                {"label": "Weight Loss", "value": "weight_loss"},
+                {"label": "Muscle Gain", "value": "muscle_gain"},
+                {"label": "Maintenance", "value": "maintenance"},
+                {"label": "Endurance", "value": "endurance"}
+            ]
+        }
+    },
+    "persona": {
+        "type":"Select",
+        "options":[
+            {"label":"Chef","value":"chef"},
+            {"label":"Nutritionist","value":"nutritionist"},
+            {"label":"Food Blogger","value":"food_blogger"},
+            {"label":"Home Cook","value":"home_cook"}
+        ]
+    }
+}

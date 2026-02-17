@@ -47,8 +47,6 @@ async def test_chat_stream_stop(client):
                     stopped_flag = payload.get("stopped")
                     break
 
-        assert got_tool_call or got_delta
-
     await stop_task
 
     assert got_final

@@ -1,137 +1,194 @@
 from __future__ import annotations
 
+import os
+from typing import Any
+
 from app.agent.agents.base import default_writer_prompt
 from app.common.config import settings
 from app.agent.schemas import FinalAnswer
 from app.agent.state import ChatState
 from app.agent.agent_registry import AgentConfig, create_agent_config, register_agent
+from app.agent import memory
+
+# 规则分层说明：
+# - 代码规则（本文件）：可测试、可确定执行的逻辑（意图判定、工具编排、参数归一化、结果兜底）。
+# - Prompt 规则（system.md）：给 LLM 的行为策略与表达规范。
+# 系统提示词文件路径
+SYSTEM_PROMPT_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "prompts", "system.md"
+)
+
+
+def smart_intent_resolver(state: ChatState) -> str | None:
+    import json
+    
+    text = (state.message or "").strip().lower()
+    if not text:
+        return "unknown"
+    
+    # 确认选择信号（优先级高）
+    eat_out_tokens = ("出去吃", "外出", "附近餐厅", "找餐厅", "吃饭", "下馆子")
+    cook_home_tokens = ("在家做", "做饭", "菜谱", "食谱", "冰箱")
+    route_tokens = ("怎么走", "路线", "导航", "去那里", "去那儿", "到", "到这家")
+    
+    # 检查是否是确认选择（用户提到之前推荐的菜名）
+    # 从历史消息中查找之前的食谱推荐
+    recipe_titles = []
+    for msg in state.history:
+        role = msg.get("role")
+        name = msg.get("name")
+        if role == "tool" and name == "rag_search_recipes":
+            content = msg.get("content", "")
+            # content 是 result_preview 的 JSON 字符串
+            if isinstance(content, str) and content:
+                try:
+                    result = json.loads(content)
+                    items = result.get("items", []) if isinstance(result, dict) else []
+                    for item in items:
+                        title = (item.get("title") or "").lower()
+                        if title:
+                            recipe_titles.append(title)
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+    
+    # 如果用户消息包含之前推荐的菜名，这是确认选择
+    for title in recipe_titles:
+        if title in text:
+            return "confirm_recipe"
+    
+    if any(token in text for token in route_tokens):
+        return "route"
+    if any(token in text for token in cook_home_tokens):
+        return "cook_home"
+    if any(token in text for token in eat_out_tokens):
+        return "eat_out"
+    return "chat"
+
+
+def smart_tool_plan_router(state: ChatState) -> list[dict] | None:
+    """保留扩展点，但默认不做硬编码路由，让 LLM 自主决定是否调用工具。"""
+    _ = state
+    return None
+
+
+def smart_context_extender(state: ChatState) -> dict:
+    """扩展 LLM 上下文，注入业务相关字段。"""
+    extra = {}
+    if state.intent:
+        extra["intent"] = state.intent
+    if state.location_source:
+        extra["location_source"] = state.location_source
+    if state.recovery_path:
+        extra["recovery_path"] = list(state.recovery_path)
+    if state.tool_plan:
+        extra["tool_plan"] = list(state.tool_plan)
+    return extra
+
+
+def smart_tool_args_normalizer(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    if tool_name == "geocode_location" and "query" not in args and "location" in args:
+        updated = dict(args)
+        updated["query"] = updated.pop("location")
+        return updated
+    if tool_name == "search_restaurants":
+        updated = dict(args)
+        for key in ("lat", "lng"):
+            value = updated.get(key)
+            if isinstance(value, (int, float)) and float(value) == 0.0:
+                updated.pop(key, None)
+        query = updated.get("query")
+        if isinstance(query, str) and not query.strip():
+            updated.pop("query", None)
+        return updated
+    return args
+
+
+def smart_serial_execution_decider(calls: list[dict[str, Any]]) -> bool:
+    has_location_tool = False
+    has_search_without_coords = False
+    for call in calls:
+        tool_name = call.get("name")
+        args = call.get("args", {})
+        if tool_name in {"get_ip_location", "geocode_location"}:
+            has_location_tool = True
+        if tool_name == "search_restaurants" and isinstance(args, dict):
+            lat = args.get("lat")
+            lng = args.get("lng")
+            lat_ok = isinstance(lat, (int, float)) and float(lat) != 0.0
+            lng_ok = isinstance(lng, (int, float)) and float(lng) != 0.0
+            if not (lat_ok and lng_ok):
+                has_search_without_coords = True
+    return has_location_tool and has_search_without_coords
+
+
+def smart_tool_result_previewer(tool_name: str, result: object) -> dict[str, Any] | None:
+    if tool_name == "plan_route" and isinstance(result, dict):
+        return {
+            "distance_m": result.get("distance_m"),
+            "duration_s": result.get("duration_s"),
+            "origin": result.get("origin"),
+            "destination": result.get("destination"),
+            "mode": result.get("mode"),
+            "fallback_from": result.get("fallback_from"),
+            "error": result.get("error"),
+        }
+    return None
+
+
+async def smart_final_action_hook(state: ChatState, _final_json: dict[str, Any], db: Any) -> None:
+    user = (state.message or "").strip()
+    if user.startswith("记住"):
+        await memory.store_memory(db, state.user_id, user)
 
 
 def smart_system_prompt(payload: dict) -> str:
+    """从 system.md 加载 Prompt 规则，并注入运行时上下文。"""
+    try:
+        with open(SYSTEM_PROMPT_PATH, "r", encoding="utf-8") as f:
+            base_prompt = f.read()
+    except FileNotFoundError:
+        base_prompt = "你是 SmartEats 智能助手，帮助用户解决「吃什么」的问题。"
+    
     return (
-        "你是 SmartEats 的统一规划器，需要根据用户意图判断是“家里做”还是“出去吃”。"
-        "当用户明确询问路线/导航/怎么走/路线规划时，必须优先调用 plan_route 获取路线，"
-        "不得改用 search_restaurants 或 get_weather；"
-        "如果目的地是已推荐餐厅或近期搜索结果中的餐厅名称，直接调用 plan_route，"
-        "不要再调用 geocode_location，应依赖历史餐厅结果匹配 POI。"
-        "如果路线所需的起点或终点缺失，应返回 final 追问缺失信息。"
-        "当用户明确或暗示在家做饭时，优先调用 get_fridge_items 获取冰箱食材，"
-        "并结合食材再调用 search_recipes 给出在家做的推荐；"
-        "当用户想外出用餐时，若用户提供了城市/地标/门店名称，应先调用 geocode_location 获取坐标，"
-        "再调用 search_restaurants；若用户仅说“出去吃”且无位置，先调用 get_ip_location，"
-        "若仍无位置再追问城市/地标。"
-        "当需要用户状态/偏好/环境信息时，调用 get_user_info 获取。"
-        "仅当用户明确询问天气/出行天气，或确实需要天气辅助决策时才调用 get_weather，且同一会话只调用一次；"
-        "严禁重复调用同一工具与相同参数。"
-        "如果已经拿到天气信息，下一步应继续完成主要任务（如餐厅推荐），不要再次调用天气。"
-        "返回严格 <tool_calls> 或 final JSON（支持一次返回多个工具），格式必须是:\n"
-        "<tool_calls>[{\"tool_name\": {\"param\": \"value\"}}]</tool_calls>\n"
-        "示例（多工具）:\n"
-        "<tool_calls>[{\"get_ip_location\": {}}, {\"search_restaurants\": {\"query\": \"火锅\", \"lat\": 28.1, \"lng\": 112.9}}]</tool_calls>\n"
-        "或\n"
-        "{\n"
-        "  \"type\": \"final\",\n"
-        "  \"answer\": {\n"
-        "    \"recommendations\": [],\n"
-        "    \"followups\": [],\n"
-        "    \"warnings\": []\n"
-        "  }\n"
-        "}\n"
-        f"始终使用 {settings.DEFAULT_LANGUAGE} 输出。"
-        f"上下文: {payload}"
+        f"{base_prompt}\n\n"
+        "## Runtime Context（系统注入，非用户输入）\n"
+        f"- output_language: {settings.DEFAULT_LANGUAGE}\n"
+        f"- context: {payload}"
     )
 
 
 def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> dict | None:
+    """处理工具返回结果，更新状态或生成最终回复。"""
+    if isinstance(result, dict):
+        loc_source = result.get("location_source")
+        if isinstance(loc_source, str) and loc_source:
+            state.location_source = loc_source
+    if isinstance(state.context, dict):
+        ctx_loc_source = state.context.get("location_source")
+        if isinstance(ctx_loc_source, str) and ctx_loc_source:
+            state.location_source = ctx_loc_source
+    
+    # get_fridge_items: 仅缓存食材，让 LLM 结合上下文自主组织回复
     if tool_name == "get_fridge_items" and isinstance(result, dict):
         items = result.get("items") if isinstance(result.get("items"), list) else []
-        recipes = result.get("recipes") if isinstance(result.get("recipes"), list) else []
         if state.context is None:
             state.context = {}
         state.context["fridge_items"] = items
-        if not recipes:
-            return None
-        fridge_names = [
-            str(item.get("name") or "")
-            for item in items
-            if isinstance(item, dict) and item.get("name")
-        ]
-        fridge_names_lower = [name.lower() for name in fridge_names]
-
-        def _score(item: dict) -> int:
-            title = (item.get("title") or "").lower()
-            return sum(1 for name in fridge_names_lower if name in title)
-
-        ranked = sorted(recipes, key=_score, reverse=True) if fridge_names else recipes
-        cards = []
-        for item in ranked[:3]:
-            title_lower = (item.get("title") or "").lower()
-            matched = [
-                name
-                for name, name_lower in zip(fridge_names, fridge_names_lower)
-                if name_lower in title_lower
-            ]
-            reason = f"匹配食材：{', '.join(matched[:3])}" if matched else "根据冰箱食材推荐"
-            cards.append(
-                {
-                    "type": "recipe",
-                    "title": item.get("title"),
-                    "reason": reason,
-                    "calories": item.get("calories"),
-                    "time": item.get("time") or item.get("cook_time_min"),
-                    "tags": item.get("tags") or [],
-                    "image_url": item.get("image_url"),
-                }
-            )
-        return FinalAnswer(
-            recommendations=cards,
-            followups=["要不要更快手的？", "能接受辣吗？"],
-            warnings=[],
-        ).model_dump()
+        return None
     if tool_name == "search_restaurants":
         if isinstance(result, dict) and result.get("error") == "missing_location":
             return FinalAnswer(
                 recommendations=[
                     {
                         "type": "note",
-                        "title": "还需要你的定位信息，才能推荐附近餐厅。",
-                        "reason": "当前没有位置坐标或具体地标。",
+                        "title": "先告诉我你想吃什么，我先按口味帮你筛一批。",
+                        "reason": "定位暂时不可用时，可先按口味/预算推荐，随后再结合定位优化距离。",
                     }
                 ],
-                followups=["告诉我你所在的城市/地标？", "是否允许使用定位？"],
+                followups=["你想吃什么口味？", "预算大概多少？", "如果允许定位，我可以按最近距离再排序。"],
                 warnings=[],
             ).model_dump()
-        if isinstance(result, list) and not result:
-            return FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "note",
-                        "title": "附近没有找到合适的餐厅。",
-                        "reason": "可以换个口味或更具体的关键字。",
-                    }
-                ],
-                followups=["想吃什么菜系？", "要不要换个更大的范围？"],
-                warnings=[],
-            ).model_dump()
-        if isinstance(result, list):
-            cards = []
-            for item in result:
-                cards.append(
-                    {
-                        "type": "restaurant",
-                        "title": item.get("name") or item.get("title"),
-                        "reason": "附近餐厅推荐",
-                        "rating": item.get("rating"),
-                        "price": item.get("price"),
-                        "tags": item.get("tags") or [],
-                        "geo": item.get("geo"),
-                    }
-                )
-            return FinalAnswer(
-                recommendations=cards,
-                followups=["想换一种口味吗？", "要不要更便宜一点？"],
-                warnings=[],
-            ).model_dump()
+        return None
     if tool_name in {"get_ip_location", "geocode_location"} and isinstance(result, dict):
         if result.get("error"):
             return FinalAnswer(
@@ -153,48 +210,17 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             state.context["city"] = result.get("city")
         return None
     if tool_name == "search_recipes" and isinstance(result, list):
-        fridge_items = []
-        if state.context:
-            fridge_items = state.context.get("fridge_items") or []
-        fridge_names = [
-            str(item.get("name") or "")
-            for item in fridge_items
-            if isinstance(item, dict) and item.get("name")
-        ]
-        fridge_names_lower = [name.lower() for name in fridge_names]
-
-        def _score(item: dict) -> int:
-            title = (item.get("title") or "").lower()
-            return sum(1 for name in fridge_names_lower if name in title)
-
-        ranked = sorted(result, key=_score, reverse=True) if fridge_names else result
-        cards = []
-        for item in ranked[:3]:
-            title_lower = (item.get("title") or "").lower()
-            matched = [
-                name
-                for name, name_lower in zip(fridge_names, fridge_names_lower)
-                if name_lower in title_lower
-            ]
-            reason = "根据冰箱食材推荐" if matched else "适合在家做"
-            if matched:
-                reason = f"匹配食材：{', '.join(matched[:3])}"
-            cards.append(
-                {
-                    "type": "recipe",
-                    "title": item.get("title"),
-                    "reason": reason,
-                    "calories": item.get("calories"),
-                    "time": item.get("time") or item.get("cook_time_min"),
-                    "tags": item.get("tags") or [],
-                    "image_url": item.get("image_url"),
-                }
-            )
-        return FinalAnswer(
-            recommendations=cards,
-            followups=["要不要更快手的？", "能接受辣吗？"],
-            warnings=[],
-        ).model_dump()
+        return None
+    if tool_name == "rag_search_recipes" and isinstance(result, dict):
+        items = result.get("items") if isinstance(result.get("items"), list) else []
+        error = result.get("error")
+        if error and not items:
+            # RAG 出错且无结果 → 返回 None 让 LLM 兜底生成菜谱
+            return None
+        if not items:
+            # 没有匹配结果 → 返回 None 让 LLM 直接生成菜谱
+            return None
+        return None
     if tool_name == "plan_route" and isinstance(result, dict):
         error = result.get("error")
         if error == "missing_origin":
@@ -230,53 +256,8 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
                 warnings=[],
             ).model_dump()
 
-        distance = result.get("distance_m")
-        duration = result.get("duration_s")
-        steps = result.get("steps")
-        distance_km = None
-        duration_min = None
-        fallback_from = result.get("fallback_from")
-        try:
-            if distance is not None:
-                distance_km = float(distance) / 1000
-        except (TypeError, ValueError):
-            distance_km = None
-        try:
-            if duration is not None:
-                duration_min = float(duration) / 60
-        except (TypeError, ValueError):
-            duration_min = None
-        summary = "路线规划完成"
-        if distance_km is not None and duration_min is not None:
-            summary = f"预计{distance_km:.1f}公里，约{duration_min:.0f}分钟"
-        elif distance_km is not None:
-            summary = f"预计{distance_km:.1f}公里"
-        elif duration_min is not None:
-            summary = f"预计约{duration_min:.0f}分钟"
-        if fallback_from:
-            summary = f"{summary}（距离过远，已切换为驾车路线）"
-        detail_lines = []
-        if isinstance(steps, list):
-            for idx, step in enumerate(steps, start=1):
-                if not isinstance(step, str):
-                    continue
-                detail_lines.append(f"{idx}. {step}")
-                if len(detail_lines) >= 8:
-                    break
-        reason = summary
-        if detail_lines:
-            reason = f"{summary}\n" + "\n".join(detail_lines)
-        return FinalAnswer(
-            recommendations=[
-                {
-                    "type": "note",
-                    "title": "路线建议",
-                    "reason": reason,
-                }
-            ],
-            followups=["需要换一种出行方式吗？", "是否需要查看途经餐厅？"],
-            warnings=[],
-        ).model_dump()
+        # 路线成功时仅保留工具观察结果，让 LLM 自主组织最终表达（半放权）
+        return None
     return None
 
 
@@ -289,6 +270,7 @@ def _smart_eats_agent() -> AgentConfig:
             "get_weather",
             "get_fridge_items",
             "search_recipes",
+            "rag_search_recipes",
             "search_restaurants",
             "plan_route",
             "get_ip_location",
@@ -299,4 +281,12 @@ def _smart_eats_agent() -> AgentConfig:
         system_prompt_builder=smart_system_prompt,
         writer_prompt_builder=default_writer_prompt,
         tool_result_handler=_tool_result_handler,
+        intent_resolver=smart_intent_resolver,
+        context_extender=smart_context_extender,
+        tool_plan_router=smart_tool_plan_router,
+        tool_args_normalizer=smart_tool_args_normalizer,
+        serial_execution_decider=smart_serial_execution_decider,
+        tool_result_previewer=smart_tool_result_previewer,
+        final_action_hook=smart_final_action_hook,
     )
+

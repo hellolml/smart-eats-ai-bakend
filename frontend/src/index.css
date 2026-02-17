@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --background: 35 40% 98%;
+        --foreground: 222.2 84% 4.9%;
+        --primary: 255 100% 67%;
+        --primary-foreground: 210 40% 98%;
+        --radius: 1.5rem;
+    }
+
+    /* 全局强制无滚动条，全屏自适应 */
+    html, body, #root {
+        @apply antialiased overflow-hidden h-full w-full;
+        background-color: #fff9f2;
+        margin: 0;
+        padding: 0;
+        /* 防止移动端橡皮筋效果影响布局 */
+        position: fixed;
+    }
+
+    /* 隐藏所有滚动条但保留滚动功能 */
+    .no-scrollbar::-webkit-scrollbar {
+        display: none;
+    }
+
+    .no-scrollbar {
+        -ms-overflow-style: none;  /* IE and Edge */
+        scrollbar-width: none;  /* Firefox */
+    }
+
+    @layer utilities {
+        .animate-spin-slow {
+            animation: spin 3s linear infinite;
+        }
+    }
+
+    /* 响应式高度容器 */
+    .safe-height {
+        height: calc(var(100vh) - env(safe-area-inset-bottom));
+    }
+}

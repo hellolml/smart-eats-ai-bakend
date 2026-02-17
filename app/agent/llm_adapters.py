@@ -238,7 +238,9 @@ class OpenAIWriter:
                 user,
             )
 
-        if hasattr(self.client, "responses"):
+        # 非 OpenAI 兼容提供商（如 qwen/deepseek）在 responses 流式上可能只返回最终块，
+        # 这里优先仅对 openai 使用 responses API，其它提供商走 chat.completions 的流式分片。
+        if hasattr(self.client, "responses") and self.config.name == "openai":
             stream = await self.client.responses.create(
                 model=self.config.model_writer,
                 input=[
