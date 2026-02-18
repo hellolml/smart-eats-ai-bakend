@@ -1,6 +1,25 @@
 # smart-eats-ai-bakend
 
-吃点啥智能系统后端（FastAPI + LangGraph + SSE）。
+吃点啥智能系统（FastAPI + LangGraph + SSE + React 前端）。
+
+## 生产部署（Docker + HTTPS）
+
+- 详细教程见：[`deploy/DEPLOYMENT_GUIDE.md`](./deploy/DEPLOYMENT_GUIDE.md)
+- 一键部署：
+
+```bash
+cp .env.prod.example .env.prod
+# 编辑 .env.prod（至少设置 DOMAIN、POSTGRES_PASSWORD、JWT_SECRET、APP_API_BASE_URL）
+
+# 1) 部署服务
+make deploy
+
+# 2) 开启 HTTPS（单域名默认模式）
+make https-enable
+
+# 3) 续期证书
+make https-renew
+```
 
 ## 开发环境（Conda）
 
