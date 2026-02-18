@@ -107,7 +107,7 @@ case "$HTTPS_MODE" in
     ;;
 esac
 
-dc run --rm certbot certbot "${CERTBOT_ARGS[@]}"
+dc run --rm certbot "${CERTBOT_ARGS[@]}"
 
 echo "[4/5] Render SSL gateway config"
 case "$HTTPS_MODE" in
