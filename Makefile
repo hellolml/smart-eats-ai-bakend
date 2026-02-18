@@ -1,25 +1,20 @@
-.PHONY: help deploy https-enable https-renew logs ps
+.PHONY: help deploy https-enable https-renew ps logs
 
 help:
-	@echo "Targets:"
-	@echo "  make deploy        # build + up (uses .env.prod)"
-	@echo "  make https-enable  # request cert + switch gateway to TLS (single-domain by default)"
-	@echo "  make https-renew   # renew cert + reload gateway"
-	@echo "  make ps            # show running containers"
-	@echo "  make logs          # tail gateway/backend logs"
+	@echo "Wrapper Makefile. Real targets live in deploy/Makefile"
+	@$(MAKE) -f deploy/Makefile help
 
 deploy:
-	./deploy/deploy.sh
+	@$(MAKE) -f deploy/Makefile deploy
 
 https-enable:
-	./deploy/enable_https.sh
+	@$(MAKE) -f deploy/Makefile https-enable
 
 https-renew:
-	./deploy/renew_https.sh
+	@$(MAKE) -f deploy/Makefile https-renew
 
 ps:
-	docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep smart-eats || true
+	@$(MAKE) -f deploy/Makefile ps
 
 logs:
-	@echo "--- gateway ---"; docker logs --tail 120 smart-eats-gateway 2>/dev/null || true
-	@echo "--- backend ---"; docker logs --tail 120 smart-eats-backend 2>/dev/null || true
+	@$(MAKE) -f deploy/Makefile logs

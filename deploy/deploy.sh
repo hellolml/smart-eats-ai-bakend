@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 if [[ ! -f ".env.prod" ]]; then
-  echo "[ERROR] .env.prod not found. Copy .env.prod.example to .env.prod first."
+  echo "[ERROR] .env.prod not found. Copy deploy/.env.prod.example to .env.prod first."
   exit 1
 fi
 
@@ -22,8 +22,8 @@ case "$HTTPS_ENABLED" in
       echo "[ERROR] HTTPS_ENABLED=true but deploy/nginx/gateway.conf not found"
       exit 1
     fi
-    COMPOSE_FILES+=(-f docker-compose.https.yml)
-    echo "[INFO] HTTPS enabled, deploying with docker-compose.https.yml"
+    COMPOSE_FILES+=(-f deploy/docker-compose.https.yml)
+    echo "[INFO] HTTPS enabled, deploying with deploy/docker-compose.https.yml"
     ;;
 esac
 

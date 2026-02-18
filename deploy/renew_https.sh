@@ -26,7 +26,7 @@ if [[ ! -f "deploy/nginx/gateway.conf" ]]; then
 fi
 
 dc() {
-  docker compose -f docker-compose.prod.yml -f docker-compose.https.yml --env-file .env.prod "$@"
+  docker compose -f docker-compose.prod.yml -f deploy/docker-compose.https.yml --env-file .env.prod "$@"
 }
 
 dc run --rm certbot renew --webroot -w /var/www/certbot

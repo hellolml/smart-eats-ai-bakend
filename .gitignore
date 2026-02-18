@@ -20,7 +20,7 @@ coverage.xml
 .env
 .env.*
 !.env.example
-!.env.prod.example
+!deploy/.env.prod.example
 
 # ===== Local dev DBs / artifacts =====
 local.db

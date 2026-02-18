@@ -90,11 +90,11 @@ cd smart-eats-ai-bakend
 
 ## 4. 生产配置：创建 .env.prod
 
-项目自带模板：`.env.prod.example`。
+项目自带模板：`deploy/.env.prod.example`。
 
 ```bash
 cd ~/code/smart-eats-ai-bakend
-cp .env.prod.example .env.prod
+cp deploy/.env.prod.example .env.prod
 nano .env.prod
 ```
 
@@ -182,7 +182,7 @@ curl -sS http://127.0.0.1:8000/ | head
 ### 6.2 启动 gateway（HTTP，仅用于签证书）
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.https.yml up -d gateway
+docker compose --env-file .env.prod -f docker-compose.prod.yml -f deploy/docker-compose.https.yml up -d gateway
 ```
 
 从公网验证：
@@ -193,7 +193,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml -f docker-compose
 
 ```bash
 docker compose --env-file .env.prod \
-  -f docker-compose.prod.yml -f docker-compose.https.yml \
+  -f docker-compose.prod.yml -f deploy/docker-compose.https.yml \
   --profile tools run --rm certbot \
   certonly --webroot -w /var/www/certbot \
   -d <DOMAIN> \
@@ -205,7 +205,7 @@ docker compose --env-file .env.prod \
 把 `deploy/nginx/gateway.conf` 切到 HTTPS 配置（脚本会自动生成）。然后：
 
 ```bash
-docker compose --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.https.yml up -d --force-recreate gateway
+docker compose --env-file .env.prod -f docker-compose.prod.yml -f deploy/docker-compose.https.yml up -d --force-recreate gateway
 ```
 
 验证：
@@ -278,8 +278,8 @@ docker logs --tail 200 smart-eats-gateway
 ## 9. 关键文件说明
 
 - `docker-compose.prod.yml`：生产服务（postgres/redis/backend/frontend）
-- `docker-compose.https.yml`：HTTPS 叠加层（gateway/certbot），并禁用 frontend 端口映射
+- `deploy/docker-compose.https.yml`：HTTPS 叠加层（gateway/certbot），并禁用 frontend 端口映射
 - `deploy/nginx/gateway.conf`：Nginx 网关配置（脚本生成/可修改）
 - `.env.prod`：生产环境变量（你自己的，不要提交 git）
-- `.env.prod.example`：生产环境变量模板（开箱即用的默认模板）
+- `deploy/.env.prod.example`：生产环境变量模板（开箱即用的默认模板）
 

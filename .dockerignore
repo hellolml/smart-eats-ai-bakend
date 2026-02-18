@@ -9,7 +9,7 @@ __pycache__
 *.db
 .env
 .env.*
-!.env.prod.example
+!deploy/.env.prod.example
 frontend/node_modules
 frontend/dist
 node_modules

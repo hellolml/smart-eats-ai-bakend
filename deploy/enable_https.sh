@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 if [[ ! -f ".env.prod" ]]; then
-  echo "[ERROR] .env.prod not found. Copy .env.prod.example to .env.prod first."
+  echo "[ERROR] .env.prod not found. Copy deploy/.env.prod.example to .env.prod first."
   exit 1
 fi
 
@@ -82,7 +82,7 @@ case "$HTTPS_MODE" in
 esac
 
 dc() {
-  docker compose -f docker-compose.prod.yml -f docker-compose.https.yml --env-file .env.prod "$@"
+  docker compose -f docker-compose.prod.yml -f deploy/docker-compose.https.yml --env-file .env.prod "$@"
 }
 
 echo "[2/5] Start gateway for ACME challenge"

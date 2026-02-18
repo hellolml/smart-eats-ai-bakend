@@ -29,8 +29,8 @@ case "$HTTPS_ENABLED" in
       echo "[ERROR] HTTPS_ENABLED=true but deploy/nginx/gateway.conf not found"
       exit 1
     fi
-    COMPOSE_FILES+=(-f docker-compose.https.yml)
-    echo "[INFO] HTTPS enabled, rolling back with docker-compose.https.yml"
+    COMPOSE_FILES+=(-f deploy/docker-compose.https.yml)
+    echo "[INFO] HTTPS enabled, rolling back with deploy/docker-compose.https.yml"
     ;;
 esac
 

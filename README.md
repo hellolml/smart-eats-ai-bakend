@@ -8,7 +8,7 @@
 - 一键部署：
 
 ```bash
-cp .env.prod.example .env.prod
+cp deploy/.env.prod.example .env.prod
 # 编辑 .env.prod（至少设置 DOMAIN、POSTGRES_PASSWORD、JWT_SECRET、APP_API_BASE_URL）
 
 # 1) 部署服务
