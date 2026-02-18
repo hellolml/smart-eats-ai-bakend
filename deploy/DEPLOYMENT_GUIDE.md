@@ -111,6 +111,35 @@ nano .env.prod
 APP_API_BASE_URL=https://<DOMAIN>
 ```
 
+### 4.1 部署前检查清单（Preflight）
+
+在正式部署前，建议逐条确认：
+
+```bash
+# 1) Docker / Compose 可用
+docker --version
+docker compose version
+
+# 2) 域名解析是否已指向当前机器
+getent ahosts <DOMAIN> | head
+
+# 3) 80/443 端口是否被其他进程占用（若有占用需先处理）
+ss -lntp | grep -E ':80|:443' || true
+
+# 4) 生产配置文件是否存在
+test -f .env.prod && echo ".env.prod OK" || echo ".env.prod MISSING"
+
+# 5) 核心变量是否已设置
+grep -E '^(DOMAIN|HTTPS_MODE|HTTPS_ENABLED|APP_API_BASE_URL)=' .env.prod
+```
+
+建议目标值：
+
+- `DOMAIN=<你的域名>`（如 `eatwhat.cloud`）
+- `HTTPS_MODE=single`
+- `HTTPS_ENABLED=true`（准备启用 HTTPS 时）
+- `APP_API_BASE_URL=https://<DOMAIN>`
+
 ---
 
 ## 5. 一键部署（推荐）
@@ -237,6 +266,54 @@ docker logs -f --tail 200 smart-eats-gateway
 # 续期证书
 ./deploy/renew_https.sh
 ```
+
+### 7.1 部署后验收清单（Post-check）
+
+部署完成后，按下面顺序验收：
+
+```bash
+# 1) 容器状态（都应是 Up，关键容器建议 healthy）
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep smart-eats
+
+# 2) 站点首页（应返回 200）
+curl -k -I -m 8 https://<DOMAIN>/ | head -n 8
+
+# 3) FastAPI docs（应返回 200）
+curl -k -I -m 8 https://<DOMAIN>/docs | head -n 8
+
+# 4) API 基本可达性（按你的实际接口补充）
+curl -k -I -m 8 https://<DOMAIN>/api/v1/ | head -n 8 || true
+```
+
+浏览器侧再做一次人工验收：
+
+- 打开首页，无明显报错
+- 注册/登录流程走通
+- 开发者工具 Network 中 API 请求都走 `https://<DOMAIN>/api/...`
+
+### 7.2 失败快速回滚（最短路径）
+
+如果升级后异常，按以下顺序快速恢复：
+
+```bash
+cd ~/code/smart-eats-ai-bakend
+
+# 1) 回滚到上一个提交
+git log --oneline -n 5
+git reset --hard HEAD~1
+
+# 2) 重新部署（会按 .env.prod 当前配置拉起）
+./deploy/deploy.sh
+
+# 3) 若启用了 HTTPS，重建 gateway
+./deploy/enable_https.sh || true
+docker compose --env-file .env.prod -f docker-compose.prod.yml -f deploy/docker-compose.https.yml up -d --force-recreate gateway
+```
+
+回滚时务必保留：
+
+- `.env.prod`（生产真实配置）
+- `deploy/nginx/gateway.conf`（当前网关配置，可作为临时备份）
 
 ---
 
