@@ -1,27 +1,47 @@
+# ===== Python =====
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
 .Python
 
+# ===== Virtualenv / tooling =====
+.venv/
+.uv/
+.mypy_cache/
+.ruff_cache/
 
-local.db
-*.sqlite
-*.sqlite3
-*.db-*
-
-.langgraph_checkpoints.sqlite
-.minio_stub/
-
+# ===== Tests / coverage =====
 .pytest_cache/
 .coverage
 coverage.xml
 
-.mypy_cache/
-.ruff_cache/
-.uv/
+# ===== Env files =====
+.env
+.env.*
+!.env.example
+!.env.prod.example
 
-.idea/
+# ===== Local dev DBs / artifacts =====
+local.db
+*.sqlite
+*.sqlite3
+*.db-*
+.langgraph_checkpoints.sqlite
+.minio_stub/
 
+# ===== Frontend build =====
+frontend/dist/
 dist/
 build/
 *.egg-info/
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+.claude/
+.DS_Store
+
+# ===== Deployment generated files =====
+# Rendered by deploy/enable_https.sh
+/deploy/nginx/gateway.conf
