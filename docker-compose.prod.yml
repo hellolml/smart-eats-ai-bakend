@@ -77,7 +77,8 @@ services:
     ports:
       - "${FRONTEND_HOST_PORT:-80}:80"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      # NOTE: use 127.0.0.1 to avoid localhost resolving to ::1 in some images
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 20s
       timeout: 5s
       retries: 10

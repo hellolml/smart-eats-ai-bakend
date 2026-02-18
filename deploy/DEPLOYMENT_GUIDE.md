@@ -261,7 +261,21 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d frontend
 
 并用无痕/强刷访问页面。
 
-### 8.2 gateway 起不来
+### 8.2 frontend 一直 unhealthy（导致 gateway 也起不来）
+
+`deploy/docker-compose.https.yml` 里 gateway 依赖 frontend/backend 为 healthy。
+如果 frontend healthcheck 写错（例如检查 `/healthz` 但实际没有该路径，或 `localhost` 解析到 IPv6 `::1` 导致拒绝连接），就会出现：
+
+- `container smart-eats-frontend is unhealthy`
+- gateway 无法启动
+
+当前仓库的默认 healthcheck 是探测：
+
+- `http://127.0.0.1/`
+
+如果你改过 compose，请确保 healthcheck 能在容器内访问成功。
+
+### 8.3 gateway 起不来
 
 ```bash
 docker logs --tail 200 smart-eats-gateway
