@@ -73,6 +73,22 @@ def _normalize_final_answer(answer: Any) -> dict[str, Any] | None:
     return answer
 
 
+def _normalize_tool_item(item: Any) -> dict[str, dict[str, Any]] | None:
+    if not isinstance(item, dict):
+        return None
+    # 兼容格式A: {"search_restaurants": {...}}
+    if len(item) == 1:
+        name, params = next(iter(item.items()))
+        if isinstance(name, str) and isinstance(params, dict):
+            return {name: params}
+    # 兼容格式B: {"tool_name":"search_restaurants", "args": {...}}
+    tool_name = item.get("tool_name")
+    args = item.get("args")
+    if isinstance(tool_name, str) and isinstance(args, dict):
+        return {tool_name: args}
+    return None
+
+
 def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
     match = re.search(r"<tool_calls>(.*?)</tool_calls>", raw, re.DOTALL)
     if not match:
@@ -88,15 +104,15 @@ def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
         data = None
 
     if isinstance(data, list):
+        calls: list[dict[str, dict[str, Any]]] = []
         for item in data:
-            if not isinstance(item, dict) or len(item) != 1:
+            normalized = _normalize_tool_item(item)
+            if not normalized:
                 return None
-            name, params = next(iter(item.items()))
-            if not isinstance(name, str) or not isinstance(params, dict):
-                return None
-        return data
+            calls.append(normalized)
+        return calls
 
-    # 兼容格式2：<tool_calls><tool_call>{"tool": {...}}</tool_call>...</tool_calls>
+    # 兼容格式2：<tool_calls><tool_call>{...}</tool_call>...</tool_calls>
     blocks = re.findall(r"<tool_call>(.*?)</tool_call>", payload, re.DOTALL)
     if not blocks:
         return None
@@ -109,12 +125,10 @@ def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
             item = json.loads(chunk)
         except json.JSONDecodeError:
             return None
-        if not isinstance(item, dict) or len(item) != 1:
+        normalized = _normalize_tool_item(item)
+        if not normalized:
             return None
-        name, params = next(iter(item.items()))
-        if not isinstance(name, str) or not isinstance(params, dict):
-            return None
-        calls.append(item)
+        calls.append(normalized)
     return calls
 
 
@@ -139,11 +153,12 @@ def normalize_action_from_raw(content: str) -> AgentAction | None:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        # 不是 JSON，将纯文本作为 final 响应处理
-        if cleaned:
+        # 不是 JSON：剥离潜在工具片段后按纯文本 final 处理，避免工具标记泄露到用户侧
+        cleaned_text = re.sub(r"<tool_calls>[\s\S]*?</tool_calls>", "", cleaned, flags=re.IGNORECASE).strip()
+        if cleaned_text:
             answer = {
                 "recommendations": [
-                    {"type": "note", "title": cleaned, "reason": None}
+                    {"type": "note", "title": cleaned_text, "reason": None}
                 ],
                 "followups": [],
                 "warnings": [],

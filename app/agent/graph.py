@@ -43,6 +43,7 @@ from app.agent import history, memory
 from app.infra.models.chat import ChatMessage, ChatSession
 
 logger = logging.getLogger("agent")
+MAX_SAME_TOOL_CALLS_PER_TURN = 2
 
 
 def _build_observation_context(
@@ -185,6 +186,58 @@ def _fallback_final() -> dict[str, Any]:
     ).model_dump()
 
 
+def _best_effort_final_from_observations(state: ChatState) -> dict[str, Any]:
+    # 优先消费已有可用结果，尽量避免 steps_exhausted 直接 fallback
+    last_search_list: list[dict[str, Any]] | None = None
+    last_error: str | None = None
+    for item in reversed(state.observations):
+        if not isinstance(item, dict):
+            continue
+        tool_name = item.get("tool")
+        result = item.get("result")
+        if tool_name == "search_restaurants":
+            if isinstance(result, list):
+                last_search_list = result
+                break
+            if isinstance(result, dict) and isinstance(result.get("error"), str):
+                last_error = result.get("error")
+        if tool_name in {"get_ip_location", "geocode_location"} and isinstance(result, dict):
+            if isinstance(result.get("error"), str):
+                last_error = result.get("error")
+
+    if isinstance(last_search_list, list) and last_search_list:
+        top = []
+        for row in last_search_list[:3]:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            addr = ""
+            raw = row.get("raw")
+            if isinstance(raw, dict):
+                addr = str(raw.get("address") or "").strip()
+            if name:
+                top.append(f"{name}（{addr}）" if addr else name)
+        if top:
+            return FinalAnswer(
+                recommendations=[
+                    {"type": "note", "title": "我先给你整理了附近可选店", "reason": "基于已拿到的检索结果"}
+                ],
+                followups=[f"你可以先看这几家：{'；'.join(top)}", "要不要我再按口味/预算帮你筛一轮？"],
+                warnings=[],
+            ).model_dump()
+
+    if last_error in {"missing_location", "missing_ip"}:
+        return FinalAnswer(
+            recommendations=[
+                {"type": "note", "title": "我还缺少精确位置，暂时没法稳妥推荐附近餐厅。", "reason": "位置信息不足"}
+            ],
+            followups=["你可以发我当前城市或地标", "或者开启定位后再试一次"],
+            warnings=[],
+        ).model_dump()
+
+    return _fallback_final()
+
+
 def _render_final_text(final_json: dict[str, Any]) -> str:
     recommendations = final_json.get("recommendations")
     followups = final_json.get("followups")
@@ -216,13 +269,13 @@ def _render_final_text(final_json: dict[str, Any]) -> str:
 
     chunks: list[str] = []
     if rec_lines:
-        chunks.append("；".join(rec_lines))
+        chunks.append("\n".join([f"- {line}" for line in rec_lines]))
     if follow_lines:
-        chunks.append("你可以继续：" + "；".join(follow_lines))
+        chunks.append("**你可以继续：**\n" + "\n".join([f"- {line}" for line in follow_lines]))
     if warning_lines:
-        chunks.append("注意：" + "；".join(warning_lines))
+        chunks.append("**注意：**\n" + "\n".join([f"- {line}" for line in warning_lines]))
 
-    text = "\n".join(chunks).strip()
+    text = "\n\n".join(chunks).strip()
     if text:
         return text
     return "好的。"
@@ -505,6 +558,30 @@ def build_langgraph(
                     continue
                 normalized_calls.append({"name": tool_name, "args": args})
 
+            # 防抖：同一轮次同一工具调用次数过多，直接拦截
+            repeated_limit_errors: list[dict[str, Any]] = []
+            for call in normalized_calls:
+                tool_name = call.get("name")
+                if not isinstance(tool_name, str):
+                    continue
+                existing = sum(
+                    1
+                    for obs in state.observations
+                    if isinstance(obs, dict) and obs.get("tool") == tool_name
+                )
+                if existing >= MAX_SAME_TOOL_CALLS_PER_TURN:
+                    repeated_limit_errors.append(
+                        {
+                            "reason": "max_same_tool_calls_per_turn",
+                            "tool": tool_name,
+                            "limit": MAX_SAME_TOOL_CALLS_PER_TURN,
+                            "existing": existing,
+                        }
+                    )
+
+            if repeated_limit_errors:
+                errors.extend(repeated_limit_errors)
+
             if errors:
                 state.planner_retry_count += 1
                 state.observations.append(
@@ -640,6 +717,29 @@ def build_langgraph(
                 state.action_type = "final"
             else:
                 state.action_type = "retry"
+            return state
+
+        existing_tool_calls = sum(
+            1
+            for obs in state.observations
+            if isinstance(obs, dict) and obs.get("tool") == tool_name
+        )
+        if existing_tool_calls >= MAX_SAME_TOOL_CALLS_PER_TURN:
+            state.observations.append(
+                {
+                    "planner_error": "max_same_tool_calls_per_turn",
+                    "tool": tool_name,
+                    "limit": MAX_SAME_TOOL_CALLS_PER_TURN,
+                    "existing": existing_tool_calls,
+                }
+            )
+            state.final_json = _best_effort_final_from_observations(state)
+            state.action_type = "final"
+            logger.info(
+                "agent_decision session_id=%s action_type=final reason=max_same_tool_calls_per_turn tool=%s",
+                state.session_id,
+                tool_name,
+            )
             return state
 
         state.planner_retry_count = 0
@@ -813,10 +913,10 @@ def build_langgraph(
                 return state
 
         if state.steps_left <= 0:
-            state.final_json = _fallback_final()
+            state.final_json = _best_effort_final_from_observations(state)
             state.action_type = "final"
             logger.info(
-                "agent_decision session_id=%s action_type=final reason=steps_exhausted",
+                "agent_decision session_id=%s action_type=final reason=steps_exhausted_best_effort",
                 state.session_id,
             )
         else:
@@ -848,10 +948,10 @@ def build_langgraph(
                     return state
         state.tool_results_batch = []
         if state.steps_left <= 0:
-            state.final_json = _fallback_final()
+            state.final_json = _best_effort_final_from_observations(state)
             state.action_type = "final"
             logger.info(
-                "agent_decision session_id=%s action_type=final reason=steps_exhausted",
+                "agent_decision session_id=%s action_type=final reason=steps_exhausted_best_effort",
                 state.session_id,
             )
         else:

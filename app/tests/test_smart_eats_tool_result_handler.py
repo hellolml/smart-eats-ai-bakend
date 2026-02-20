@@ -36,12 +36,13 @@ def test_search_restaurants_results_relaxed_to_llm():
     assert handled is None
 
 
-def test_search_restaurants_empty_relaxed_to_llm():
+def test_search_restaurants_empty_returns_guidance():
     state = _build_state()
 
     handled = _tool_result_handler(state, "search_restaurants", [])
 
-    assert handled is None
+    assert isinstance(handled, dict)
+    assert "附近暂时没刷到合适的餐厅" in handled["recommendations"][0]["title"]
 
 
 def test_search_restaurants_missing_location_keeps_hard_guardrail():
@@ -59,7 +60,7 @@ def test_geocode_location_error_keeps_hard_guardrail():
     handled = _tool_result_handler(state, "geocode_location", {"error": "not_found"})
 
     assert isinstance(handled, dict)
-    assert handled["recommendations"][0]["title"] == "需要你的具体位置，才能推荐附近餐厅。"
+    assert "自动定位" in handled["recommendations"][0]["title"]
 
 
 def test_geocode_location_success_updates_context_and_relaxes():
@@ -191,14 +192,16 @@ def test_fast_path_decider_rejects_checkpoint_resume():
     assert smart_fast_path_decider(state) is False
 
 
-def test_fast_path_system_prompt_builder_prefers_context_prompt():
+def test_fast_path_system_prompt_builder_contains_constraints():
     state = ChatState(
         session_id="s1",
         message="hi",
         context={"system_prompt": "来自上下文的system"},
     )
 
-    assert smart_fast_path_system_prompt_builder(state) == "来自上下文的system"
+    prompt = smart_fast_path_system_prompt_builder(state)
+    assert "Fast Path 输出约束" in prompt
+    assert "禁止输出 JSON" in prompt
 
 
 def test_fast_path_writer_prompt_builder_contains_recent_history_and_message():
@@ -270,3 +273,52 @@ def test_tool_plan_router_non_eat_out_returns_none():
     plan = smart_tool_plan_router(state)
 
     assert plan is None
+
+
+def test_tool_plan_router_explicit_location_calls_geocode_first():
+    state = ChatState(
+        session_id="s1",
+        message="我在紫阳县紫阳广场",
+        intent="eat_out",
+        context={"environment": {"location": {"lat": 32.31, "lng": 108.38}}},
+        history=[{"role": "user", "content": "出去吃"}],
+    )
+
+    plan = smart_tool_plan_router(state)
+
+    assert plan == [{"name": "geocode_location", "args": {"query": "我在紫阳县紫阳广场"}}]
+    assert state.task_stage == "need_geocode"
+
+
+def test_tool_plan_router_after_geocode_uses_geocoded_coords_for_search():
+    state = ChatState(
+        session_id="s1",
+        message="我在紫阳县紫阳广场",
+        intent="eat_out",
+        context={"environment": {"location": {"lat": 32.31, "lng": 108.38}}},
+        observations=[{"tool": "geocode_location", "result": {"lat": 32.521417, "lng": 108.532332}}],
+    )
+
+    plan = smart_tool_plan_router(state)
+
+    assert plan is not None
+    assert plan[0]["name"] == "search_restaurants"
+    assert plan[0]["args"]["lat"] == 32.521417
+    assert plan[0]["args"]["lng"] == 108.532332
+
+
+def test_tool_plan_router_after_search_delegates_to_llm():
+    state = ChatState(
+        session_id="s1",
+        message="我在紫阳县紫阳广场",
+        intent="eat_out",
+        observations=[
+            {"tool": "geocode_location", "result": {"lat": 32.521417, "lng": 108.532332}},
+            {"tool": "search_restaurants", "result": [{"name": "迈德思客"}]},
+        ],
+    )
+
+    plan = smart_tool_plan_router(state)
+
+    assert plan is None
+    assert state.task_stage == "searched"

@@ -31,6 +31,7 @@ class ChatState:
     client_ip: str | None = None
     intent: str | None = None
     location_source: str | None = None
+    task_stage: str | None = None
     tool_plan: list[dict[str, Any]] = field(default_factory=list)
     recovery_path: list[str] = field(default_factory=list)
     resume_from_checkpoint: bool = False
