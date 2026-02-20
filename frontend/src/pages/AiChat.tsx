@@ -1026,8 +1026,8 @@ const AiChat = () => {
                 </div>
 
                 {/* Input Area */}
-                <div className="p-4 bg-white border-t border-gray-100">
-                    <div className="max-w-4xl mx-auto relative flex items-end gap-2 bg-gray-50 border border-gray-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-[#7E57FF]/20 focus-within:border-[#7E57FF] transition-all">
+                <div className="p-4 bg-white border-t border-gray-100 flex-shrink-0">
+                    <div className="max-w-4xl w-full mx-auto relative flex items-end gap-2 bg-gray-50 border border-gray-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-[#7E57FF]/20 focus-within:border-[#7E57FF] transition-all">
                         <textarea
                             ref={textareaRef}
                             value={inputValue}

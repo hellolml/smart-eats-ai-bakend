@@ -22,7 +22,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     const showBottomNav = !isAuthPage && !isSubPage;
 
     return (
-        <div className="h-screen w-full bg-[#FFF9F2] flex flex-col md:flex-row overflow-hidden relative">
+        <div className="h-[100dvh] w-full bg-[#FFF9F2] flex flex-col md:flex-row overflow-hidden relative">
             {/* Desktop Sidebar (Only visible on md and up) */}
             {showBottomNav && (
                 <aside className="hidden md:flex flex-col w-64 bg-[#FFF9F2] border-r border-orange-100 shadow-[4px_0_24px_rgba(126,87,255,0.04)] z-50 flex-shrink-0">
