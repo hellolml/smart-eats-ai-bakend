@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 import logging
 import os
 from typing import Any, AsyncGenerator, Callable
 
+import httpx
 from openai import AsyncOpenAI
 
 from app.agent.schemas import AgentAction, AgentActionModel, ToolAction
@@ -105,16 +107,36 @@ class ProviderRegistry:
         )
 
 
+_CLIENT_POOL: dict[str, AsyncOpenAI] = {}
+_CLIENT_POOL_LOCK = threading.Lock()
+
+
+def _get_shared_client(config: ProviderConfig) -> AsyncOpenAI | None:
+    """获取或创建共享的 AsyncOpenAI 客户端，复用 TCP/TLS 连接。"""
+    if not config.api_key:
+        return None
+    key = f"{config.name}:{config.base_url}"
+    client = _CLIENT_POOL.get(key)
+    if client is not None:
+        return client
+    with _CLIENT_POOL_LOCK:
+        client = _CLIENT_POOL.get(key)
+        if client is not None:
+            return client
+        client = AsyncOpenAI(
+            api_key=config.api_key,
+            base_url=config.base_url,
+            max_retries=1,
+            timeout=httpx.Timeout(60.0, connect=5.0),
+        )
+        _CLIENT_POOL[key] = client
+        return client
+
+
 class OpenAIPlanner:
     def __init__(self, provider: str | None = None) -> None:
         self.config = ProviderRegistry.get(provider)
-        if not self.config.api_key:
-            self.client = None
-        else:
-            self.client = AsyncOpenAI(
-                api_key=self.config.api_key,
-                base_url=self.config.base_url,
-            )
+        self.client = _get_shared_client(self.config)
 
     async def plan(
         self,
@@ -146,43 +168,15 @@ class OpenAIPlanner:
                 user,
             )
 
-        if hasattr(self.client, "responses"):
-            response = await self.client.responses.create(
-                model=self.config.model_planner,
-                input=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            )
-            content = _extract_response_text(response)
-            if not content:
-                raise RuntimeError("invalid planner response: empty content")
-            logger.info(
-                "planner response provider=%s model=%s session_id=%s turn=%s step=%s raw=%s",
-                self.config.name,
-                self.config.model_planner,
-                context.get("session_id"),
-                context.get("turn"),
-                context.get("step"),
-                content,
-            )
-            if action_normalizer:
-                mapped = action_normalizer(content)
-                if mapped:
-                    return mapped
-            try:
-                return AgentActionModel.model_validate_json(content).root
-            except Exception as exc:
-                raise RuntimeError(f"invalid planner response: {exc}") from exc
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
 
-        response = await self.client.chat.completions.create(
-            model=self.config.model_planner,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
-        content = response.choices[0].message.content or ""
+        # 统一使用 chat.completions 流式接口，收集完整内容后解析。
+        # 流式调用可以更早建立连接、降低 TTFB，部分提供商流式首 token 更快。
+        content = await self._stream_collect(messages)
+
         logger.info(
             "planner response provider=%s model=%s session_id=%s turn=%s step=%s raw=%s",
             self.config.name,
@@ -201,17 +195,28 @@ class OpenAIPlanner:
         except Exception as exc:
             raise RuntimeError(f"invalid planner response: {exc}") from exc
 
+    async def _stream_collect(self, messages: list[dict[str, str]]) -> str:
+        """流式收集 planner 响应，减少 TTFB。"""
+        stream = await self.client.chat.completions.create(
+            model=self.config.model_planner,
+            messages=messages,
+            stream=True,
+        )
+        chunks: list[str] = []
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                chunks.append(delta)
+        content = "".join(chunks)
+        if not content:
+            raise RuntimeError("invalid planner response: empty content")
+        return content
+
 
 class OpenAIWriter:
     def __init__(self, provider: str | None = None) -> None:
         self.config = ProviderRegistry.get(provider)
-        if not self.config.api_key:
-            self.client = None
-        else:
-            self.client = AsyncOpenAI(
-                api_key=self.config.api_key,
-                base_url=self.config.base_url,
-            )
+        self.client = _get_shared_client(self.config)
 
     async def stream(self, system: str, user: str) -> AsyncGenerator[str, None]:
         if not self.client:

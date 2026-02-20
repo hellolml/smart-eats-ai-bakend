@@ -117,13 +117,17 @@ async def _refresh_observation_context(
     if state.message:
         should_log = not state.user_message_logged or state.last_user_message != state.message
 
-    state.history = await history.load_history(
+    # 并行执行独立的 IO 操作：加载历史 + 搜索记忆
+    history_coro = history.load_history(
         db,
         redis_client,
         state.session_id,
         settings.CHAT_HISTORY_LIMIT,
         state.message if not should_log else None,
     )
+    memory_coro = memory.search_memories(db, state.user_id, state.message or "", redis_client=redis_client)
+    state.history, memories = await asyncio.gather(history_coro, memory_coro)
+
     if state.message and should_log:
         logger.info(
             "user_message session_id=%s message=%s",
@@ -149,8 +153,7 @@ async def _refresh_observation_context(
         state.intent = agent_config.intent_resolver(state) or "unknown"
     elif not state.intent:
         state.intent = "unknown"
-    
-    memories = await memory.search_memories(db, state.user_id, state.message or "")
+
     state.context = _build_observation_context(
         state,
         agent_config,
@@ -178,6 +181,49 @@ def _fallback_final() -> dict[str, Any]:
         followups=["可以换个说法试试吗？", "你更想在家做还是出去吃？"],
         warnings=[],
     ).model_dump()
+
+
+def _render_final_text(final_json: dict[str, Any]) -> str:
+    recommendations = final_json.get("recommendations")
+    followups = final_json.get("followups")
+    warnings = final_json.get("warnings")
+
+    rec_lines: list[str] = []
+    if isinstance(recommendations, list):
+        for item in recommendations:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    rec_lines.append(text)
+                continue
+            if isinstance(item, dict):
+                title = str(item.get("title") or "").strip()
+                reason = str(item.get("reason") or "").strip()
+                if title and reason:
+                    rec_lines.append(f"{title}（{reason}）")
+                elif title:
+                    rec_lines.append(title)
+
+    follow_lines: list[str] = []
+    if isinstance(followups, list):
+        follow_lines = [str(item).strip() for item in followups if str(item).strip()]
+
+    warning_lines: list[str] = []
+    if isinstance(warnings, list):
+        warning_lines = [str(item).strip() for item in warnings if str(item).strip()]
+
+    chunks: list[str] = []
+    if rec_lines:
+        chunks.append("；".join(rec_lines))
+    if follow_lines:
+        chunks.append("你可以继续：" + "；".join(follow_lines))
+    if warning_lines:
+        chunks.append("注意：" + "；".join(warning_lines))
+
+    text = "\n".join(chunks).strip()
+    if text:
+        return text
+    return "好的。"
 
 
 def _validate_args(
@@ -841,6 +887,69 @@ async def run_chat_stream(
     history_cache = history.create_history_cache()
     history.set_current_cache(history_cache)
     try:
+        # ---- 快速通道：由业务 agent 的回调决定是否命中 ----
+        if agent_config.fast_path_decider and agent_config.fast_path_decider(state):
+            await _ensure_chat_session(db, state)
+            await _refresh_observation_context(
+                db, redis_client, state, agent_config, emit_context_event=False,
+            )
+            # intent_resolver 可能将 intent 修正为需要工具的类型
+            if state.intent not in ("chat", "unknown"):
+                logger.info(
+                    "fast_path_rejected session_id=%s intent=%s",
+                    state.session_id, state.intent,
+                )
+            else:
+                logger.info(
+                    "fast_path_enter session_id=%s message=%s",
+                    state.session_id, state.message,
+                )
+                system_prompt: str | None = None
+                if agent_config.fast_path_system_prompt_builder:
+                    system_prompt = agent_config.fast_path_system_prompt_builder(state)
+                if not system_prompt and state.context and state.context.get("system_prompt"):
+                    system_prompt = state.context["system_prompt"]
+                if not system_prompt:
+                    system_prompt = "You are a helpful assistant."
+                writer_prompt = (
+                    agent_config.fast_path_writer_prompt_builder(state)
+                    if agent_config.fast_path_writer_prompt_builder
+                    else (state.message or "")
+                )
+                token = set_llm_log_context(
+                    {
+                        "session_id": state.session_id,
+                        "turn": state.turn_index,
+                        "step": "fast_path",
+                    }
+                )
+                assistant_chunks: list[str] = []
+                try:
+                    async for delta in writer.stream(system_prompt, writer_prompt):
+                        if await request.is_disconnected():
+                            return
+                        if await redis_client.get(cancel_key):
+                            yield {"event": "final", "data": {"stopped": True}}
+                            return
+                        assistant_chunks.append(delta)
+                        yield {"event": "delta", "data": {"token": delta}}
+                        await asyncio.sleep(0)
+                finally:
+                    reset_llm_log_context(token)
+
+                answer_text = "".join(assistant_chunks)
+                fast_final = FinalAnswer(
+                    recommendations=[],
+                    followups=[],
+                    warnings=[],
+                ).model_dump()
+                await history.save_assistant_message(
+                    db, redis_client, state.session_id, answer_text, fast_final,
+                )
+                yield {"event": "final", "data": {"stopped": False, "answer": fast_final}}
+                return
+
+        # ---- 完整 Agent 流程 ----
         async with checkpointer_context() as checkpointer:
             graph = build_agent_graph(
                 db=db,
@@ -922,6 +1031,9 @@ async def run_chat_stream(
                 ):
                     yield item
 
+            # 立即发送 "thinking" 事件，前端可以马上显示思考动画
+            yield {"event": "thinking", "data": {"status": "start"}}
+
             async for updated in _stream_graph():
                 if await request.is_disconnected():
                     return
@@ -957,41 +1069,25 @@ async def run_chat_stream(
             else:
                 latest_state["final_json"] = final_json
 
-        writer_prompt = agent_config.writer_prompt_builder(final_json)
-        if isinstance(latest_state, ChatState):
-            writer_state = latest_state
-        elif isinstance(latest_state, dict):
-            writer_state = ChatState(**latest_state)
-        else:
-            writer_state = state
-        token = set_llm_log_context(
-            {
-                "session_id": writer_state.session_id,
-                "turn": writer_state.turn_index,
-                "step": "final",
-            }
-        )
-        assistant_chunks: list[str] = []
-        try:
-            async for delta in writer.stream("You are a helpful assistant.", writer_prompt):
-                if await request.is_disconnected():
-                    return
-                if await redis_client.get(cancel_key):
-                    yield {"event": "final", "data": {"stopped": True}}
-                    return
-                assistant_chunks.append(delta)
-                for piece in _iter_delta_chunks(delta):
-                    yield {"event": "delta", "data": {"token": piece}}
-                    await asyncio.sleep(0)
-        finally:
-            reset_llm_log_context(token)
+        # 通知前端思考阶段结束，即将开始输出文字
+        yield {"event": "thinking", "data": {"status": "done"}}
+
+        answer_text = _render_final_text(final_json)
+        if await request.is_disconnected():
+            return
+        if await redis_client.get(cancel_key):
+            yield {"event": "final", "data": {"stopped": True}}
+            return
+
+        yield {"event": "delta", "data": {"token": answer_text}}
+        await asyncio.sleep(0)
 
         if isinstance(latest_state, ChatState):
             await history.save_assistant_message(
                 db,
                 redis_client,
                 latest_state.session_id,
-                "".join(assistant_chunks),
+                answer_text,
                 latest_state.final_json,
             )
         else:
@@ -1000,7 +1096,7 @@ async def run_chat_stream(
                 db,
                 redis_client,
                 temp_state.session_id,
-                "".join(assistant_chunks),
+                answer_text,
                 temp_state.final_json,
             )
         yield {"event": "final", "data": {"stopped": False, "answer": final_json}}

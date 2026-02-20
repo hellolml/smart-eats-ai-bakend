@@ -21,16 +21,16 @@ SYSTEM_PROMPT_PATH = os.path.join(
 
 def smart_intent_resolver(state: ChatState) -> str | None:
     import json
-    
+
     text = (state.message or "").strip().lower()
     if not text:
         return "unknown"
-    
+
     # 确认选择信号（优先级高）
     eat_out_tokens = ("出去吃", "外出", "附近餐厅", "找餐厅", "吃饭", "下馆子")
     cook_home_tokens = ("在家做", "做饭", "菜谱", "食谱", "冰箱")
     route_tokens = ("怎么走", "路线", "导航", "去那里", "去那儿", "到", "到这家")
-    
+
     # 检查是否是确认选择（用户提到之前推荐的菜名）
     # 从历史消息中查找之前的食谱推荐
     recipe_titles = []
@@ -50,12 +50,12 @@ def smart_intent_resolver(state: ChatState) -> str | None:
                             recipe_titles.append(title)
                 except (json.JSONDecodeError, AttributeError):
                     pass
-    
+
     # 如果用户消息包含之前推荐的菜名，这是确认选择
     for title in recipe_titles:
         if title in text:
             return "confirm_recipe"
-    
+
     if any(token in text for token in route_tokens):
         return "route"
     if any(token in text for token in cook_home_tokens):
@@ -65,10 +65,141 @@ def smart_intent_resolver(state: ChatState) -> str | None:
     return "chat"
 
 
-def smart_tool_plan_router(state: ChatState) -> list[dict] | None:
-    """保留扩展点，但默认不做硬编码路由，让 LLM 自主决定是否调用工具。"""
-    _ = state
-    return None
+# 需要工具调用的关键词（命中任一则不走 fast path）
+_FAST_PATH_TOOL_KEYWORDS = (
+    "附近", "餐厅", "饭店", "外卖", "怎么走", "路线", "导航",
+    "天气", "菜谱", "食谱", "做法", "冰箱", "食材",
+    "推荐", "搜索", "查找", "找一下", "帮我找",
+    "在家做", "出去吃", "下馆子", "吃什么",
+    "recipe", "restaurant", "weather", "route", "navigate",
+)
+
+
+def smart_fast_path_decider(state: ChatState) -> bool:
+    """业务层 fast path 判定：仅处理无需工具的简单闲聊。"""
+    text = (state.message or "").strip()
+    if not text:
+        return False
+    if state.scene != "chat":
+        return False
+    # 有 checkpoint 恢复/重放需求的走完整流程
+    if state.resume_from_checkpoint or state.replay_from_checkpoint or state.checkpoint_ref:
+        return False
+    # 有 context_overrides 的走完整流程
+    if state.context_overrides:
+        return False
+    text_lower = text.lower()
+    if any(kw in text_lower for kw in _FAST_PATH_TOOL_KEYWORDS):
+        return False
+    return True
+
+
+def smart_fast_path_system_prompt_builder(state: ChatState) -> str | None:
+    if state.context and state.context.get("system_prompt"):
+        return state.context["system_prompt"]
+    return "你是 SmartEats 智能助手，帮助用户解决「吃什么」的问题。用中文回答，语气友好自然。"
+
+
+def smart_fast_path_writer_prompt_builder(state: ChatState) -> str:
+    """为 fast path 构建 Writer prompt，直接基于最近对话历史生成回复。"""
+    parts: list[str] = []
+    recent = state.history[-10:] if state.history else []
+    if recent:
+        parts.append("对话历史：")
+        for msg in recent:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                parts.append(f"用户: {content}")
+            elif role == "assistant":
+                parts.append(f"助手: {content}")
+        parts.append("")
+    parts.append(f"用户最新消息: {state.message}")
+    parts.append("\n请直接回复用户，语气友好自然。使用中文回答。")
+    return "\n".join(parts)
+
+
+def _normalize_coord(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number != 0 else None
+
+
+def _extract_location_from_context(context: dict[str, Any] | None) -> tuple[float | None, float | None]:
+    if not isinstance(context, dict):
+        return None, None
+
+    env = context.get("environment") if isinstance(context.get("environment"), dict) else {}
+    env_location = env.get("location") if isinstance(env.get("location"), dict) else {}
+    top_location = context.get("location") if isinstance(context.get("location"), dict) else {}
+
+    lat = _normalize_coord(env_location.get("lat"))
+    lng = _normalize_coord(env_location.get("lng"))
+    if lat is None or lng is None:
+        lat = lat if lat is not None else _normalize_coord(top_location.get("lat"))
+        lng = lng if lng is not None else _normalize_coord(top_location.get("lng"))
+    return lat, lng
+
+
+def _extract_location_from_observations(observations: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    for item in reversed(observations):
+        if not isinstance(item, dict):
+            continue
+        tool_name = item.get("tool")
+        result = item.get("result")
+        if tool_name not in {"get_ip_location", "geocode_location"}:
+            continue
+        if not isinstance(result, dict):
+            continue
+        lat = _normalize_coord(result.get("lat"))
+        lng = _normalize_coord(result.get("lng"))
+        if lat is not None and lng is not None:
+            return lat, lng
+    return None, None
+
+
+def _normalize_restaurant_query(message: str | None) -> str:
+    text = (message or "").strip()
+    if not text:
+        return "美食"
+    generic_phrases = {
+        "出去吃",
+        "附近吃什么",
+        "附近有啥吃的",
+        "吃什么",
+        "找吃的",
+        "下馆子",
+        "附近餐厅",
+    }
+    if text in generic_phrases:
+        return "美食"
+    return text
+
+
+def smart_tool_plan_router(state: ChatState) -> list[dict[str, Any]] | None:
+    """业务层规则路由：高频吃饭链路优先走确定性工具编排。"""
+    if state.intent != "eat_out":
+        return None
+
+    lat, lng = _extract_location_from_context(state.context)
+    if lat is None or lng is None:
+        lat, lng = _extract_location_from_observations(state.observations)
+
+    if lat is not None and lng is not None:
+        return [
+            {
+                "name": "search_restaurants",
+                "args": {
+                    "query": _normalize_restaurant_query(state.message),
+                    "lat": lat,
+                    "lng": lng,
+                },
+            }
+        ]
+
+    return [{"name": "get_ip_location", "args": {}}]
 
 
 def smart_context_extender(state: ChatState) -> dict:
@@ -288,5 +419,8 @@ def _smart_eats_agent() -> AgentConfig:
         serial_execution_decider=smart_serial_execution_decider,
         tool_result_previewer=smart_tool_result_previewer,
         final_action_hook=smart_final_action_hook,
+        fast_path_decider=smart_fast_path_decider,
+        fast_path_system_prompt_builder=smart_fast_path_system_prompt_builder,
+        fast_path_writer_prompt_builder=smart_fast_path_writer_prompt_builder,
     )
 

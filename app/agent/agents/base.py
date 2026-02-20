@@ -80,19 +80,42 @@ def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
     payload = match.group(1).strip()
     if not payload:
         return []
+
+    # 兼容格式1：<tool_calls>[{"tool": {...}}]</tool_calls>
     try:
         data = json.loads(payload)
     except json.JSONDecodeError:
+        data = None
+
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict) or len(item) != 1:
+                return None
+            name, params = next(iter(item.items()))
+            if not isinstance(name, str) or not isinstance(params, dict):
+                return None
+        return data
+
+    # 兼容格式2：<tool_calls><tool_call>{"tool": {...}}</tool_call>...</tool_calls>
+    blocks = re.findall(r"<tool_call>(.*?)</tool_call>", payload, re.DOTALL)
+    if not blocks:
         return None
-    if not isinstance(data, list):
-        return None
-    for item in data:
+    calls: list[dict[str, dict[str, Any]]] = []
+    for block in blocks:
+        chunk = block.strip()
+        if not chunk:
+            continue
+        try:
+            item = json.loads(chunk)
+        except json.JSONDecodeError:
+            return None
         if not isinstance(item, dict) or len(item) != 1:
             return None
         name, params = next(iter(item.items()))
         if not isinstance(name, str) or not isinstance(params, dict):
             return None
-    return data
+        calls.append(item)
+    return calls
 
 
 def normalize_action_from_raw(content: str) -> AgentAction | None:

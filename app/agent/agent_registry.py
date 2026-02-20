@@ -20,6 +20,9 @@ ToolArgsNormalizer = Callable[[str, dict[str, Any]], dict[str, Any]]
 SerialExecutionDecider = Callable[[list[dict[str, Any]]], bool]
 ToolResultPreviewer = Callable[[str, Any], Any]
 FinalActionHook = Callable[[Any, dict[str, Any], Any], Awaitable[None]]
+FastPathDecider = Callable[[Any], bool]
+FastPathSystemPromptBuilder = Callable[[Any], str | None]
+FastPathWriterPromptBuilder = Callable[[Any], str]
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,9 @@ class AgentConfig:
     serial_execution_decider: SerialExecutionDecider | None = None
     tool_result_previewer: ToolResultPreviewer | None = None
     final_action_hook: FinalActionHook | None = None
+    fast_path_decider: FastPathDecider | None = None
+    fast_path_system_prompt_builder: FastPathSystemPromptBuilder | None = None
+    fast_path_writer_prompt_builder: FastPathWriterPromptBuilder | None = None
 
 
 AGENTS: dict[str, AgentConfig] = {}
@@ -59,6 +65,9 @@ def create_agent_config(
     serial_execution_decider: SerialExecutionDecider | None = None,
     tool_result_previewer: ToolResultPreviewer | None = None,
     final_action_hook: FinalActionHook | None = None,
+    fast_path_decider: FastPathDecider | None = None,
+    fast_path_system_prompt_builder: FastPathSystemPromptBuilder | None = None,
+    fast_path_writer_prompt_builder: FastPathWriterPromptBuilder | None = None,
 ) -> AgentConfig:
     return AgentConfig(
         name=name,
@@ -76,6 +85,9 @@ def create_agent_config(
         serial_execution_decider=serial_execution_decider,
         tool_result_previewer=tool_result_previewer,
         final_action_hook=final_action_hook,
+        fast_path_decider=fast_path_decider,
+        fast_path_system_prompt_builder=fast_path_system_prompt_builder,
+        fast_path_writer_prompt_builder=fast_path_writer_prompt_builder,
     )
 
 

@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from app.agent.graph import _render_final_text
+
 
 @pytest.mark.asyncio
 async def test_chat_stream_stop(client):
@@ -51,3 +53,27 @@ async def test_chat_stream_stop(client):
 
     assert got_final
     assert stopped_flag is True
+
+
+def test_render_final_text_with_recommendations_followups_warnings():
+    final_json = {
+        "recommendations": [
+            {"type": "note", "title": "推荐番茄炒蛋", "reason": "简单快手"},
+            {"type": "note", "title": "推荐青椒肉丝"},
+        ],
+        "followups": ["想要10分钟内完成", "偏清淡口味"],
+        "warnings": ["食材过敏请先确认"],
+    }
+
+    text = _render_final_text(final_json)
+
+    assert "推荐番茄炒蛋（简单快手）" in text
+    assert "推荐青椒肉丝" in text
+    assert "你可以继续：想要10分钟内完成；偏清淡口味" in text
+    assert "注意：食材过敏请先确认" in text
+
+
+def test_render_final_text_empty_returns_default():
+    text = _render_final_text({"recommendations": [], "followups": [], "warnings": []})
+
+    assert text == "好的。"
