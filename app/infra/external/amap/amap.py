@@ -113,18 +113,45 @@ def _extract_regeo_region(payload: Any) -> dict[str, str] | None:
             return value.strip()
         return None
 
-    district = _pick(component.get("district"))
-    city = _pick(component.get("city"))
-    province = _pick(component.get("province"))
+    district = _pick(component.get("district")) or _pick(payload.get("district"))
+    city = _pick(component.get("city")) or _pick(payload.get("city"))
+    province = _pick(component.get("province")) or _pick(payload.get("province"))
+    township = _pick(component.get("township"))
 
-    if not district:
-        district = _pick(payload.get("district"))
-    if not city:
-        city = _pick(payload.get("city"))
-    if not province:
-        province = _pick(payload.get("province"))
+    neighborhood_name = None
+    neighborhood = component.get("neighborhood")
+    if isinstance(neighborhood, dict):
+        neighborhood_name = _pick(neighborhood.get("name"))
 
-    region = {k: v for k, v in {"district": district, "city": city, "province": province}.items() if v}
+    building_name = None
+    building = component.get("building")
+    if isinstance(building, dict):
+        building_name = _pick(building.get("name"))
+
+    street = _pick(component.get("streetNumber"))
+    if not street:
+        street_number = component.get("streetNumber")
+        if isinstance(street_number, dict):
+            street_name = _pick(street_number.get("street"))
+            number = _pick(street_number.get("number"))
+            street = "".join(part for part in [street_name, number] if part)
+
+    village = _pick(component.get("village"))
+
+    region = {
+        k: v
+        for k, v in {
+            "province": province,
+            "city": city,
+            "district": district,
+            "township": township,
+            "village": village,
+            "street": street,
+            "neighborhood": neighborhood_name,
+            "building": building_name,
+        }.items()
+        if v
+    }
     return region or None
 
 
@@ -421,8 +448,9 @@ async def reverse_geocode_region(
     if lat is None or lng is None:
         return None
 
-    args = {"location": f"{lng},{lat}"}
-    for tool_key in ("maps_regeo", "maps_regeocode", "maps_reverse_geocode"):
+    args = {"location": f"{lng},{lat}", "extensions": "all"}
+    # 优先使用当前 MCP 实际可用工具名，避免无效探测导致噪声报错
+    for tool_key in ("maps_regeocode", "maps_reverse_geocode"):
         payload = await _fetch_tool_payload(tool_key, args, servers_path)
         if payload is None:
             continue

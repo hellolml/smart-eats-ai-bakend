@@ -1,12 +1,32 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 import redis.asyncio as redis
 
 from app.agent.tools_registry import register_tool
 from app.domain.restaurant.service import RestaurantService
 from app.agent.tools.restaurant_cache import cache_restaurants
+from app.infra.external.amap import amap
+
+logger = logging.getLogger("agent.tools.location")
+
+
+def _format_region(region: dict[str, Any] | None) -> str:
+    if not isinstance(region, dict):
+        return ""
+    parts = [
+        str(region.get("province") or "").strip(),
+        str(region.get("city") or "").strip(),
+        str(region.get("district") or "").strip(),
+        str(region.get("township") or "").strip(),
+        str(region.get("village") or "").strip(),
+        str(region.get("street") or "").strip(),
+        str(region.get("neighborhood") or "").strip(),
+        str(region.get("building") or "").strip(),
+    ]
+    return " ".join([part for part in parts if part]).strip()
 
 
 def _normalize_coord(value: Any) -> float | None:
@@ -88,13 +108,34 @@ async def search_restaurants(args: dict[str, Any]) -> list[dict[str, Any]] | dic
     # 优先使用显式坐标，缺失时回退到上下文里的设备定位
     lat = _normalize_coord(args.get("lat"))
     lng = _normalize_coord(args.get("lng"))
+    location_source = "tool_args"
     if lat is None or lng is None:
         ctx_lat, ctx_lng = _extract_location_from_context(args.get("context"))
         lat = lat if lat is not None else ctx_lat
         lng = lng if lng is not None else ctx_lng
+        if lat is not None and lng is not None:
+            location_source = "context"
 
     if lat is None or lng is None:
+        logger.info(
+            "location_used_for_search session_id=%s source=none error=missing_location",
+            session_id,
+        )
         return {"error": "missing_location"}
+
+    region = await amap.reverse_geocode_region(
+        {"lat": lat, "lng": lng},
+        servers_path=args.get("servers_path"),
+    )
+    readable_address = _format_region(region)
+    logger.info(
+        "location_used_for_search session_id=%s source=%s lat=%s lng=%s address=%s",
+        session_id,
+        location_source,
+        lat,
+        lng,
+        readable_address,
+    )
     
     # 获取搜索参数
     query = args.get("query")

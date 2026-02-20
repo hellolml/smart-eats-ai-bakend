@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 import httpx
 import redis.asyncio as redis
@@ -9,12 +10,14 @@ from app.agent.tools.location_cache import cache_location
 from app.agent.tools_registry import register_tool
 from app.infra.external.amap import amap
 
+logger = logging.getLogger("agent.tools.location")
+
 
 @register_tool(
     name="get_ip_location",
     description=(
-        "Resolve IP address to location. Input: {ip:string?}. "
-        "Output: {lat:number,lng:number,city:string} or {error:string}. "
+        "Resolve current location using device coordinates first, then IP. Input: {ip:string?}. "
+        "Output: {lat:number,lng:number,city:string,location_source:string} or {error:string}. "
         "Example input: {\"ip\":\"8.8.8.8\"}."
     ),
     input_schema={
@@ -28,6 +31,9 @@ from app.infra.external.amap import amap
             "lat": {"type": "number"},
             "lng": {"type": "number"},
             "city": {"type": "string"},
+            "location_source": {"type": "string"},
+            "address": {"type": "string"},
+            "region": {"type": "object"},
             "error": {"type": "string"},
         },
     },
@@ -36,29 +42,102 @@ async def get_ip_location(args: dict[str, Any]) -> dict[str, Any]:
     redis_client = args.get("redis_client")
     if not isinstance(redis_client, redis.Redis):
         raise RuntimeError("redis client unavailable")
+
     session_id = args.get("session_id")
+    servers_path = args.get("servers_path")
+
+    # 1) Prefer frontend device location, same priority as /home/overview
+    context = args.get("context") if isinstance(args.get("context"), dict) else {}
+    device_location = _extract_device_location(context)
+    if device_location:
+        region = await amap.reverse_geocode_region(device_location, servers_path=servers_path)
+        city = None
+        if isinstance(region, dict):
+            city = region.get("district") or region.get("city") or region.get("province")
+        readable_address = _format_region(region)
+        logger.info(
+            "location_tool_result session_id=%s source=device lat=%s lng=%s city=%s address=%s",
+            session_id,
+            device_location.get("lat"),
+            device_location.get("lng"),
+            city,
+            readable_address,
+        )
+        await cache_location(redis_client, session_id, device_location.get("lat"), device_location.get("lng"), city)
+        return {
+            "lat": device_location.get("lat"),
+            "lng": device_location.get("lng"),
+            "city": city,
+            "location_source": "device",
+            "address": readable_address,
+            "region": region,
+        }
+
+    # 2) Fallback to AMap IP location (MCP)
     ip = args.get("ip") or args.get("client_ip")
     if _is_local_ip(ip):
         ip = await _fetch_public_ip()
     if not isinstance(ip, str) or not ip:
         return {"error": "missing_ip"}
-    location, city = await amap.get_ip_location(ip, servers_path=args.get("servers_path"))
-    location_source = "amap_ip"
-    if not location:
-        fallback = await _fallback_ip_lookup(ip)
-        if fallback:
-            location = {"lat": fallback["lat"], "lng": fallback["lng"]}
-            city = fallback.get("city") or city
-            location_source = "ipwhois"
+
+    location, city = await amap.get_ip_location(ip, servers_path=servers_path)
     if location:
+        region = await amap.reverse_geocode_region(location, servers_path=servers_path)
+        readable_address = _format_region(region)
+        logger.info(
+            "location_tool_result session_id=%s source=amap_ip ip=%s lat=%s lng=%s city=%s address=%s",
+            session_id,
+            ip,
+            location.get("lat"),
+            location.get("lng"),
+            city,
+            readable_address,
+        )
         await cache_location(redis_client, session_id, location.get("lat"), location.get("lng"), city)
         return {
             "lat": location.get("lat"),
             "lng": location.get("lng"),
             "city": city,
-            "location_source": location_source,
+            "location_source": "amap_ip",
+            "address": readable_address,
+            "region": region,
         }
+
+    logger.info("location_tool_result session_id=%s source=amap_ip ip=%s error=missing_location", session_id, ip)
     return {"error": "missing_location"}
+
+
+def _format_region(region: dict[str, Any] | None) -> str:
+    if not isinstance(region, dict):
+        return ""
+    parts = [
+        str(region.get("province") or "").strip(),
+        str(region.get("city") or "").strip(),
+        str(region.get("district") or "").strip(),
+        str(region.get("township") or "").strip(),
+        str(region.get("village") or "").strip(),
+        str(region.get("street") or "").strip(),
+        str(region.get("neighborhood") or "").strip(),
+        str(region.get("building") or "").strip(),
+    ]
+    return " ".join([part for part in parts if part]).strip()
+
+
+def _extract_device_location(context: dict[str, Any]) -> dict[str, float] | None:
+    env = context.get("environment") if isinstance(context.get("environment"), dict) else {}
+    env_location = env.get("location") if isinstance(env.get("location"), dict) else {}
+    top_location = context.get("location") if isinstance(context.get("location"), dict) else {}
+    location = env_location or top_location
+    lat = location.get("lat")
+    lng = location.get("lng")
+    try:
+        lat = float(lat)
+        lng = float(lng)
+    except (TypeError, ValueError):
+        return None
+    if lat == 0 or lng == 0:
+        return None
+    return {"lat": lat, "lng": lng}
 
 
 def _is_local_ip(value: Any) -> bool:
@@ -77,27 +156,3 @@ async def _fetch_public_ip() -> str | None:
             return ip if isinstance(ip, str) and ip else None
     except Exception:
         return None
-
-
-async def _fallback_ip_lookup(ip: str) -> dict[str, Any] | None:
-    try:
-        async with httpx.AsyncClient(timeout=2.5) as client:
-            resp = await client.get(f"https://ipwho.is/{ip}")
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception:
-        return None
-
-    if not isinstance(data, dict) or data.get("success") is False:
-        return None
-
-    lat = data.get("latitude")
-    lng = data.get("longitude")
-    city = data.get("city") or data.get("region")
-    try:
-        lat = float(lat)
-        lng = float(lng)
-    except (TypeError, ValueError):
-        return None
-
-    return {"lat": lat, "lng": lng, "city": city if isinstance(city, str) else None}

@@ -95,10 +95,13 @@ def smart_fast_path_decider(state: ChatState) -> bool:
 
 
 def smart_fast_path_system_prompt_builder(state: ChatState) -> str | None:
+    base = smart_system_prompt({"context": state.context or {}})
     return (
-        "你是 SmartEats 智能助手。"
-        "只输出自然语言，不要输出 JSON、代码块、字段名或结构化包装。"
-        "用中文回答，语气友好自然。"
+        f"{base}\n\n"
+        "## Fast Path 输出约束\n"
+        "- 在无需工具调用时，直接用自然语言回答用户。\n"
+        "- 禁止输出 JSON、代码块、字段名或结构化包装。\n"
+        "- 若问题需要实时信息/定位/检索能力，请遵循 system.md 的工具流程。"
     )
 
 
@@ -180,9 +183,20 @@ def _normalize_restaurant_query(message: str | None) -> str:
     return text
 
 
+def _has_tool_observation(observations: list[dict[str, Any]], tool_name: str) -> bool:
+    for item in observations:
+        if isinstance(item, dict) and item.get("tool") == tool_name:
+            return True
+    return False
+
+
 def smart_tool_plan_router(state: ChatState) -> list[dict[str, Any]] | None:
     """业务层规则路由：高频吃饭链路优先走确定性工具编排。"""
     if state.intent != "eat_out":
+        return None
+
+    # 已经搜过餐厅就交还给大模型组织自然回复，避免重复调用直到 steps 耗尽触发 fallback。
+    if _has_tool_observation(state.observations, "search_restaurants"):
         return None
 
     lat, lng = _extract_location_from_context(state.context)
@@ -200,6 +214,10 @@ def smart_tool_plan_router(state: ChatState) -> list[dict[str, Any]] | None:
                 },
             }
         ]
+
+    # 若本轮已经尝试过 IP 定位且失败，不再重复调用，交给后续回复引导用户补充位置。
+    if _has_tool_observation(state.observations, "get_ip_location"):
+        return None
 
     return [{"name": "get_ip_location", "args": {}}]
 
@@ -309,16 +327,40 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         state.context["fridge_items"] = items
         return None
     if tool_name == "search_restaurants":
-        if isinstance(result, dict) and result.get("error") == "missing_location":
+        if isinstance(result, dict):
+            if result.get("error") == "missing_location":
+                return FinalAnswer(
+                    recommendations=[
+                        {
+                            "type": "note",
+                            "title": "我还没拿到你的位置，先告诉我城市或地标，我马上给你筛附近店。",
+                            "reason": "定位暂时不可用。",
+                        }
+                    ],
+                    followups=["你现在在哪个城市？", "附近有什么地标/商场？", "也可以开启定位后再试一次。"],
+                    warnings=[],
+                ).model_dump()
             return FinalAnswer(
                 recommendations=[
                     {
                         "type": "note",
-                        "title": "先告诉我你想吃什么，我先按口味帮你筛一批。",
-                        "reason": "定位暂时不可用时，可先按口味/预算推荐，随后再结合定位优化距离。",
+                        "title": "我刚搜附近餐厅时出了点小问题。",
+                        "reason": "检索服务暂时异常。",
                     }
                 ],
-                followups=["你想吃什么口味？", "预算大概多少？", "如果允许定位，我可以按最近距离再排序。"],
+                followups=["你想吃什么口味？我先按偏好给你一版。", "稍后我也可以再帮你重试附近搜索。"],
+                warnings=[],
+            ).model_dump()
+        if isinstance(result, list) and not result:
+            return FinalAnswer(
+                recommendations=[
+                    {
+                        "type": "note",
+                        "title": "我按你当前位置搜了下，附近暂时没刷到合适的餐厅。",
+                        "reason": "可扩大范围或换关键词继续找。",
+                    }
+                ],
+                followups=["要不要我把范围放大到 5-10 公里？", "或者你说个口味（比如火锅/烧烤/粤菜），我再精确筛。"],
                 warnings=[],
             ).model_dump()
         return None

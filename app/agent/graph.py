@@ -931,6 +931,8 @@ async def run_chat_stream(
                 system_prompt: str | None = None
                 if agent_config.fast_path_system_prompt_builder:
                     system_prompt = agent_config.fast_path_system_prompt_builder(state)
+                if not system_prompt and state.context and state.context.get("system_prompt"):
+                    system_prompt = state.context["system_prompt"]
                 if not system_prompt:
                     system_prompt = "You are a helpful assistant. Reply with plain natural language only."
                 writer_prompt = (
