@@ -275,7 +275,7 @@ const HomeChef = () => {
                             initial={{ scale: 0.9, opacity: 0, y: 20 }}
                             animate={{ scale: 1, opacity: 1, y: 0 }}
                             exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                            className=" relative w-full max-w-sm bg-white rounded-[2.5rem] p-8 shadow-2xl border border-purple-50"
+                            className=" relative w-full max-w-sm bg-white rounded-[2.5rem] p-4 sm:p-6 md:p-8 shadow-2xl border border-purple-50"
                         >
                             <div className="flex justify-between items-center mb-6">
                                 <h3 className="text-lg font-black text-gray-800">新增食材</h3>
@@ -349,7 +349,7 @@ const HomeChef = () => {
                             initial={{ scale: 0.9, opacity: 0, y: 20 }}
                             animate={{ scale: 1, opacity: 1, y: 0 }}
                             exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                            className=" relative w-full max-w-md bg-white rounded-[2.5rem] p-8 shadow-2xl border border-purple-50 max-h-[80vh] flex flex-col"
+                            className=" relative w-full max-w-md bg-white rounded-[2.5rem] p-4 sm:p-6 md:p-8 shadow-2xl border border-purple-50 max-h-[80vh] flex flex-col"
                         >
                             <div className="flex justify-between items-center mb-6 flex-shrink-0">
                                 <div>
@@ -421,7 +421,7 @@ const HomeChef = () => {
                             initial={{ scale: 0.9, opacity: 0, y: 20 }}
                             animate={{ scale: 1, opacity: 1, y: 0 }}
                             exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                            className="relative w-full max-w-md bg-white rounded-[2.5rem] p-8 shadow-2xl border border-purple-50 max-h-[80vh] flex felx-col"
+                            className="relative w-full max-w-md bg-white rounded-[2.5rem] p-4 sm:p-6 md:p-8 shadow-2xl border border-purple-50 max-h-[80vh] flex felx-col"
                         >
                             <div className="flex justify-between items-center mb-6 flex-shrink-0">
                                 <div>
@@ -532,7 +532,7 @@ const HomeChef = () => {
                             </div>
 
 
-                            <div className="flex-1 overflow-y-auto no-scrollbar p-8 space-y-8">
+                            <div className="flex-1 overflow-y-auto no-scrollbar p-6 sm:p-8 space-y-8">
                                 <div className="flex gap-6">
                                     <div className="flex items-center gap-2 bg-purple-50 px-4 py-2 rounded-2xl">
                                         <Clock size={16} className="text-[#7E57FF]" />

@@ -38,17 +38,17 @@ const Header = () => {
                             to="/profile"
                             className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 hover:bg-purple-100 transition-colors"
                         >
-                            <div className="w-6 h-6 rounded-full bg-[#7E57FF] text-white text-xs font-bold flex items-center justify-center">
+                            <div className="w-6 h-6 rounded-full bg-[#7E57FF] text-white text-xs font-bold flex items-center justify-center md:w-8 md:h-8 md:text-sm">
                                 {name ? name.charAt(0).toUpperCase() : 'U'}
                             </div>
-                            <span className="text-sm font-medium text-gray-700 max-w-[100px] truncate">
+                            <span className="text-sm font-medium text-gray-700 max-w-[100px] truncate hidden sm:block">
                                 {name || 'User'}
                             </span>
                         </Link>
                     ) : (
                         <Link
                             to="/login"
-                            className="px-3 py-1.5 rounded-full bg-[#7E57FF] text-white text-xs font-bold shadow-sm active:scale-90 transition-transform"
+                            className="px-3 py-1.5 rounded-full bg-[#7E57FF] text-white text-xs font-bold shadow-sm active:scale-90 transition-transform md:px-5 md:py-2 md:text-sm"
                         >
                             登录
                         </Link>

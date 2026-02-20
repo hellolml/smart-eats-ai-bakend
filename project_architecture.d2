@@ -1,0 +1,143 @@
+title: "Smart Eats AI - 项目架构图（逻辑视图）"
+direction: right
+
+classes: {
+  user_node: {
+    shape: person
+    style: {
+      fill: "#e0f2fe"
+      stroke: "#0284c7"
+      border-radius: 5
+      shadow: true
+    }
+  }
+  frontend_node: {
+    shape: rectangle
+    style: {
+      fill: "#f0fdf4"
+      stroke: "#16a34a"
+      border-radius: 8
+      shadow: true
+    }
+  }
+  backend_node: {
+    shape: rectangle
+    style: {
+      fill: "#fdf4ff"
+      stroke: "#d946ef"
+      border-radius: 8
+      shadow: true
+    }
+  }
+  db_node: {
+    shape: cylinder
+    style: {
+      fill: "#fffbeb"
+      stroke: "#d97706"
+      shadow: true
+    }
+  }
+  cache_node: {
+    shape: cylinder
+    style: {
+      fill: "#fef2f2"
+      stroke: "#dc2626"
+      shadow: true
+    }
+  }
+  external_node: {
+    shape: cloud
+    style: {
+      fill: "#f3f4f6"
+      stroke: "#4b5563"
+      shadow: true
+    }
+  }
+  service_node: {
+    shape: rectangle
+    style: {
+      fill: "#faf5ff"
+      stroke: "#a855f7"
+      border-radius: 4
+      shadow: true
+    }
+  }
+}
+
+client: "用户 / 客户端" { class: user_node }
+frontend: "Frontend\nReact + Vite\n(frontend/src)" { class: frontend_node }
+backend: "Backend API\nFastAPI\n(app/main.py)" { class: backend_node }
+api_router: "API Router\n/api/v1/*\n(app/api/v1/router.py)" { class: backend_node }
+
+domain: {
+  label: "Domain Services\n(app/domain)"
+  style: {
+    fill: transparent
+    stroke: "#a855f7"
+    border-radius: 8
+    stroke-dash: 5
+    stroke-width: 2
+  }
+  auth: "Auth" { class: service_node }
+  user: "User" { class: service_node }
+  preference: "Preference" { class: service_node }
+  fridge: "Fridge" { class: service_node }
+  recipe: "Recipe" { class: service_node }
+  restaurant: "Restaurant" { class: service_node }
+  context: "Context" { class: service_node }
+  chat: "Chat" { class: service_node }
+  game: "Game" { class: service_node }
+  appsvc: "App" { class: service_node }
+}
+
+agent: {
+  label: "Agent Layer\n(app/agent)"
+  style: {
+    fill: transparent
+    stroke: "#3b82f6"
+    border-radius: 8
+    stroke-dash: 5
+    stroke-width: 2
+  }
+  graph: "LangGraph Graph" { class: service_node; style.stroke: "#3b82f6"; style.fill: "#eff6ff" }
+  registry: "Agent/Tools Registry" { class: service_node; style.stroke: "#3b82f6"; style.fill: "#eff6ff" }
+  executor: "Tool Executor" { class: service_node; style.stroke: "#3b82f6"; style.fill: "#eff6ff" }
+  llm_adapters: "LLM Adapters" { class: service_node; style.stroke: "#3b82f6"; style.fill: "#eff6ff" }
+}
+
+infra: {
+  label: "Infra Layer\n(app/infra)"
+  style: {
+    fill: transparent
+    stroke: "#64748b"
+    border-radius: 8
+    stroke-dash: 5
+    stroke-width: 2
+  }
+  db: "PostgreSQL\n(SQLAlchemy)" { class: db_node }
+  redis: "Redis" { class: cache_node }
+  minio_stub: "MinIO Stub" { class: db_node }
+  external: "External APIs\nAMap / Weather / Meituan / Recipe" { class: external_node }
+}
+
+llm_provider: "LLM Provider\n(OpenAI-compatible)" { class: external_node }
+
+client -> frontend: "HTTP(S)"
+frontend -> backend: "调用 /api/v1"
+backend -> api_router
+api_router -> domain
+
+domain -> infra.db
+domain -> infra.redis
+domain -> infra.minio_stub
+domain -> infra.external
+
+domain.chat -> agent.graph: "对话/决策" { style: { animated: true; stroke: "#3b82f6"; stroke-width: 2 } }
+domain.appsvc -> agent.graph
+agent.graph -> agent.registry
+agent.graph -> agent.executor
+agent.graph -> agent.llm_adapters
+
+agent.graph -> infra.redis: "history/cache"
+agent.graph -> infra.db: "chat/memory"
+agent.llm_adapters -> llm_provider: "API Call" { style: { animated: true; stroke: "#f59e0b"; stroke-width: 2 } }

@@ -324,8 +324,8 @@ const Index = () => {
                     </div>
                 </div>
             </div>
-            <div className="flex-1 min-h-0 grid grid-cols-1 gap-3 md:gap-4">
-                <div className="h-full min-h-0">
+            <div className="flex-1 min-h-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+                <div className="h-full min-h-0 lg:col-span-2">
                     <motion.div
                         whileHover={{ scale: 1.005 }}
                         className="w-full h-full bg-[#7E57FF] text-white rounded-[2rem] md:rounded-[2.5rem] shadow-xl shadow-purple-100 flex-flex-col items-center justify-center gap-2 relative overflow-hidden group p-4 md:p-6"

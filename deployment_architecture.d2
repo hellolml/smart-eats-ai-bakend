@@ -1,0 +1,103 @@
+title: "Smart Eats AI - 部署架构图（HTTPS=true, 单域名）"
+direction: right
+
+classes: {
+  user_node: {
+    shape: person
+    style: {
+      fill: "#e0f2fe"
+      stroke: "#0284c7"
+      border-radius: 5
+      shadow: true
+    }
+  }
+  cloud_node: {
+    shape: cloud
+    style: {
+      fill: "#f3f4f6"
+      stroke: "#4b5563"
+      shadow: true
+    }
+  }
+  container_node: {
+    shape: package
+    style: {
+      fill: "#eff6ff"
+      stroke: "#2563eb"
+      border-radius: 4
+      shadow: true
+    }
+  }
+  db_node: {
+    shape: cylinder
+    style: {
+      fill: "#fffbeb"
+      stroke: "#d97706"
+      shadow: true
+    }
+  }
+  cache_node: {
+    shape: cylinder
+    style: {
+      fill: "#fef2f2"
+      stroke: "#dc2626"
+      shadow: true
+    }
+  }
+  volume_node: {
+    shape: rectangle
+    style: {
+      fill: "#f8fafc"
+      stroke: "#94a3b8"
+      stroke-dash: 5
+      border-radius: 3
+    }
+  }
+}
+
+internet_user: "Internet 用户" { class: user_node }
+domain_dns: "域名 DOMAIN" { class: cloud_node }
+letsencrypt: "Let's Encrypt" { class: cloud_node; style.fill: "#f0fdf4"; style.stroke: "#16a34a" }
+external_services: "外部服务\nLLM / 地图 / 天气 / 美团" { class: cloud_node }
+
+host: {
+  label: "Docker Host (network: smart-eats-net)"
+  style: {
+    fill: transparent
+    stroke: "#0ea5e9"
+    border-radius: 8
+    stroke-width: 2
+  }
+
+  gateway: "gateway (nginx)\n对外 80/443\n挂载 deploy/nginx/gateway.conf" { class: container_node; style.fill: "#f0fdf4"; style.stroke: "#16a34a" }
+  frontend_c: "frontend (nginx)\n仅内网访问\n使用 frontend/nginx.conf" { class: container_node; style.fill: "#f0fdf4"; style.stroke: "#16a34a" }
+  backend_c: "backend (uvicorn)\n内部端口 8000" { class: container_node; style.fill: "#fdf4ff"; style.stroke: "#d946ef" }
+  postgres_c: "postgres:15" { class: db_node }
+  redis_c: "redis:7" { class: cache_node }
+  certbot: "certbot" { class: container_node }
+
+  certbot_www: "volume: certbot_www" { class: volume_node }
+  certbot_conf: "volume: certbot_conf" { class: volume_node }
+  pg_data: "volume: pg_data" { class: volume_node }
+  redis_data: "volume: redis_data" { class: volume_node }
+
+  gateway -> frontend_c: "转发 /" { style.stroke-width: 2 }
+  gateway -> backend_c: "转发 /api/*, /docs" { style.stroke-width: 2 }
+
+  backend_c -> postgres_c: "DATABASE_URL"
+  backend_c -> redis_c: "REDIS_URL"
+  backend_c -> external_services
+
+  postgres_c -> pg_data
+  redis_c -> redis_data
+
+  certbot -> certbot_www: "写入 ACME challenge" { style.stroke-dash: 5; style.stroke: "#64748b" }
+  gateway -> certbot_www: "提供 /.well-known/acme-challenge/" { style.stroke-dash: 5; style.stroke: "#64748b" }
+
+  certbot -> certbot_conf: "签发/续期证书" { style.stroke-dash: 5; style.stroke: "#64748b" }
+  gateway -> certbot_conf: "读取 TLS 证书" { style.stroke-dash: 5; style.stroke: "#64748b" }
+}
+
+internet_user -> domain_dns: "访问 https://DOMAIN" { style.stroke-width: 2 }
+domain_dns -> host.gateway: "443 / 80" { style.stroke-width: 2 }
+host.certbot -> letsencrypt: "申请/续期" { style.animated: true; style.stroke: "#16a34a"; style.stroke-width: 2 }
