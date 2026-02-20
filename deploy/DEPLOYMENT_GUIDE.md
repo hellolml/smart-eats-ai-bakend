@@ -255,11 +255,6 @@ cd ~/code/smart-eats-ai-bakend
 # 查看状态
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep smart-eats
 
-# 查看日志
-docker logs -f --tail 200 smart-eats-backend
-docker logs -f --tail 200 smart-eats-frontend
-docker logs -f --tail 200 smart-eats-gateway
-
 # 重新部署（代码更新后）
 ./deploy/deploy.sh
 
@@ -267,7 +262,49 @@ docker logs -f --tail 200 smart-eats-gateway
 ./deploy/renew_https.sh
 ```
 
-### 7.1 部署后验收清单（Post-check）
+### 7.1 日志查看教程
+
+先确认容器名和状态：
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep smart-eats
+```
+
+实时跟踪日志（最常用）：
+
+```bash
+# 后端
+docker logs -f --tail 200 smart-eats-backend
+
+# 前端
+docker logs -f --tail 200 smart-eats-frontend
+
+# 网关（HTTPS 场景）
+docker logs -f --tail 200 smart-eats-gateway
+```
+
+只看最近一段时间（例如最近 10 分钟）：
+
+```bash
+docker logs --since 10m smart-eats-backend
+docker logs --since 10m smart-eats-frontend
+docker logs --since 10m smart-eats-gateway
+```
+
+快速看关键错误（按关键词过滤）：
+
+```bash
+docker logs --since 30m smart-eats-backend 2>&1 | grep -E 'ERROR|Traceback|Exception'
+docker logs --since 30m smart-eats-gateway 2>&1 | grep -E 'error|crit|emerg|failed'
+```
+
+也可用 Makefile 快捷命令查看最近日志：
+
+```bash
+make logs
+```
+
+### 7.2 部署后验收清单（Post-check）
 
 部署完成后，按下面顺序验收：
 
@@ -291,7 +328,7 @@ curl -k -I -m 8 https://<DOMAIN>/api/v1/ | head -n 8 || true
 - 注册/登录流程走通
 - 开发者工具 Network 中 API 请求都走 `https://<DOMAIN>/api/...`
 
-### 7.2 失败快速回滚（最短路径）
+### 7.3 失败快速回滚（最短路径）
 
 如果升级后异常，按以下顺序快速恢复：
 

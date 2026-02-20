@@ -51,7 +51,7 @@ done
 
 # Wait for frontend
 for i in {1..30}; do
-  if dc exec -T frontend wget -qO- http://localhost/healthz >/dev/null 2>&1; then
+  if dc exec -T frontend wget -qO- http://127.0.0.1/ >/dev/null 2>&1; then
     echo "[OK] Frontend is healthy"
     break
   fi
