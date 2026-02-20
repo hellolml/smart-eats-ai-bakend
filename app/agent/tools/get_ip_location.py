@@ -43,9 +43,21 @@ async def get_ip_location(args: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(ip, str) or not ip:
         return {"error": "missing_ip"}
     location, city = await amap.get_ip_location(ip, servers_path=args.get("servers_path"))
+    location_source = "amap_ip"
+    if not location:
+        fallback = await _fallback_ip_lookup(ip)
+        if fallback:
+            location = {"lat": fallback["lat"], "lng": fallback["lng"]}
+            city = fallback.get("city") or city
+            location_source = "ipwhois"
     if location:
         await cache_location(redis_client, session_id, location.get("lat"), location.get("lng"), city)
-        return {"lat": location.get("lat"), "lng": location.get("lng"), "city": city}
+        return {
+            "lat": location.get("lat"),
+            "lng": location.get("lng"),
+            "city": city,
+            "location_source": location_source,
+        }
     return {"error": "missing_location"}
 
 
@@ -65,3 +77,27 @@ async def _fetch_public_ip() -> str | None:
             return ip if isinstance(ip, str) and ip else None
     except Exception:
         return None
+
+
+async def _fallback_ip_lookup(ip: str) -> dict[str, Any] | None:
+    try:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            resp = await client.get(f"https://ipwho.is/{ip}")
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:
+        return None
+
+    if not isinstance(data, dict) or data.get("success") is False:
+        return None
+
+    lat = data.get("latitude")
+    lng = data.get("longitude")
+    city = data.get("city") or data.get("region")
+    try:
+        lat = float(lat)
+        lng = float(lng)
+    except (TypeError, ValueError):
+        return None
+
+    return {"lat": lat, "lng": lng, "city": city if isinstance(city, str) else None}

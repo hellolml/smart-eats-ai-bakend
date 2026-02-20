@@ -95,9 +95,11 @@ def smart_fast_path_decider(state: ChatState) -> bool:
 
 
 def smart_fast_path_system_prompt_builder(state: ChatState) -> str | None:
-    if state.context and state.context.get("system_prompt"):
-        return state.context["system_prompt"]
-    return "你是 SmartEats 智能助手，帮助用户解决「吃什么」的问题。用中文回答，语气友好自然。"
+    return (
+        "你是 SmartEats 智能助手。"
+        "只输出自然语言，不要输出 JSON、代码块、字段名或结构化包装。"
+        "用中文回答，语气友好自然。"
+    )
 
 
 def smart_fast_path_writer_prompt_builder(state: ChatState) -> str:
@@ -326,11 +328,14 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
                 recommendations=[
                     {
                         "type": "note",
-                        "title": "需要你的具体位置，才能推荐附近餐厅。",
+                        "title": "我刚尝试了自动定位，但没拿到有效位置。",
                         "reason": "定位信息不足。",
                     }
                 ],
-                followups=["告诉我你所在的城市/地标？"],
+                followups=[
+                    "告诉我你所在的城市/地标？",
+                    "或在浏览器允许定位，我就能按距离推荐附近餐厅。",
+                ],
                 warnings=[],
             ).model_dump()
         if state.context is None:

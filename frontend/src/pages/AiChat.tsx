@@ -573,6 +573,33 @@ const AiChat = () => {
         }
     };
 
+    const resolveFreshDeviceLocation = React.useCallback(async (): Promise<DeviceLocation | null> => {
+        const current = deviceLocation;
+        if (current && Date.now() - current.timestamp <= DEVICE_LOCATION_MAX_AGE_MS) {
+            return current;
+        }
+        if (typeof window === 'undefined' || !window.navigator.geolocation) {
+            return null;
+        }
+
+        return await new Promise<DeviceLocation | null>((resolve) => {
+            window.navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const next = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude,
+                        accuracy: position.coords.accuracy,
+                        timestamp: Date.now()
+                    };
+                    setDeviceLocation(next);
+                    resolve(next);
+                },
+                () => resolve(null),
+                { timeout: 2500, maximumAge: DEVICE_LOCATION_MAX_AGE_MS }
+            );
+        });
+    }, [deviceLocation]);
+
     const handleSend = async () => {
         const question = inputValue.trim();
         if (!question || !sessionId || sending) return;
@@ -598,14 +625,14 @@ const AiChat = () => {
         scheduleAutoScrollToBottom(true);
         setSending(true);
 
-        const locationFresh = deviceLocation && Date.now() - deviceLocation.timestamp <= DEVICE_LOCATION_MAX_AGE_MS;
-        const clientContextOverrides = locationFresh
+        const freshLocation = await resolveFreshDeviceLocation();
+        const clientContextOverrides = freshLocation
             ? {
                 environment: {
                     location: {
-                        lat: deviceLocation.lat,
-                        lng: deviceLocation.lng,
-                        accuracy: deviceLocation.accuracy,
+                        lat: freshLocation.lat,
+                        lng: freshLocation.lng,
+                        accuracy: freshLocation.accuracy,
                         source: 'device'
                     }
                 }
@@ -699,14 +726,14 @@ const AiChat = () => {
 
         setSending(true);
         scheduleAutoScrollToBottom(true);
-        const locationFresh = deviceLocation && Date.now() - deviceLocation.timestamp <= DEVICE_LOCATION_MAX_AGE_MS;
-        const clientContextOverrides = locationFresh
+        const freshLocation = await resolveFreshDeviceLocation();
+        const clientContextOverrides = freshLocation
             ? {
                 environment: {
                     location: {
-                        lat: deviceLocation.lat,
-                        lng: deviceLocation.lng,
-                        accuracy: deviceLocation.accuracy,
+                        lat: freshLocation.lat,
+                        lng: freshLocation.lng,
+                        accuracy: freshLocation.accuracy,
                         source: 'device'
                     }
                 }

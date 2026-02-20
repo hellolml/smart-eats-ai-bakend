@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import time
 import inspect
 from uuid import uuid4
@@ -224,6 +226,28 @@ def _render_final_text(final_json: dict[str, Any]) -> str:
     if text:
         return text
     return "好的。"
+
+
+def _strip_structured_wrapper(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+
+    fenced = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, flags=re.IGNORECASE)
+    if fenced:
+        raw = fenced.group(1).strip()
+
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return text.strip()
+
+    if isinstance(payload, dict):
+        for key in ("answer", "final", "output", "content", "message", "text"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return text.strip()
 
 
 def _validate_args(
@@ -907,10 +931,8 @@ async def run_chat_stream(
                 system_prompt: str | None = None
                 if agent_config.fast_path_system_prompt_builder:
                     system_prompt = agent_config.fast_path_system_prompt_builder(state)
-                if not system_prompt and state.context and state.context.get("system_prompt"):
-                    system_prompt = state.context["system_prompt"]
                 if not system_prompt:
-                    system_prompt = "You are a helpful assistant."
+                    system_prompt = "You are a helpful assistant. Reply with plain natural language only."
                 writer_prompt = (
                     agent_config.fast_path_writer_prompt_builder(state)
                     if agent_config.fast_path_writer_prompt_builder
@@ -932,12 +954,18 @@ async def run_chat_stream(
                             yield {"event": "final", "data": {"stopped": True}}
                             return
                         assistant_chunks.append(delta)
-                        yield {"event": "delta", "data": {"token": delta}}
-                        await asyncio.sleep(0)
                 finally:
                     reset_llm_log_context(token)
 
-                answer_text = "".join(assistant_chunks)
+                answer_text = _strip_structured_wrapper("".join(assistant_chunks))
+                for chunk in _iter_delta_chunks(answer_text):
+                    if await request.is_disconnected():
+                        return
+                    if await redis_client.get(cancel_key):
+                        yield {"event": "final", "data": {"stopped": True}}
+                        return
+                    yield {"event": "delta", "data": {"token": chunk}}
+                    await asyncio.sleep(0)
                 fast_final = FinalAnswer(
                     recommendations=[],
                     followups=[],
