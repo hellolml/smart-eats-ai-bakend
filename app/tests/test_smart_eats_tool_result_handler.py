@@ -6,6 +6,9 @@ from app.agent.agents.smart_eats import (
     smart_fast_path_system_prompt_builder,
     smart_fast_path_writer_prompt_builder,
     smart_tool_plan_router,
+    smart_intent_resolver,
+    smart_tool_args_normalizer,
+    _normalize_restaurant_query,
 )
 from app.agent.state import ChatState
 
@@ -322,3 +325,38 @@ def test_tool_plan_router_after_search_delegates_to_llm():
 
     assert plan is None
     assert state.task_stage == "searched"
+
+
+def test_intent_resolver_food_preference_maps_to_eat_out():
+    state = ChatState(session_id="s1", message="我想吃麻辣烫", history=[])
+
+    intent = smart_intent_resolver(state)
+
+    assert intent == "eat_out"
+
+
+def test_search_restaurants_args_normalizer_accepts_keyword_and_location():
+    args = {"keyword": "麻辣烫", "location": {"lat": 32.52, "lng": 108.53}, "radius": 2000}
+
+    normalized = smart_tool_args_normalizer("search_restaurants", args)
+
+    assert normalized["query"] == "麻辣烫"
+    assert normalized["lat"] == 32.52
+    assert normalized["lng"] == 108.53
+    assert "radius" not in normalized
+
+
+def test_intent_resolver_short_food_word_in_eat_out_context_maps_to_eat_out():
+    state = ChatState(
+        session_id="s1",
+        message="火锅",
+        history=[{"role": "user", "content": "出去吃"}],
+    )
+
+    intent = smart_intent_resolver(state)
+
+    assert intent == "eat_out"
+
+
+def test_normalize_restaurant_query_strips_colloquial_prefix():
+    assert _normalize_restaurant_query("我想吃火锅") == "火锅"

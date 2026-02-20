@@ -804,7 +804,12 @@ const AiChat = () => {
 
                 <div className="p-3">
                     <button
-                        onClick={createNewSession}
+                        onClick={() => {
+                            void createNewSession();
+                            if (window.innerWidth < 768) {
+                                setShowSidebar(false);
+                            }
+                        }}
                         className="w-full flex items-center gap-2 justify-center py-2.5 px-4 bg-[#7E57FF] text-white rounded-xl active:scale-95 transition-all shadow-sm hover:shadow-md hover:bg-[#6c4ae0]"
                     >
                         <Sparkles size={16} />

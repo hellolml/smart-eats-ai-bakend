@@ -42,6 +42,13 @@ def _looks_like_location_update(text: str) -> bool:
     return any(token in text for token in tokens)
 
 
+def _looks_like_food_preference(text: str) -> bool:
+    food_tokens = (
+        "火锅", "烧烤", "麻辣烫", "米粉", "面馆", "烤肉", "串串", "小龙虾", "川菜", "粤菜", "湘菜", "日料", "韩餐", "快餐",
+    )
+    return any(token in text for token in food_tokens)
+
+
 def _recent_eat_out_context(history: list[dict[str, Any]]) -> bool:
     for msg in reversed(history[-8:]):
         role = (msg.get("role") or "").lower()
@@ -62,20 +69,37 @@ def smart_intent_resolver(state: ChatState) -> str | None:
         logger.info("intent_reason session_id=%s intent=%s reason=empty_message", state.session_id, intent)
         return intent
 
-    # 确认选择信号（优先级高）
-    eat_out_tokens = ("出去吃", "外出", "附近餐厅", "找餐厅", "吃饭", "下馆子")
+    # 模型优先判意图：规则层只处理“高置信显式意图”，其余交给 planner。
+    eat_out_tokens = ("出去吃", "外出", "附近餐厅", "找餐厅", "下馆子")
     cook_home_tokens = ("在家做", "做饭", "菜谱", "食谱", "冰箱")
-    # 收紧路线关键词，避免仅包含“到”就误判 route
     route_tokens = ("怎么走", "路线", "导航", "去那里", "去那儿", "到这家", "带我去", "怎么去")
+    greeting_tokens = ("你好", "hi", "hello", "嗨", "在吗")
 
-    # 位置更新语句：若最近语境是“出去吃”，则按 eat_out 处理，避免误判为 chat
+    # 1) 高置信规则：路线/在家做/出去吃显式表达
+    if any(token in text for token in route_tokens):
+        intent = "route"
+        logger.info("intent_reason session_id=%s intent=%s reason=route_tokens text=%s", state.session_id, intent, text)
+        return intent
+    if any(token in text for token in cook_home_tokens):
+        intent = "cook_home"
+        logger.info("intent_reason session_id=%s intent=%s reason=cook_home_tokens text=%s", state.session_id, intent, text)
+        return intent
+    if any(token in text for token in eat_out_tokens):
+        intent = "eat_out"
+        logger.info("intent_reason session_id=%s intent=%s reason=eat_out_tokens text=%s", state.session_id, intent, text)
+        return intent
+
+    # 2) 语境兜底：上一轮在外出就餐，当前是地址更新或菜系偏好
     if _looks_like_location_update(text) and _recent_eat_out_context(state.history):
         intent = "eat_out"
         logger.info("intent_reason session_id=%s intent=%s reason=location_update_in_eat_out_context text=%s", state.session_id, intent, text)
         return intent
+    if _looks_like_food_preference(text) and _recent_eat_out_context(state.history):
+        intent = "eat_out"
+        logger.info("intent_reason session_id=%s intent=%s reason=food_preference_in_eat_out_context text=%s", state.session_id, intent, text)
+        return intent
 
-    # 检查是否是确认选择（用户提到之前推荐的菜名）
-    # 从历史消息中查找之前的食谱推荐
+    # 3) 检查是否是确认选择（用户提到之前推荐的菜名）
     recipe_titles = []
     for msg in state.history:
         role = msg.get("role")
@@ -101,21 +125,14 @@ def smart_intent_resolver(state: ChatState) -> str | None:
             logger.info("intent_reason session_id=%s intent=%s reason=recipe_title_confirm matched=%s", state.session_id, intent, title)
             return intent
 
-    if any(token in text for token in route_tokens):
-        intent = "route"
-        logger.info("intent_reason session_id=%s intent=%s reason=route_tokens text=%s", state.session_id, intent, text)
-        return intent
-    if any(token in text for token in cook_home_tokens):
-        intent = "cook_home"
-        logger.info("intent_reason session_id=%s intent=%s reason=cook_home_tokens text=%s", state.session_id, intent, text)
-        return intent
-    if any(token in text for token in eat_out_tokens):
-        intent = "eat_out"
-        logger.info("intent_reason session_id=%s intent=%s reason=eat_out_tokens text=%s", state.session_id, intent, text)
+    if any(token == text for token in greeting_tokens):
+        intent = "chat"
+        logger.info("intent_reason session_id=%s intent=%s reason=greeting text=%s", state.session_id, intent, text)
         return intent
 
-    intent = "chat"
-    logger.info("intent_reason session_id=%s intent=%s reason=default_chat text=%s", state.session_id, intent, text)
+    # 其余交给 planner 自主判意图与工具决策
+    intent = "unknown"
+    logger.info("intent_reason session_id=%s intent=%s reason=delegate_to_planner text=%s", state.session_id, intent, text)
     return intent
 
 
@@ -256,6 +273,14 @@ def _normalize_restaurant_query(message: str | None) -> str:
     }
     if text in generic_phrases:
         return "美食"
+
+    # 口语偏好句归一化：我想吃火锅 -> 火锅
+    for prefix in ("我想吃", "想吃", "想来点", "来点", "想整点"):
+        if text.startswith(prefix) and len(text) > len(prefix):
+            candidate = text[len(prefix):].strip(" ，。,.!?？！")
+            if candidate:
+                return candidate
+
     return text
 
 
@@ -354,6 +379,20 @@ def smart_tool_args_normalizer(tool_name: str, args: dict[str, Any]) -> dict[str
         updated = dict(args)
         if "query" not in updated and isinstance(updated.get("keyword"), str):
             updated["query"] = updated.pop("keyword")
+
+        location = updated.get("location")
+        if isinstance(location, dict):
+            lat = location.get("lat")
+            lng = location.get("lng")
+            if "lat" not in updated:
+                updated["lat"] = lat
+            if "lng" not in updated:
+                updated["lng"] = lng
+            updated.pop("location", None)
+
+        # 当前 search_restaurants 工具未使用 radius，避免无效参数干扰
+        updated.pop("radius", None)
+
         for key in ("lat", "lng"):
             value = updated.get(key)
             if isinstance(value, (int, float)) and float(value) == 0.0:

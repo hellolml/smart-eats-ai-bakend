@@ -86,6 +86,11 @@ def _normalize_tool_item(item: Any) -> dict[str, dict[str, Any]] | None:
     args = item.get("args")
     if isinstance(tool_name, str) and isinstance(args, dict):
         return {tool_name: args}
+    # 兼容格式C: {"tool_name":"search_restaurants", "query":"麻辣烫", "location":{...}}
+    if isinstance(tool_name, str):
+        derived_args = {k: v for k, v in item.items() if k != "tool_name"}
+        if isinstance(derived_args, dict):
+            return {tool_name: derived_args}
     return None
 
 
@@ -113,6 +118,7 @@ def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
         return calls
 
     # 兼容格式2：<tool_calls><tool_call>{...}</tool_call>...</tool_calls>
+    # 以及格式3：<tool_call><tool_name>...</tool_name><args>{...}</args></tool_call>
     blocks = re.findall(r"<tool_call>(.*?)</tool_call>", payload, re.DOTALL)
     if not blocks:
         return None
@@ -121,14 +127,34 @@ def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
         chunk = block.strip()
         if not chunk:
             continue
+
+        # 先尝试整块 JSON
         try:
             item = json.loads(chunk)
         except json.JSONDecodeError:
+            item = None
+
+        if item is not None:
+            normalized = _normalize_tool_item(item)
+            if not normalized:
+                return None
+            calls.append(normalized)
+            continue
+
+        # 再尝试 XML 子标签格式
+        name_match = re.search(r"<tool_name>(.*?)</tool_name>", chunk, re.DOTALL)
+        args_match = re.search(r"<args>(.*?)</args>", chunk, re.DOTALL)
+        if not name_match:
             return None
-        normalized = _normalize_tool_item(item)
-        if not normalized:
+        tool_name = name_match.group(1).strip()
+        args_payload = args_match.group(1).strip() if args_match else "{}"
+        try:
+            args = json.loads(args_payload) if args_payload else {}
+        except json.JSONDecodeError:
             return None
-        calls.append(normalized)
+        if not isinstance(tool_name, str) or not tool_name or not isinstance(args, dict):
+            return None
+        calls.append({tool_name: args})
     return calls
 
 
