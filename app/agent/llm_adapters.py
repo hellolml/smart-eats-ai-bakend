@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import threading
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -11,7 +13,7 @@ from typing import Any, AsyncGenerator, Callable
 import httpx
 from openai import AsyncOpenAI
 
-from app.agent.schemas import AgentAction, AgentActionModel, ToolAction
+from app.agent.schemas import AgentAction, AgentActionModel, IntentDecision, ToolAction
 from app.common.config import settings
 
 logger = logging.getLogger("llm")
@@ -211,6 +213,37 @@ class OpenAIPlanner:
         if not content:
             raise RuntimeError("invalid planner response: empty content")
         return content
+
+    async def classify_intent(self, user: str, context: dict[str, Any] | None = None) -> IntentDecision:
+        """让 LLM 输出结构化意图，代码仅做 schema 校验与兜底。"""
+        if not self.client:
+            return IntentDecision()
+
+        system = (
+            "You are an intent classifier for a food assistant. "
+            "Return strict JSON only with fields: "
+            "intent, confidence, slots, need_clarify, clarify_question. "
+            "intent must be one of: eat_out, cook_home, route, chat, unknown."
+        )
+        payload = {
+            "message": user,
+            "context": context or {},
+        }
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ]
+        try:
+            raw = await self._stream_collect(messages)
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+                cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+            data = json.loads(cleaned)
+            return IntentDecision.model_validate(data)
+        except Exception as exc:
+            logger.info("intent_classify_fallback reason=%s", str(exc))
+            return IntentDecision()
 
 
 class OpenAIWriter:

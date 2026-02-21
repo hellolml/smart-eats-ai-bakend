@@ -316,6 +316,11 @@ def smart_context_extender(state: ChatState) -> dict:
     extra = {}
     if state.intent:
         extra["intent"] = state.intent
+        extra["intent_confidence"] = state.intent_confidence
+        extra["intent_slots"] = dict(state.intent_slots)
+        extra["intent_need_clarify"] = state.intent_need_clarify
+        if state.intent_clarify_question:
+            extra["intent_clarify_question"] = state.intent_clarify_question
     if state.location_source:
         extra["location_source"] = state.location_source
     if state.task_stage:

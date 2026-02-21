@@ -61,3 +61,11 @@ AgentAction = Union[ToolAction, ToolCallsAction, FinalAction]
 
 class AgentActionModel(RootModel[AgentAction]):
     pass
+
+
+class IntentDecision(BaseModel):
+    intent: Literal["eat_out", "cook_home", "route", "chat", "unknown"] = "unknown"
+    confidence: float = 0.0
+    slots: dict[str, Any] = Field(default_factory=dict)
+    need_clarify: bool = False
+    clarify_question: str | None = None

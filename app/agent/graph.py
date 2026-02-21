@@ -462,6 +462,36 @@ def build_langgraph(
                 routed_calls,
             )
             return state
+
+        # LLM-owned intent classification: run once per user turn (or until we get non-unknown intent).
+        if state.message and (not state.intent or state.intent == "unknown"):
+            try:
+                decision = await planner.classify_intent(state.message, state.context)
+                state.intent = decision.intent
+                state.intent_confidence = decision.confidence
+                state.intent_slots = dict(decision.slots)
+                state.intent_need_clarify = decision.need_clarify
+                state.intent_clarify_question = decision.clarify_question
+                logger.info(
+                    "intent_decision session_id=%s intent=%s confidence=%s need_clarify=%s",
+                    state.session_id,
+                    state.intent,
+                    state.intent_confidence,
+                    state.intent_need_clarify,
+                )
+                state.events.append(
+                    {
+                        "event": "intent_decision",
+                        "data": {
+                            "intent": state.intent,
+                            "confidence": state.intent_confidence,
+                            "need_clarify": state.intent_need_clarify,
+                        },
+                    }
+                )
+            except Exception as exc:
+                logger.info("intent_decision_fallback session_id=%s reason=%s", state.session_id, str(exc))
+
         system = None
         if state.context:
             system = state.context.get("system_prompt")
@@ -768,6 +798,35 @@ def build_langgraph(
         )
         return state
 
+    async def validate_node(state: ChatState) -> ChatState:
+        """执行前校验层：不做语义判定，只做结构/预算护栏。"""
+        if state.action_type not in {"tool", "tool_calls"}:
+            return state
+
+        if state.action_type == "tool_calls":
+            if not state.pending_tool_calls:
+                state.planner_retry_count += 1
+                state.observations.append({"planner_error": "empty_tool_calls_after_plan"})
+                state.action_type = "retry" if state.planner_retry_count < 2 else "final"
+                if state.action_type == "final":
+                    state.final_json = _best_effort_final_from_observations(state)
+                return state
+            if len(state.pending_tool_calls) > 4:
+                state.pending_tool_calls = state.pending_tool_calls[:4]
+                state.events.append({
+                    "event": "plan_guardrail",
+                    "data": {"reason": "trim_tool_calls", "max": 4},
+                })
+            return state
+
+        if state.action_type == "tool" and not isinstance(state.action, ToolAction):
+            state.planner_retry_count += 1
+            state.observations.append({"planner_error": "invalid_tool_action_after_plan"})
+            state.action_type = "retry" if state.planner_retry_count < 2 else "final"
+            if state.action_type == "final":
+                state.final_json = _best_effort_final_from_observations(state)
+        return state
+
     async def act_node(state: ChatState) -> ChatState:
         if state.action_type == "tool_calls":
             if not state.pending_tool_calls:
@@ -965,17 +1024,27 @@ def build_langgraph(
     graph = StateGraph(ChatState)
     graph.add_node("observe", observe_node)
     graph.add_node("think", think_node)
+    graph.add_node("validate", validate_node)
     graph.add_node("act", act_node)
     graph.add_node("merge", merge_node)
 
     def _think_route(state: ChatState) -> str:
+        if state.action_type in {"tool", "tool_calls"}:
+            return "validate"
+        if state.action_type == "retry":
+            return "think"
+        return "observe"
+
+    graph.add_conditional_edges("think", _think_route)
+
+    def _validate_route(state: ChatState) -> str:
         if state.action_type in {"tool", "tool_calls"}:
             return "act"
         if state.action_type == "retry":
             return "think"
         return "observe"
 
-    graph.add_conditional_edges("think", _think_route)
+    graph.add_conditional_edges("validate", _validate_route)
 
     def _act_route(state: ChatState) -> str:
         if state.action_type == "merge":

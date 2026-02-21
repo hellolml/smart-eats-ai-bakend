@@ -30,6 +30,10 @@ class ChatState:
     agent_type: str | None = None
     client_ip: str | None = None
     intent: str | None = None
+    intent_confidence: float = 0.0
+    intent_slots: dict[str, Any] = field(default_factory=dict)
+    intent_need_clarify: bool = False
+    intent_clarify_question: str | None = None
     location_source: str | None = None
     task_stage: str | None = None
     tool_plan: list[dict[str, Any]] = field(default_factory=list)
