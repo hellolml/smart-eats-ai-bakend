@@ -6,6 +6,8 @@ import logging
 import re
 import time
 import inspect
+import threading
+from collections import Counter
 from uuid import uuid4
 from typing import Any, AsyncGenerator, Callable
 
@@ -45,6 +47,19 @@ from app.infra.models.chat import ChatMessage, ChatSession
 logger = logging.getLogger("agent")
 MAX_SAME_TOOL_CALLS_PER_TURN = 2
 
+_METRIC_COUNTER: Counter[str] = Counter()
+_METRIC_LOCK = threading.Lock()
+
+
+def get_agent_metrics_snapshot() -> dict[str, int]:
+    with _METRIC_LOCK:
+        return dict(_METRIC_COUNTER)
+
+
+def reset_agent_metrics() -> None:
+    with _METRIC_LOCK:
+        _METRIC_COUNTER.clear()
+
 
 def _record_metric(state: ChatState, name: str, value: int | float = 1, **tags: Any) -> None:
     payload = {
@@ -53,6 +68,11 @@ def _record_metric(state: ChatState, name: str, value: int | float = 1, **tags: 
         "session_id": state.session_id,
         **tags,
     }
+    with _METRIC_LOCK:
+        try:
+            _METRIC_COUNTER[name] += int(value)
+        except Exception:
+            _METRIC_COUNTER[name] += 1
     logger.info("metric %s", json.dumps(payload, ensure_ascii=False))
 
 
