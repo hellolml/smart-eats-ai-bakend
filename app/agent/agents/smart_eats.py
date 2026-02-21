@@ -405,6 +405,49 @@ def smart_system_prompt(payload: dict) -> str:
     )
 
 
+def _build_recipe_final_from_rag_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    title = str(item.get("title") or "").strip()
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+
+    steps_raw = metadata.get("steps")
+    steps: list[str] = []
+    if isinstance(steps_raw, list):
+        steps = [str(step).strip() for step in steps_raw if str(step).strip()]
+
+    ingredients_raw = metadata.get("ingredients")
+    ingredients: list[str] = []
+    if isinstance(ingredients_raw, list):
+        ingredients = [str(x).strip() for x in ingredients_raw if str(x).strip()]
+
+    if not title and not steps:
+        return None
+
+    step_lines = [f"{idx + 1}. {step}" for idx, step in enumerate(steps[:8])]
+    ingredients_text = f"食材：{'、'.join(ingredients[:10])}" if ingredients else ""
+
+    body_parts: list[str] = []
+    if title:
+        body_parts.append(f"{title}做法：")
+    if ingredients_text:
+        body_parts.append(ingredients_text)
+    if step_lines:
+        body_parts.append("步骤：\n" + "\n".join(step_lines))
+    if not step_lines:
+        body_parts.append("我先给你一个家常做法思路：热锅下油→主料处理→调味收汁。")
+
+    return FinalAnswer(
+        recommendations=[
+            {
+                "type": "recipe",
+                "title": "\n".join(body_parts),
+                "reason": "已根据你点的菜名给出做法",
+            }
+        ],
+        followups=["要不要我再给你这个菜的‘快手版（10分钟）’？", "或者我按2人份把克数配比也写出来。"],
+        warnings=[],
+    ).model_dump()
+
+
 def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> dict | None:
     """处理工具返回结果，更新状态或生成最终回复。"""
     if isinstance(result, dict):
@@ -488,6 +531,13 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         if not items:
             # 没有匹配结果 → 返回 None 让 LLM 直接生成菜谱
             return None
+
+        # 业务约束：用户输入菜名时，优先直接给可执行做法，避免再次规划导致体验抖动。
+        first = items[0] if isinstance(items[0], dict) else None
+        if first:
+            rendered = _build_recipe_final_from_rag_item(first)
+            if rendered is not None:
+                return rendered
         return None
     if tool_name == "plan_route" and isinstance(result, dict):
         error = result.get("error")

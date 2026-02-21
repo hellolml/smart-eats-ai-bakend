@@ -109,7 +109,7 @@ def test_search_recipes_relaxed_to_llm():
     assert handled is None
 
 
-def test_rag_search_recipes_with_steps_relaxed_to_llm():
+def test_rag_search_recipes_with_steps_returns_direct_recipe_method():
     state = _build_state()
     state.intent = "confirm_recipe"
 
@@ -129,7 +129,10 @@ def test_rag_search_recipes_with_steps_relaxed_to_llm():
         },
     )
 
-    assert handled is None
+    assert isinstance(handled, dict)
+    assert handled["recommendations"][0]["type"] == "recipe"
+    assert "土豆炖牛肉做法" in handled["recommendations"][0]["title"]
+    assert "1. 牛肉焯水" in handled["recommendations"][0]["title"]
 
 
 def test_plan_route_missing_origin_keeps_hard_guardrail():
