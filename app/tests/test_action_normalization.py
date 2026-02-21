@@ -124,3 +124,18 @@ def test_bare_answer_json_is_normalized_to_final():
     assert getattr(action, "type", None) == "final"
     answer = action.answer.model_dump()
     assert answer["recommendations"][0]["title"] == "旺森农家味"
+
+
+def test_text_fallback_strips_thinking_blocks():
+    raw = '''
+<think>内部推理不要输出</think>
+我建议你做番茄鸡蛋面。
+'''
+
+    action = normalize_action_from_raw(raw)
+
+    assert action is not None
+    assert getattr(action, "type", None) == "final"
+    answer = action.answer.model_dump()
+    assert "内部推理" not in answer["recommendations"][0]["title"]
+    assert "番茄鸡蛋面" in answer["recommendations"][0]["title"]

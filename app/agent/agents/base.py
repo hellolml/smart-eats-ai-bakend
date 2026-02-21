@@ -158,7 +158,15 @@ def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
     return calls
 
 
+def _strip_private_reasoning(text: str) -> str:
+    # 永远不要把模型思考内容暴露给用户
+    stripped = re.sub(r"<thinking>[\s\S]*?</thinking>", "", text, flags=re.IGNORECASE)
+    stripped = re.sub(r"<think>[\s\S]*?</think>", "", stripped, flags=re.IGNORECASE)
+    return stripped
+
+
 def normalize_action_from_raw(content: str) -> AgentAction | None:
+    content = _strip_private_reasoning(content)
     tool_calls = _parse_tool_calls(content)
     if tool_calls is not None:
         payload = {"type": "tool_calls", "calls": tool_calls}
