@@ -199,6 +199,22 @@ def normalize_action_from_raw(content: str) -> AgentAction | None:
             }
             payload = {"type": "final", "answer": answer}
             return AgentActionModel.model_validate(payload).root
+
+        # 容错：模型偶发只吐出残缺 tool_calls 标签（如 "<tool_calls>"），避免后续抛错走 fallback
+        if "<tool_calls" in cleaned.lower():
+            answer = {
+                "recommendations": [
+                    {
+                        "type": "note",
+                        "title": "我这边刚刚解析步骤时出了点小问题，你再说一次想吃的菜名，我直接给你做法。",
+                        "reason": "planner_output_incomplete",
+                    }
+                ],
+                "followups": [],
+                "warnings": [],
+            }
+            payload = {"type": "final", "answer": answer}
+            return AgentActionModel.model_validate(payload).root
         return None
     if isinstance(data, dict) and data.get("type") == "tool_calls" and "calls" in data:
         return AgentActionModel.model_validate(data).root

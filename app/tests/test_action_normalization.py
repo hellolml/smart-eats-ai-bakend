@@ -139,3 +139,12 @@ def test_text_fallback_strips_thinking_blocks():
     answer = action.answer.model_dump()
     assert "内部推理" not in answer["recommendations"][0]["title"]
     assert "番茄鸡蛋面" in answer["recommendations"][0]["title"]
+
+
+def test_incomplete_tool_calls_tag_is_normalized_to_final_instead_of_none():
+    action = normalize_action_from_raw("<tool_calls>")
+
+    assert action is not None
+    assert getattr(action, "type", None) == "final"
+    answer = action.answer.model_dump()
+    assert answer["recommendations"][0]["reason"] == "planner_output_incomplete"
