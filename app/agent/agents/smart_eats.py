@@ -141,7 +141,7 @@ _FAST_PATH_TOOL_KEYWORDS = (
     "附近", "餐厅", "饭店", "外卖", "怎么走", "路线", "导航",
     "天气", "菜谱", "食谱", "做法", "冰箱", "食材",
     "推荐", "搜索", "查找", "找一下", "帮我找",
-    "在家做", "在家里做", "出去吃", "下馆子", "吃什么",
+    "在家做", "出去吃", "下馆子", "吃什么",
     "recipe", "restaurant", "weather", "route", "navigate",
 )
 
@@ -447,9 +447,8 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             state.context = {}
         state.context["fridge_items"] = items
 
-        user_text = (state.message or "").strip()
-        likely_cook_home = (state.intent == "cook_home") or ("在家" in user_text and "做" in user_text)
-        if likely_cook_home and not items:
+        # 由 LLM 通过工具选择表达意图：一旦 planner 主动调用 get_fridge_items 且结果为空，直接给可执行方案。
+        if not items:
             return FinalAnswer(
                 recommendations=[
                     {
