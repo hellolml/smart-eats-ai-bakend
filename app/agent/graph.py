@@ -593,6 +593,11 @@ def build_langgraph(
             state.observations.append({"planner_error": "planner_exception", "detail": str(exc)})
             state.final_json = _fallback_final()
             state.action_type = "final"
+            logger.info(
+                "agent_decision session_id=%s action_type=final reason=plan_exception detail=%s",
+                state.session_id,
+                str(exc),
+            )
             state.events.append(
                 {
                     "event": "plan_exception",

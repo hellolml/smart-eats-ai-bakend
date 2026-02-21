@@ -440,12 +440,28 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         if isinstance(ctx_loc_source, str) and ctx_loc_source:
             state.location_source = ctx_loc_source
     
-    # get_fridge_items: 仅缓存食材，让 LLM 结合上下文自主组织回复
+    # get_fridge_items: 缓存食材；若在 cook_home 且冰箱为空，直接给业务兜底，避免二次规划超时/回退
     if tool_name == "get_fridge_items" and isinstance(result, dict):
         items = result.get("items") if isinstance(result.get("items"), list) else []
         if state.context is None:
             state.context = {}
         state.context["fridge_items"] = items
+
+        if state.intent == "cook_home" and not items:
+            return FinalAnswer(
+                recommendations=[
+                    {
+                        "type": "note",
+                        "title": "看起来你冰箱现在没食材，我先给你几道 10 分钟内能做的简易方案。",
+                        "reason": "已检测到空冰箱，先给可执行方案避免空转。",
+                    }
+                ],
+                followups=[
+                    "要不要我按‘不买菜也能做’给你 3 个具体做法？",
+                    "如果你准备下楼买菜，我也可以给你最短采购清单。",
+                ],
+                warnings=[],
+            ).model_dump()
         return None
     if tool_name == "search_restaurants":
         _set_task_stage(state, "searched", cause="tool_result_search_restaurants")

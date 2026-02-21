@@ -27,6 +27,16 @@ def test_get_fridge_items_empty_relaxed_to_llm():
     assert state.context.get("fridge_items") == []
 
 
+def test_get_fridge_items_empty_in_cook_home_returns_direct_final():
+    state = _build_state()
+    state.intent = "cook_home"
+
+    handled = _tool_result_handler(state, "get_fridge_items", {"items": []})
+
+    assert isinstance(handled, dict)
+    assert "空冰箱" in handled["recommendations"][0]["reason"]
+
+
 def test_search_restaurants_results_relaxed_to_llm():
     state = _build_state()
 
