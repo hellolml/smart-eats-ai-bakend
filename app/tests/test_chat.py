@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from app.agent.graph import _render_final_text
+from app.agent.graph import _best_effort_final_from_observations, _render_final_text
+from app.agent.state import ChatState
 
 
 @pytest.mark.asyncio
@@ -77,3 +78,12 @@ def test_render_final_text_empty_returns_default():
     text = _render_final_text({"recommendations": [], "followups": [], "warnings": []})
 
     assert text == "好的。"
+
+
+def test_best_effort_with_empty_fridge_avoids_fallback():
+    state = ChatState(session_id="s1", context={"fridge_items": []})
+
+    final_json = _best_effort_final_from_observations(state)
+
+    assert final_json["recommendations"][0]["reason"] != "fallback"
+    assert "冰箱" in final_json["recommendations"][0]["title"]

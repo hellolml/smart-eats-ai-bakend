@@ -218,6 +218,19 @@ def _fallback_final() -> dict[str, Any]:
 
 def _best_effort_final_from_observations(state: ChatState) -> dict[str, Any]:
     # 优先消费已有可用结果，尽量避免 steps_exhausted 直接 fallback
+    if isinstance(state.context, dict) and state.context.get("fridge_items") == []:
+        return FinalAnswer(
+            recommendations=[
+                {
+                    "type": "note",
+                    "title": "看起来你冰箱现在是空的，我先给你几道不用复杂食材也能做的快手菜。",
+                    "reason": "已获取到空冰箱状态",
+                }
+            ],
+            followups=["要不要我按 10 分钟内完成给你 3 道菜？", "你也可以告诉我想吃什么，我直接给详细做法。"],
+            warnings=[],
+        ).model_dump()
+
     last_search_list: list[dict[str, Any]] | None = None
     last_error: str | None = None
     for item in reversed(state.observations):
@@ -702,7 +715,16 @@ def build_langgraph(
                     state.session_id,
                 )
                 if state.planner_retry_count >= 2:
-                    state.final_json = _fallback_final()
+                    # 对常见死循环做业务兜底，避免直接 fallback
+                    repeated_tools = {
+                        str(item.get("tool"))
+                        for item in errors
+                        if isinstance(item, dict) and item.get("reason") == "max_same_tool_calls_per_turn"
+                    }
+                    if "get_fridge_items" in repeated_tools and isinstance(state.context, dict) and state.context.get("fridge_items") == []:
+                        state.final_json = _best_effort_final_from_observations(state)
+                    else:
+                        state.final_json = _fallback_final()
                     state.action_type = "final"
                 else:
                     state.action_type = "retry"
