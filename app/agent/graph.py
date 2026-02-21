@@ -591,7 +591,7 @@ def build_langgraph(
             )
         except Exception as exc:
             state.observations.append({"planner_error": "planner_exception", "detail": str(exc)})
-            state.final_json = _fallback_final()
+            state.final_json = _best_effort_final_from_observations(state)
             state.action_type = "final"
             logger.info(
                 "agent_decision session_id=%s action_type=final reason=plan_exception detail=%s",
@@ -636,7 +636,7 @@ def build_langgraph(
             calls = action.calls if isinstance(action, ToolCallsAction) else getattr(action, "calls", [])
             if not isinstance(calls, list) or not calls:
                 state.observations.append({"planner_error": "invalid_tool_calls", "detail": "empty"})
-                state.final_json = _fallback_final()
+                state.final_json = _best_effort_final_from_observations(state)
                 state.action_type = "final"
                 await _log_plan_event(
                     db,
@@ -747,10 +747,7 @@ def build_langgraph(
                         for item in errors
                         if isinstance(item, dict) and item.get("reason") == "max_same_tool_calls_per_turn"
                     }
-                    if "get_fridge_items" in repeated_tools and isinstance(state.context, dict) and state.context.get("fridge_items") == []:
-                        state.final_json = _best_effort_final_from_observations(state)
-                    else:
-                        state.final_json = _fallback_final()
+                    state.final_json = _best_effort_final_from_observations(state)
                     state.action_type = "final"
                 else:
                     state.action_type = "retry"
@@ -784,7 +781,7 @@ def build_langgraph(
 
         if not isinstance(action, ToolAction):
             state.observations.append({"planner_error": "invalid_action"})
-            state.final_json = _fallback_final()
+            state.final_json = _best_effort_final_from_observations(state)
             state.action_type = "final"
             await _log_plan_event(
                 db,
@@ -828,7 +825,7 @@ def build_langgraph(
                 tool_name,
             )
             if state.planner_retry_count >= 2:
-                state.final_json = _fallback_final()
+                state.final_json = _best_effort_final_from_observations(state)
                 state.action_type = "final"
             else:
                 state.action_type = "retry"
@@ -856,7 +853,7 @@ def build_langgraph(
                 tool_name,
             )
             if state.planner_retry_count >= 2:
-                state.final_json = _fallback_final()
+                state.final_json = _best_effort_final_from_observations(state)
                 state.action_type = "final"
             else:
                 state.action_type = "retry"
