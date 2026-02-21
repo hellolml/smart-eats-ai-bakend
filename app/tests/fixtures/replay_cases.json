@@ -22,5 +22,45 @@
       "no_fallback": true,
       "intent_in": ["route", "unknown"]
     }
+  },
+  {
+    "id": "eatout-cuisine-budget",
+    "message": "想在人民广场附近吃粤菜，人均100以内",
+    "expect": {
+      "no_fallback": true,
+      "intent_in": ["eat_out", "unknown"]
+    }
+  },
+  {
+    "id": "eatout-night-snack",
+    "message": "今晚想吃夜宵，附近有啥推荐",
+    "expect": {
+      "no_fallback": true,
+      "intent_in": ["eat_out", "unknown"]
+    }
+  },
+  {
+    "id": "cook-home-query",
+    "message": "我冰箱里有鸡蛋和番茄，做什么快手菜",
+    "expect": {
+      "no_fallback": true,
+      "intent_in": ["cook_home", "unknown"]
+    }
+  },
+  {
+    "id": "clarify-scene",
+    "message": "吃什么好",
+    "expect": {
+      "no_fallback": true,
+      "intent_in": ["unknown", "eat_out", "cook_home"]
+    }
+  },
+  {
+    "id": "chat-greeting",
+    "message": "你好呀",
+    "expect": {
+      "no_fallback": true,
+      "intent_in": ["chat", "unknown"]
+    }
   }
 ]

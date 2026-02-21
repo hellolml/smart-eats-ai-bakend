@@ -6,7 +6,7 @@ from scripts.replay_eval import is_fallback, load_cases
 def test_load_cases_from_fixture():
     cases = load_cases(Path("app/tests/fixtures/replay_cases.json"))
     assert isinstance(cases, list)
-    assert len(cases) >= 3
+    assert len(cases) >= 8
     assert cases[0]["id"] == "eatout-location-as-target"
 
 
