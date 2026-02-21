@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import logging
 from typing import Any
 
@@ -39,7 +40,18 @@ def _looks_like_location_update(text: str) -> bool:
     tokens = (
         "我在", "在这", "在这里", "在那", "在那边", "定位", "位置", "地址", "附近", "广场", "路", "街", "号", "小区", "商场", "地铁", "站",
     )
-    return any(token in text for token in tokens)
+    if any(token in text for token in tokens):
+        return True
+    return bool(re.search(r"[省市区县镇乡村路街道号弄巷]", text))
+
+
+def _looks_like_explicit_address(text: str) -> bool:
+    tokens = (
+        "我在", "在这", "在这里", "在那", "在那边", "地址", "广场", "路", "街", "号", "小区", "商场", "地铁", "站", "省", "市", "区", "县", "镇", "乡", "村",
+    )
+    if any(token in text for token in tokens):
+        return True
+    return bool(re.search(r"[省市区县镇乡村路街道号弄巷]", text))
 
 
 def _looks_like_food_preference(text: str) -> bool:
@@ -49,13 +61,53 @@ def _looks_like_food_preference(text: str) -> bool:
     return any(token in text for token in food_tokens)
 
 
+def _extract_food_preference(text: str) -> str | None:
+    food_tokens = (
+        "火锅", "烧烤", "麻辣烫", "米粉", "面馆", "烤肉", "串串", "小龙虾", "川菜", "粤菜", "湘菜", "日料", "韩餐", "快餐",
+    )
+    for token in food_tokens:
+        if token in text:
+            return token
+    return None
+
+
+def _looks_like_eat_out_request(text: str) -> bool:
+    tokens = (
+        "美食", "吃什么", "吃点", "好吃", "餐厅", "饭店", "馆子", "找吃的", "找店", "下馆子", "附近吃", "口味",
+    )
+    return any(token in text for token in tokens) or _looks_like_food_preference(text)
+
+
+def _extract_geocode_query(text: str) -> str:
+    candidate = (text or "").strip()
+    if not candidate:
+        return candidate
+
+    candidate = re.split(r"[，。！？!?；;]", candidate, maxsplit=1)[0].strip()
+
+    for prefix in ("我在", "在", "我想去", "想去", "帮我找", "帮我搜", "帮我查", "帮我看看", "搜一下", "搜索", "查一下", "查找", "找一下", "找找"):
+        if candidate.startswith(prefix) and len(candidate) > len(prefix):
+            candidate = candidate[len(prefix):].strip()
+            break
+
+    for suffix in ("附近吃什么", "附近有啥吃的", "附近有什么吃的", "附近美食", "美食", "好吃的", "餐厅", "饭店", "吃什么", "找吃的", "下馆子", "推荐"):
+        if candidate.endswith(suffix) and len(candidate) > len(suffix):
+            candidate = candidate[: -len(suffix)].strip(" ，。,.!?？！")
+            break
+
+    if candidate.endswith("附近") and len(candidate) > 2:
+        candidate = candidate[:-2].strip()
+
+    return candidate or (text or "").strip()
+
+
 def _recent_eat_out_context(history: list[dict[str, Any]]) -> bool:
     for msg in reversed(history[-8:]):
         role = (msg.get("role") or "").lower()
         content = str(msg.get("content") or "")
-        if role == "user" and any(t in content for t in ("出去吃", "附近吃", "找餐厅", "下馆子", "吃饭")):
+        if role == "user" and any(t in content for t in ("出去吃", "附近吃", "找餐厅", "下馆子", "吃饭", "美食")):
             return True
-        if role == "assistant" and any(t in content for t in ("附近", "餐厅", "位置", "地标", "城市")):
+        if role == "assistant" and any(t in content for t in ("附近", "餐厅", "位置", "地标", "城市", "美食")):
             return True
     return False
 
@@ -70,7 +122,7 @@ def smart_intent_resolver(state: ChatState) -> str | None:
         return intent
 
     # 模型优先判意图：规则层只处理“高置信显式意图”，其余交给 planner。
-    eat_out_tokens = ("出去吃", "外出", "附近餐厅", "找餐厅", "下馆子")
+    eat_out_tokens = ("出去吃", "外出", "附近餐厅", "找餐厅", "下馆子", "美食")
     cook_home_tokens = ("在家做", "做饭", "菜谱", "食谱", "冰箱")
     route_tokens = ("怎么走", "路线", "导航", "去那里", "去那儿", "到这家", "带我去", "怎么去")
     greeting_tokens = ("你好", "hi", "hello", "嗨", "在吗")
@@ -89,7 +141,17 @@ def smart_intent_resolver(state: ChatState) -> str | None:
         logger.info("intent_reason session_id=%s intent=%s reason=eat_out_tokens text=%s", state.session_id, intent, text)
         return intent
 
-    # 2) 语境兜底：上一轮在外出就餐，当前是地址更新或菜系偏好
+    # 2) 地址表达或“去哪吃”表达，直接归到外出就餐
+    if _looks_like_explicit_address(text):
+        intent = "eat_out"
+        logger.info("intent_reason session_id=%s intent=%s reason=explicit_address text=%s", state.session_id, intent, text)
+        return intent
+    if _looks_like_eat_out_request(text):
+        intent = "eat_out"
+        logger.info("intent_reason session_id=%s intent=%s reason=eat_out_request text=%s", state.session_id, intent, text)
+        return intent
+
+    # 3) 语境兜底：上一轮在外出就餐，当前是地址更新或菜系偏好
     if _looks_like_location_update(text) and _recent_eat_out_context(state.history):
         intent = "eat_out"
         logger.info("intent_reason session_id=%s intent=%s reason=location_update_in_eat_out_context text=%s", state.session_id, intent, text)
@@ -99,7 +161,7 @@ def smart_intent_resolver(state: ChatState) -> str | None:
         logger.info("intent_reason session_id=%s intent=%s reason=food_preference_in_eat_out_context text=%s", state.session_id, intent, text)
         return intent
 
-    # 3) 检查是否是确认选择（用户提到之前推荐的菜名）
+    # 4) 检查是否是确认选择（用户提到之前推荐的菜名）
     recipe_titles = []
     for msg in state.history:
         role = msg.get("role")
@@ -258,6 +320,10 @@ def _normalize_restaurant_query(message: str | None) -> str:
     if not text:
         return "美食"
 
+    food_preference = _extract_food_preference(text)
+    if food_preference:
+        return food_preference
+
     # 用户在更新地址时，不应把整句地址当搜索关键词，默认回退为通用美食检索
     if _looks_like_location_update(text):
         return "美食"
@@ -270,6 +336,9 @@ def _normalize_restaurant_query(message: str | None) -> str:
         "找吃的",
         "下馆子",
         "附近餐厅",
+        "推荐",
+        "推荐一下",
+        "推荐几个",
     }
     if text in generic_phrases:
         return "美食"
@@ -305,16 +374,17 @@ def smart_tool_plan_router(state: ChatState) -> list[dict[str, Any]] | None:
         return None
 
     text = (state.message or "").strip()
-    has_explicit_location = _looks_like_location_update(text)
+    has_explicit_location = _looks_like_explicit_address(text)
     geocode_count = _tool_observation_count(state.observations, "geocode_location")
     search_count = _tool_observation_count(state.observations, "search_restaurants")
     ip_count = _tool_observation_count(state.observations, "get_ip_location")
 
     # stage 1: 用户给了明确地址 -> geocode
     if has_explicit_location and geocode_count == 0:
+        geocode_query = _extract_geocode_query(text)
         _set_task_stage(state, "need_geocode", cause="explicit_location")
-        logger.info("router_decision session_id=%s stage=%s reason=explicit_location tool=geocode_location", state.session_id, state.task_stage)
-        return [{"name": "geocode_location", "args": {"query": text}}]
+        logger.info("router_decision session_id=%s stage=%s reason=explicit_location tool=geocode_location query=%s", state.session_id, state.task_stage, geocode_query)
+        return [{"name": "geocode_location", "args": {"query": geocode_query}}]
 
     # stage 2: geocode 完成后，强制用 geocode 坐标搜索一次
     if has_explicit_location and geocode_count >= 1 and search_count == 0:
@@ -322,7 +392,7 @@ def smart_tool_plan_router(state: ChatState) -> list[dict[str, Any]] | None:
         if lat is not None and lng is not None:
             _set_task_stage(state, "location_ready", cause="geocode_resolved")
             logger.info("router_decision session_id=%s stage=%s reason=use_geocoded_location tool=search_restaurants lat=%s lng=%s", state.session_id, state.task_stage, lat, lng)
-            return [{"name": "search_restaurants", "args": {"query": "美食", "lat": lat, "lng": lng}}]
+            return [{"name": "search_restaurants", "args": {"query": _normalize_restaurant_query(state.message), "lat": lat, "lng": lng}}]
 
     lat_ctx, lng_ctx = _extract_location_from_context(state.context)
     lat_obs, lng_obs = _extract_location_from_observations(state.observations)
