@@ -39,31 +39,36 @@ def test_search_restaurants_results_relaxed_to_llm():
     assert handled is None
 
 
-def test_search_restaurants_empty_returns_guidance():
+def test_search_restaurants_empty_sets_recovery_context():
     state = _build_state()
 
     handled = _tool_result_handler(state, "search_restaurants", [])
 
-    assert isinstance(handled, dict)
-    assert "附近暂时没刷到合适的餐厅" in handled["recommendations"][0]["title"]
+    assert handled is None
+    assert state.context is not None
+    assert state.context.get("last_search_error") == "empty_result"
+    assert state.context.get("restaurant_retries") == 1
+    assert state.context.get("suggested_radius_km") == 3
 
 
-def test_search_restaurants_missing_location_keeps_hard_guardrail():
+def test_search_restaurants_missing_location_sets_recovery_context():
     state = _build_state()
 
     handled = _tool_result_handler(state, "search_restaurants", {"error": "missing_location"})
 
-    assert isinstance(handled, dict)
-    assert handled["recommendations"][0]["type"] == "note"
+    assert handled is None
+    assert state.context is not None
+    assert state.context.get("last_search_error") == "missing_location"
 
 
-def test_geocode_location_error_keeps_hard_guardrail():
+def test_geocode_location_error_sets_recovery_context():
     state = _build_state()
 
     handled = _tool_result_handler(state, "geocode_location", {"error": "not_found"})
 
-    assert isinstance(handled, dict)
-    assert "自动定位" in handled["recommendations"][0]["title"]
+    assert handled is None
+    assert state.context is not None
+    assert state.context.get("last_location_error") == "not_found"
 
 
 def test_geocode_location_success_updates_context_and_relaxes():
@@ -226,48 +231,12 @@ def test_fast_path_writer_prompt_builder_contains_recent_history_and_message():
     assert "使用中文回答" in prompt
 
 
-def test_tool_plan_router_eat_out_without_location_calls_get_ip_location():
+def test_tool_plan_router_always_delegates_to_llm():
     state = ChatState(session_id="s1", message="出去吃", intent="eat_out", context={})
 
     plan = smart_tool_plan_router(state)
 
-    assert plan == [{"name": "get_ip_location", "args": {}}]
-
-
-def test_tool_plan_router_eat_out_with_context_location_calls_search_restaurants():
-    state = ChatState(
-        session_id="s1",
-        message="出去吃",
-        intent="eat_out",
-        context={"environment": {"location": {"lat": 31.2304, "lng": 121.4737}}},
-    )
-
-    plan = smart_tool_plan_router(state)
-
-    assert isinstance(plan, list)
-    assert len(plan) == 1
-    assert plan[0]["name"] == "search_restaurants"
-    assert plan[0]["args"]["query"] == "美食"
-    assert plan[0]["args"]["lat"] == 31.2304
-    assert plan[0]["args"]["lng"] == 121.4737
-
-
-def test_tool_plan_router_eat_out_with_observation_location_calls_search_restaurants():
-    state = ChatState(
-        session_id="s1",
-        message="出去吃",
-        intent="eat_out",
-        context={},
-        observations=[{"tool": "get_ip_location", "result": {"lat": 30.67, "lng": 104.06}}],
-    )
-
-    plan = smart_tool_plan_router(state)
-
-    assert isinstance(plan, list)
-    assert len(plan) == 1
-    assert plan[0]["name"] == "search_restaurants"
-    assert plan[0]["args"]["lat"] == 30.67
-    assert plan[0]["args"]["lng"] == 104.06
+    assert plan is None
 
 
 def test_tool_plan_router_non_eat_out_returns_none():
@@ -278,61 +247,12 @@ def test_tool_plan_router_non_eat_out_returns_none():
     assert plan is None
 
 
-def test_tool_plan_router_explicit_location_calls_geocode_first():
-    state = ChatState(
-        session_id="s1",
-        message="我在紫阳县紫阳广场",
-        intent="eat_out",
-        context={"environment": {"location": {"lat": 32.31, "lng": 108.38}}},
-        history=[{"role": "user", "content": "出去吃"}],
-    )
-
-    plan = smart_tool_plan_router(state)
-
-    assert plan == [{"name": "geocode_location", "args": {"query": "我在紫阳县紫阳广场"}}]
-    assert state.task_stage == "need_geocode"
-
-
-def test_tool_plan_router_after_geocode_uses_geocoded_coords_for_search():
-    state = ChatState(
-        session_id="s1",
-        message="我在紫阳县紫阳广场",
-        intent="eat_out",
-        context={"environment": {"location": {"lat": 32.31, "lng": 108.38}}},
-        observations=[{"tool": "geocode_location", "result": {"lat": 32.521417, "lng": 108.532332}}],
-    )
-
-    plan = smart_tool_plan_router(state)
-
-    assert plan is not None
-    assert plan[0]["name"] == "search_restaurants"
-    assert plan[0]["args"]["lat"] == 32.521417
-    assert plan[0]["args"]["lng"] == 108.532332
-
-
-def test_tool_plan_router_after_search_delegates_to_llm():
-    state = ChatState(
-        session_id="s1",
-        message="我在紫阳县紫阳广场",
-        intent="eat_out",
-        observations=[
-            {"tool": "geocode_location", "result": {"lat": 32.521417, "lng": 108.532332}},
-            {"tool": "search_restaurants", "result": [{"name": "迈德思客"}]},
-        ],
-    )
-
-    plan = smart_tool_plan_router(state)
-
-    assert plan is None
-    assert state.task_stage == "searched"
-
-
-def test_intent_resolver_food_preference_maps_to_eat_out():
+def test_intent_resolver_delegates_to_llm_and_returns_unknown():
     state = ChatState(session_id="s1", message="我想吃麻辣烫", history=[])
 
     intent = smart_intent_resolver(state)
 
-    assert intent == "eat_out"
+    assert intent == "unknown"
 
 
 def test_search_restaurants_args_normalizer_accepts_keyword_and_location():
@@ -344,18 +264,6 @@ def test_search_restaurants_args_normalizer_accepts_keyword_and_location():
     assert normalized["lat"] == 32.52
     assert normalized["lng"] == 108.53
     assert "radius" not in normalized
-
-
-def test_intent_resolver_short_food_word_in_eat_out_context_maps_to_eat_out():
-    state = ChatState(
-        session_id="s1",
-        message="火锅",
-        history=[{"role": "user", "content": "出去吃"}],
-    )
-
-    intent = smart_intent_resolver(state)
-
-    assert intent == "eat_out"
 
 
 def test_normalize_restaurant_query_strips_colloquial_prefix():
