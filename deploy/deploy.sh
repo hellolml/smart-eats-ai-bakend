@@ -36,12 +36,14 @@ dc build --pull
 dc up -d
 
 # Wait for backend
-for i in {1..30}; do
+# RAG warmup may need >60s on restricted networks (e.g. HuggingFace unreachable -> retry/backoff).
+# Use a longer readiness window to avoid false-negative deploy failures.
+for i in {1..150}; do
   if dc exec -T backend curl -fsS http://localhost:8000/ >/dev/null 2>&1; then
     echo "[OK] Backend is healthy"
     break
   fi
-  if [[ "$i" -eq 30 ]]; then
+  if [[ "$i" -eq 150 ]]; then
     echo "[ERROR] Backend health check failed"
     dc logs backend --tail=100
     exit 1
