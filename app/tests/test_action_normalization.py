@@ -107,3 +107,20 @@ def test_text_fallback_strips_embedded_tool_calls_block():
     assert getattr(action, "type", None) == "final"
     answer = action.answer.model_dump()
     assert "tool_calls" not in answer["recommendations"][0]["title"]
+
+
+def test_bare_answer_json_is_normalized_to_final():
+    raw = '''
+{
+  "recommendations": [{"type": "note", "title": "旺森农家味", "reason": "离你近"}],
+  "followups": ["要不要我再按口味筛选？"],
+  "warnings": []
+}
+'''
+
+    action = normalize_action_from_raw(raw)
+
+    assert action is not None
+    assert getattr(action, "type", None) == "final"
+    answer = action.answer.model_dump()
+    assert answer["recommendations"][0]["title"] == "旺森农家味"

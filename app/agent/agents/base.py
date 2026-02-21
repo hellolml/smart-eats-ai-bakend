@@ -198,4 +198,10 @@ def normalize_action_from_raw(content: str) -> AgentAction | None:
         answer = _normalize_final_answer(data.get("answer"))
         payload = {"type": "final", "answer": answer or data.get("answer")}
         return AgentActionModel.model_validate(payload).root
+
+    # 容错：部分模型会直接返回裸 answer（无 type/answer wrapper）
+    if isinstance(data, dict) and all(k in data for k in ("recommendations", "followups", "warnings")):
+        answer = _normalize_final_answer(data)
+        payload = {"type": "final", "answer": answer or data}
+        return AgentActionModel.model_validate(payload).root
     return None
