@@ -113,88 +113,17 @@ def _recent_eat_out_context(history: list[dict[str, Any]]) -> bool:
 
 
 def smart_intent_resolver(state: ChatState) -> str | None:
-    import json
+    """意图识别下放给 Planner（LLM）。
 
-    text = (state.message or "").strip().lower()
-    if not text:
-        intent = "unknown"
-        logger.info("intent_reason session_id=%s intent=%s reason=empty_message", state.session_id, intent)
-        return intent
-
-    # 模型优先判意图：规则层只处理“高置信显式意图”，其余交给 planner。
-    eat_out_tokens = ("出去吃", "外出", "附近餐厅", "找餐厅", "下馆子", "美食")
-    cook_home_tokens = ("在家做", "做饭", "菜谱", "食谱", "冰箱")
-    route_tokens = ("怎么走", "路线", "导航", "去那里", "去那儿", "到这家", "带我去", "怎么去")
-    greeting_tokens = ("你好", "hi", "hello", "嗨", "在吗")
-
-    # 1) 高置信规则：路线/在家做/出去吃显式表达
-    if any(token in text for token in route_tokens):
-        intent = "route"
-        logger.info("intent_reason session_id=%s intent=%s reason=route_tokens text=%s", state.session_id, intent, text)
-        return intent
-    if any(token in text for token in cook_home_tokens):
-        intent = "cook_home"
-        logger.info("intent_reason session_id=%s intent=%s reason=cook_home_tokens text=%s", state.session_id, intent, text)
-        return intent
-    if any(token in text for token in eat_out_tokens):
-        intent = "eat_out"
-        logger.info("intent_reason session_id=%s intent=%s reason=eat_out_tokens text=%s", state.session_id, intent, text)
-        return intent
-
-    # 2) 地址表达或“去哪吃”表达，直接归到外出就餐
-    if _looks_like_explicit_address(text):
-        intent = "eat_out"
-        logger.info("intent_reason session_id=%s intent=%s reason=explicit_address text=%s", state.session_id, intent, text)
-        return intent
-    if _looks_like_eat_out_request(text):
-        intent = "eat_out"
-        logger.info("intent_reason session_id=%s intent=%s reason=eat_out_request text=%s", state.session_id, intent, text)
-        return intent
-
-    # 3) 语境兜底：上一轮在外出就餐，当前是地址更新或菜系偏好
-    if _looks_like_location_update(text) and _recent_eat_out_context(state.history):
-        intent = "eat_out"
-        logger.info("intent_reason session_id=%s intent=%s reason=location_update_in_eat_out_context text=%s", state.session_id, intent, text)
-        return intent
-    if _looks_like_food_preference(text) and _recent_eat_out_context(state.history):
-        intent = "eat_out"
-        logger.info("intent_reason session_id=%s intent=%s reason=food_preference_in_eat_out_context text=%s", state.session_id, intent, text)
-        return intent
-
-    # 4) 检查是否是确认选择（用户提到之前推荐的菜名）
-    recipe_titles = []
-    for msg in state.history:
-        role = msg.get("role")
-        name = msg.get("name")
-        if role == "tool" and name == "rag_search_recipes":
-            content = msg.get("content", "")
-            # content 是 result_preview 的 JSON 字符串
-            if isinstance(content, str) and content:
-                try:
-                    result = json.loads(content)
-                    items = result.get("items", []) if isinstance(result, dict) else []
-                    for item in items:
-                        title = (item.get("title") or "").lower()
-                        if title:
-                            recipe_titles.append(title)
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-
-    # 如果用户消息包含之前推荐的菜名，这是确认选择
-    for title in recipe_titles:
-        if title in text:
-            intent = "confirm_recipe"
-            logger.info("intent_reason session_id=%s intent=%s reason=recipe_title_confirm matched=%s", state.session_id, intent, title)
-            return intent
-
-    if any(token == text for token in greeting_tokens):
-        intent = "chat"
-        logger.info("intent_reason session_id=%s intent=%s reason=greeting text=%s", state.session_id, intent, text)
-        return intent
-
-    # 其余交给 planner 自主判意图与工具决策
+    这里不再做关键词硬编码判意图，避免规则僵化。
+    代码层只保留可观测标签，真正的意图与路由由 planner 在 think 阶段决定。
+    """
     intent = "unknown"
-    logger.info("intent_reason session_id=%s intent=%s reason=delegate_to_planner text=%s", state.session_id, intent, text)
+    logger.info(
+        "intent_reason session_id=%s intent=%s reason=llm_owned_intent",
+        state.session_id,
+        intent,
+    )
     return intent
 
 
@@ -369,58 +298,16 @@ def _tool_observation_count(observations: list[dict[str, Any]], tool_name: str) 
 
 
 def smart_tool_plan_router(state: ChatState) -> list[dict[str, Any]] | None:
-    """结构化守门：只保证关键依赖与阶段推进，其余交给 LLM。"""
-    if state.intent != "eat_out":
-        return None
+    """路由主导权下放给 Planner（LLM）。
 
-    text = (state.message or "").strip()
-    has_explicit_location = _looks_like_explicit_address(text)
-    geocode_count = _tool_observation_count(state.observations, "geocode_location")
-    search_count = _tool_observation_count(state.observations, "search_restaurants")
-    ip_count = _tool_observation_count(state.observations, "get_ip_location")
-
-    # stage 1: 用户给了明确地址 -> geocode
-    if has_explicit_location and geocode_count == 0:
-        geocode_query = _extract_geocode_query(text)
-        _set_task_stage(state, "need_geocode", cause="explicit_location")
-        logger.info("router_decision session_id=%s stage=%s reason=explicit_location tool=geocode_location query=%s", state.session_id, state.task_stage, geocode_query)
-        return [{"name": "geocode_location", "args": {"query": geocode_query}}]
-
-    # stage 2: geocode 完成后，强制用 geocode 坐标搜索一次
-    if has_explicit_location and geocode_count >= 1 and search_count == 0:
-        lat, lng = _extract_location_from_observations_by_tool(state.observations, "geocode_location")
-        if lat is not None and lng is not None:
-            _set_task_stage(state, "location_ready", cause="geocode_resolved")
-            logger.info("router_decision session_id=%s stage=%s reason=use_geocoded_location tool=search_restaurants lat=%s lng=%s", state.session_id, state.task_stage, lat, lng)
-            return [{"name": "search_restaurants", "args": {"query": _normalize_restaurant_query(state.message), "lat": lat, "lng": lng}}]
-
-    lat_ctx, lng_ctx = _extract_location_from_context(state.context)
-    lat_obs, lng_obs = _extract_location_from_observations(state.observations)
-    has_any_location = (lat_ctx is not None and lng_ctx is not None) or (lat_obs is not None and lng_obs is not None)
-
-    # stage 3: 没位置才兜底 IP
-    if not has_any_location and ip_count == 0:
-        _set_task_stage(state, "need_location", cause="missing_location")
-        logger.info("router_decision session_id=%s stage=%s reason=no_location tool=get_ip_location", state.session_id, state.task_stage)
-        return [{"name": "get_ip_location", "args": {}}]
-
-    # stage 4: 有位置但还没搜，补一次搜索
-    if has_any_location and search_count == 0:
-        if lat_obs is not None and lng_obs is not None:
-            lat, lng = lat_obs, lng_obs
-            source = "observations"
-        else:
-            lat, lng = lat_ctx, lng_ctx
-            source = "context"
-        if lat is not None and lng is not None:
-            _set_task_stage(state, "location_ready", cause="location_available")
-            logger.info("router_decision session_id=%s stage=%s reason=have_location_no_search tool=search_restaurants source=%s lat=%s lng=%s", state.session_id, state.task_stage, source, lat, lng)
-            return [{"name": "search_restaurants", "args": {"query": _normalize_restaurant_query(state.message), "lat": lat, "lng": lng}}]
-
-    # 已经完成搜索，或者无需守门：交给 LLM 自由规划回应
-    if search_count > 0:
-        _set_task_stage(state, "searched", cause="search_completed")
-    logger.info("router_decision session_id=%s stage=%s reason=delegate_to_llm", state.session_id, state.task_stage or "unknown")
+    这里不再根据关键词/阶段强制工具调用，只保留观测日志。
+    真正的工具编排由 system policy + planner 决策。
+    """
+    logger.info(
+        "router_decision session_id=%s stage=%s reason=llm_owned_routing",
+        state.session_id,
+        state.task_stage or "unknown",
+    )
     return None
 
 
@@ -548,59 +435,20 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         return None
     if tool_name == "search_restaurants":
         _set_task_stage(state, "searched", cause="tool_result_search_restaurants")
-        if isinstance(result, dict):
-            if result.get("error") == "missing_location":
-                return FinalAnswer(
-                    recommendations=[
-                        {
-                            "type": "note",
-                            "title": "我还没拿到你的位置，先告诉我城市或地标，我马上给你筛附近店。",
-                            "reason": "定位暂时不可用。",
-                        }
-                    ],
-                    followups=["你现在在哪个城市？", "附近有什么地标/商场？", "也可以开启定位后再试一次。"],
-                    warnings=[],
-                ).model_dump()
-            return FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "note",
-                        "title": "我刚搜附近餐厅时出了点小问题。",
-                        "reason": "检索服务暂时异常。",
-                    }
-                ],
-                followups=["你想吃什么口味？我先按偏好给你一版。", "稍后我也可以再帮你重试附近搜索。"],
-                warnings=[],
-            ).model_dump()
-        if isinstance(result, list) and not result:
-            return FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "note",
-                        "title": "我按你当前位置搜了下，附近暂时没刷到合适的餐厅。",
-                        "reason": "可扩大范围或换关键词继续找。",
-                    }
-                ],
-                followups=["要不要我把范围放大到 5-10 公里？", "或者你说个口味（比如火锅/烧烤/粤菜），我再精确筛。"],
-                warnings=[],
-            ).model_dump()
+        # 交由 planner 做恢复决策（改写关键词/扩圈/澄清），避免代码层提前 fallback。
+        if state.context is None:
+            state.context = {}
+        if isinstance(result, dict) and result.get("error"):
+            state.context["last_search_error"] = result.get("error")
+        elif isinstance(result, list) and not result:
+            state.context["last_search_error"] = "empty_result"
         return None
     if tool_name in {"get_ip_location", "geocode_location"} and isinstance(result, dict):
         if result.get("error"):
-            return FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "note",
-                        "title": "我刚尝试了自动定位，但没拿到有效位置。",
-                        "reason": "定位信息不足。",
-                    }
-                ],
-                followups=[
-                    "告诉我你所在的城市/地标？",
-                    "或在浏览器允许定位，我就能按距离推荐附近餐厅。",
-                ],
-                warnings=[],
-            ).model_dump()
+            if state.context is None:
+                state.context = {}
+            state.context["last_location_error"] = result.get("error")
+            return None
         _set_task_stage(state, "location_ready", cause="tool_result_location")
         if state.context is None:
             state.context = {}
