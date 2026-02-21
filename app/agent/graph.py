@@ -46,6 +46,16 @@ logger = logging.getLogger("agent")
 MAX_SAME_TOOL_CALLS_PER_TURN = 2
 
 
+def _record_metric(state: ChatState, name: str, value: int | float = 1, **tags: Any) -> None:
+    payload = {
+        "metric": name,
+        "value": value,
+        "session_id": state.session_id,
+        **tags,
+    }
+    logger.info("metric %s", json.dumps(payload, ensure_ascii=False))
+
+
 def _build_observation_context(
     state: ChatState,
     agent_config: AgentConfig,
@@ -236,6 +246,16 @@ def _best_effort_final_from_observations(state: ChatState) -> dict[str, Any]:
         ).model_dump()
 
     return _fallback_final()
+
+
+def _is_fallback_payload(final_json: dict[str, Any]) -> bool:
+    recs = final_json.get("recommendations") if isinstance(final_json, dict) else None
+    if not isinstance(recs, list) or not recs:
+        return False
+    for item in recs:
+        if isinstance(item, dict) and str(item.get("reason") or "") == "fallback":
+            return True
+    return False
 
 
 def _render_final_text(final_json: dict[str, Any]) -> str:
@@ -489,8 +509,33 @@ def build_langgraph(
                         },
                     }
                 )
+                _record_metric(
+                    state,
+                    "intent_decision",
+                    intent=state.intent,
+                    need_clarify=state.intent_need_clarify,
+                )
+                if state.intent_need_clarify:
+                    _record_metric(state, "clarify_triggered", intent=state.intent)
             except Exception as exc:
                 logger.info("intent_decision_fallback session_id=%s reason=%s", state.session_id, str(exc))
+
+        if state.intent_need_clarify and state.intent_confidence < 0.6:
+            question = state.intent_clarify_question or "你是想出去吃，还是在家做饭？"
+            state.final_json = FinalAnswer(
+                recommendations=[
+                    {
+                        "type": "note",
+                        "title": question,
+                        "reason": "我先确认下你的需求，再给你更准的建议。",
+                    }
+                ],
+                followups=[],
+                warnings=[],
+            ).model_dump()
+            state.action_type = "final"
+            _record_metric(state, "clarify_final", intent=state.intent)
+            return state
 
         system = None
         if state.context:
@@ -1267,6 +1312,12 @@ async def run_chat_stream(
                 latest_state.final_json = final_json
             else:
                 latest_state["final_json"] = final_json
+
+        metric_state = latest_state if isinstance(latest_state, ChatState) else state
+        if _is_fallback_payload(final_json):
+            _record_metric(metric_state, "fallback_final")
+        else:
+            _record_metric(metric_state, "non_fallback_final")
 
         # 通知前端思考阶段结束，即将开始输出文字
         yield {"event": "thinking", "data": {"status": "done"}}

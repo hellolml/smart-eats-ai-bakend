@@ -23,6 +23,15 @@ SYSTEM_PROMPT_PATH = os.path.join(
 logger = logging.getLogger("agent.intent")
 
 
+def _record_agent_metric(state: ChatState, name: str, **tags: Any) -> None:
+    logger.info(
+        "metric session_id=%s name=%s tags=%s",
+        state.session_id,
+        name,
+        tags,
+    )
+
+
 def _set_task_stage(state: ChatState, next_stage: str, *, cause: str) -> None:
     prev = state.task_stage or "unknown"
     if prev != next_stage:
@@ -445,14 +454,26 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
             state.context = {}
         if isinstance(result, dict) and result.get("error"):
             state.context["last_search_error"] = result.get("error")
+            _record_agent_metric(state, "restaurant_search_error", code=result.get("error"))
         elif isinstance(result, list) and not result:
             state.context["last_search_error"] = "empty_result"
+            retries = int(state.context.get("restaurant_retries") or 0) + 1
+            state.context["restaurant_retries"] = retries
+            radius_ladder = [1, 3, 5, 10]
+            state.context["suggested_radius_km"] = radius_ladder[min(retries, len(radius_ladder) - 1)]
+            _record_agent_metric(state, "restaurant_search_empty", retries=retries)
+        elif isinstance(result, list) and result:
+            state.context.pop("last_search_error", None)
+            state.context.pop("restaurant_retries", None)
+            state.context.pop("suggested_radius_km", None)
+            _record_agent_metric(state, "restaurant_search_success", size=len(result))
         return None
     if tool_name in {"get_ip_location", "geocode_location"} and isinstance(result, dict):
         if result.get("error"):
             if state.context is None:
                 state.context = {}
             state.context["last_location_error"] = result.get("error")
+            _record_agent_metric(state, "location_resolution_failed", tool=tool_name, code=result.get("error"))
             return None
         _set_task_stage(state, "location_ready", cause="tool_result_location")
         if state.context is None:
@@ -461,6 +482,7 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         state.context["location"] = location
         if result.get("city"):
             state.context["city"] = result.get("city")
+        _record_agent_metric(state, "location_resolution_success", tool=tool_name)
         return None
     if tool_name == "search_recipes" and isinstance(result, list):
         return None
