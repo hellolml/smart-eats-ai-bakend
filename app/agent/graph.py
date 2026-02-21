@@ -587,7 +587,7 @@ def build_langgraph(
         try:
             action = await asyncio.wait_for(
                 planner.plan(system, user, action_normalizer=agent_config.action_normalizer),
-                timeout=20,
+                timeout=35,
             )
         except Exception as exc:
             state.observations.append({"planner_error": "planner_exception", "detail": str(exc)})
