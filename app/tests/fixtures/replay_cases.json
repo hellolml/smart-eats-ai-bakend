@@ -1,0 +1,26 @@
+[
+  {
+    "id": "eatout-location-as-target",
+    "message": "我在紫阳县紫阳广场，帮我找附近好吃的",
+    "expect": {
+      "no_fallback": true,
+      "intent_in": ["eat_out", "unknown"]
+    }
+  },
+  {
+    "id": "eatout-empty-result-recovery",
+    "message": "在紫阳县城附近找烧烤，人均50以内",
+    "expect": {
+      "no_fallback": true,
+      "intent_in": ["eat_out", "unknown"]
+    }
+  },
+  {
+    "id": "route-followup",
+    "message": "去阿娜尔麻辣干锅怎么走",
+    "expect": {
+      "no_fallback": true,
+      "intent_in": ["route", "unknown"]
+    }
+  }
+]
