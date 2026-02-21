@@ -136,33 +136,9 @@ def smart_intent_resolver(state: ChatState) -> str | None:
     return intent
 
 
-# 需要工具调用的关键词（命中任一则不走 fast path）
-_FAST_PATH_TOOL_KEYWORDS = (
-    "附近", "餐厅", "饭店", "外卖", "怎么走", "路线", "导航",
-    "天气", "菜谱", "食谱", "做法", "冰箱", "食材",
-    "推荐", "搜索", "查找", "找一下", "帮我找",
-    "在家做", "出去吃", "下馆子", "吃什么",
-    "recipe", "restaurant", "weather", "route", "navigate",
-)
-
-
 def smart_fast_path_decider(state: ChatState) -> bool:
-    """业务层 fast path 判定：仅处理无需工具的简单闲聊。"""
-    text = (state.message or "").strip()
-    if not text:
-        return False
-    if state.scene != "chat":
-        return False
-    # 有 checkpoint 恢复/重放需求的走完整流程
-    if state.resume_from_checkpoint or state.replay_from_checkpoint or state.checkpoint_ref:
-        return False
-    # 有 context_overrides 的走完整流程
-    if state.context_overrides:
-        return False
-    text_lower = text.lower()
-    if any(kw in text_lower for kw in _FAST_PATH_TOOL_KEYWORDS):
-        return False
-    return True
+    """关闭基于关键词的 fast-path，统一交给 LLM 决策。"""
+    return False
 
 
 def smart_fast_path_system_prompt_builder(state: ChatState) -> str | None:
