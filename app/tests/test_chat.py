@@ -87,3 +87,23 @@ def test_best_effort_with_empty_fridge_avoids_fallback():
 
     assert final_json["recommendations"][0]["reason"] != "fallback"
     assert "冰箱" in final_json["recommendations"][0]["title"]
+
+
+def test_best_effort_with_search_results_avoids_fallback():
+    state = ChatState(
+        session_id="s1",
+        observations=[
+            {
+                "tool": "search_restaurants",
+                "result": [
+                    {"name": "小宏川菜馆", "raw": {"address": "进站路55号"}},
+                    {"name": "福瑞农家", "raw": {"address": "城关镇"}},
+                ],
+            }
+        ],
+    )
+
+    final_json = _best_effort_final_from_observations(state)
+
+    assert final_json["recommendations"][0]["reason"] != "fallback"
+    assert "附近可选店" in final_json["recommendations"][0]["title"]

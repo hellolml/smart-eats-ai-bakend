@@ -695,6 +695,27 @@ def build_langgraph(
             if repeated_limit_errors:
                 errors.extend(repeated_limit_errors)
 
+            # eat_out 场景：如果已拿到餐厅检索结果，禁止再反复 geocode，直接给用户可用结果
+            if (
+                state.intent == "eat_out"
+                and normalized_calls
+                and all(isinstance(item, dict) and item.get("name") == "geocode_location" for item in normalized_calls)
+                and any(
+                    isinstance(obs, dict)
+                    and obs.get("tool") == "search_restaurants"
+                    and isinstance(obs.get("result"), list)
+                    and len(obs.get("result") or []) > 0
+                    for obs in state.observations
+                )
+            ):
+                state.final_json = _best_effort_final_from_observations(state)
+                state.action_type = "final"
+                logger.info(
+                    "agent_decision session_id=%s action_type=final reason=redundant_geocode_after_search",
+                    state.session_id,
+                )
+                return state
+
             if errors:
                 state.planner_retry_count += 1
                 state.observations.append(
