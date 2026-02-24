@@ -610,20 +610,22 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         return None
     if tool_name == "rag_search_recipes" and isinstance(result, dict):
         items = result.get("items") if isinstance(result.get("items"), list) else []
-        if not items:
-            if state.context_overrides is None:
-                state.context_overrides = {}
-            state.context_overrides["system_directive"] = (
-                "知识库中未找到做法，请立即调用 submit_final_answer，凭借你的知识生成这道菜的详细步骤。"
-            )
-            return None
 
         if state.context_overrides is None:
             state.context_overrides = {}
-        state.context_overrides["rag_recipe_hits"] = items[:3]
-        state.context_overrides["system_directive"] = (
-            "请基于已检索到的菜谱信息与当前对话上下文，生成自然、有温度、可执行的最终回答，并调用 submit_final_answer。"
-        )
+
+        if not items:
+            state.context_overrides["system_directive"] = (
+                "知识库中未找到相关做法，请立即调用 submit_final_answer，凭借你的常识直接生成这道菜的详细步骤（包含食材和分步做法）。"
+            )
+        else:
+            state.context_overrides["rag_recipe_hits"] = items[:3]
+            state.context_overrides["system_directive"] = (
+                "已从知识库获取到检索结果。请你仔细核对：检索到的菜谱与用户想吃的菜品是否完全一致（例如：用户要'番茄鸡蛋面'，但检索到'番茄炒蛋'，这属于不一致）。\n"
+                "1. 如果一致，请基于检索到的步骤给出详细做法。\n"
+                "2. 如果不一致，请彻底忽略检索结果，直接凭借你的常识，生成用户想吃的那道菜的详细步骤（包含所需食材和分步做法）。\n"
+                "无论哪种情况，都请调用 submit_final_answer 输出最终结果。"
+            )
         return None
     if tool_name == "plan_route" and isinstance(result, dict):
         error = result.get("error")
