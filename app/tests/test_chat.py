@@ -4,6 +4,7 @@ import json
 import pytest
 
 from app.agent.graph import _best_effort_final_from_observations, _render_final_text
+from app.agent.agent_registry import get_agent_config
 from app.agent.state import ChatState
 
 
@@ -83,27 +84,30 @@ def test_render_final_text_empty_returns_default():
 def test_best_effort_with_empty_fridge_avoids_fallback():
     state = ChatState(session_id="s1", context={"fridge_items": []})
 
-    final_json = _best_effort_final_from_observations(state)
+    final_json = _best_effort_final_from_observations(state, get_agent_config("smart_eats"))
 
     assert final_json["recommendations"][0]["reason"] != "fallback"
     assert "冰箱" in final_json["recommendations"][0]["title"]
 
 
-def test_best_effort_with_search_results_avoids_fallback():
+def test_best_effort_with_rag_recipe_results_avoids_fallback():
     state = ChatState(
         session_id="s1",
         observations=[
             {
-                "tool": "search_restaurants",
-                "result": [
-                    {"name": "小宏川菜馆", "raw": {"address": "进站路55号"}},
-                    {"name": "福瑞农家", "raw": {"address": "城关镇"}},
-                ],
+                "tool": "rag_search_recipes",
+                "result": {
+                    "items": [
+                        {"title": "番茄炒蛋", "snippet": "鸡蛋打散，番茄切块，先炒蛋后下番茄翻炒。"},
+                        {"title": "青椒土豆丝", "snippet": "土豆切丝泡水，热锅快炒保持脆爽。"},
+                    ]
+                },
             }
         ],
     )
 
-    final_json = _best_effort_final_from_observations(state)
+    final_json = _best_effort_final_from_observations(state, get_agent_config("smart_eats"))
 
     assert final_json["recommendations"][0]["reason"] != "fallback"
-    assert "附近可选店" in final_json["recommendations"][0]["title"]
+    assert final_json["recommendations"][0]["type"] == "recipe"
+    assert final_json["recommendations"][0]["title"] == "番茄炒蛋"

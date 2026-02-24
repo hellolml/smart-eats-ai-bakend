@@ -20,6 +20,7 @@ ToolArgsNormalizer = Callable[[str, dict[str, Any]], dict[str, Any]]
 SerialExecutionDecider = Callable[[list[dict[str, Any]]], bool]
 ToolResultPreviewer = Callable[[str, Any], Any]
 FinalActionHook = Callable[[Any, dict[str, Any], Any], Awaitable[None]]
+BestEffortFallbackHandler = Callable[[Any], dict[str, Any] | None]
 FastPathDecider = Callable[[Any], bool]
 FastPathSystemPromptBuilder = Callable[[Any], str | None]
 FastPathWriterPromptBuilder = Callable[[Any], str]
@@ -42,6 +43,7 @@ class AgentConfig:
     serial_execution_decider: SerialExecutionDecider | None = None
     tool_result_previewer: ToolResultPreviewer | None = None
     final_action_hook: FinalActionHook | None = None
+    best_effort_fallback_handler: BestEffortFallbackHandler | None = None
     fast_path_decider: FastPathDecider | None = None
     fast_path_system_prompt_builder: FastPathSystemPromptBuilder | None = None
     fast_path_writer_prompt_builder: FastPathWriterPromptBuilder | None = None
@@ -65,6 +67,7 @@ def create_agent_config(
     serial_execution_decider: SerialExecutionDecider | None = None,
     tool_result_previewer: ToolResultPreviewer | None = None,
     final_action_hook: FinalActionHook | None = None,
+    best_effort_fallback_handler: BestEffortFallbackHandler | None = None,
     fast_path_decider: FastPathDecider | None = None,
     fast_path_system_prompt_builder: FastPathSystemPromptBuilder | None = None,
     fast_path_writer_prompt_builder: FastPathWriterPromptBuilder | None = None,
@@ -85,6 +88,7 @@ def create_agent_config(
         serial_execution_decider=serial_execution_decider,
         tool_result_previewer=tool_result_previewer,
         final_action_hook=final_action_hook,
+        best_effort_fallback_handler=best_effort_fallback_handler,
         fast_path_decider=fast_path_decider,
         fast_path_system_prompt_builder=fast_path_system_prompt_builder,
         fast_path_writer_prompt_builder=fast_path_writer_prompt_builder,

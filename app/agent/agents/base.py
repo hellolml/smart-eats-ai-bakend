@@ -95,7 +95,14 @@ def _normalize_tool_item(item: Any) -> dict[str, dict[str, Any]] | None:
 
 
 def _parse_tool_calls(raw: str) -> list[dict[str, dict[str, Any]]] | None:
-    match = re.search(r"<tool_calls>(.*?)</tool_calls>", raw, re.DOTALL)
+    stripped = raw.strip()
+    if not stripped:
+        return None
+
+    if "<tool_calls" in stripped.lower() and not stripped.lower().startswith("<tool_calls"):
+        return None
+
+    match = re.fullmatch(r"<tool_calls>(.*?)</tool_calls>", stripped, re.DOTALL | re.IGNORECASE)
     if not match:
         return None
     payload = match.group(1).strip()
@@ -187,21 +194,9 @@ def normalize_action_from_raw(content: str) -> AgentAction | None:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        # 不是 JSON：剥离潜在工具片段后按纯文本 final 处理，避免工具标记泄露到用户侧
-        cleaned_text = re.sub(r"<tool_calls>[\s\S]*?</tool_calls>", "", cleaned, flags=re.IGNORECASE).strip()
-        if cleaned_text:
-            answer = {
-                "recommendations": [
-                    {"type": "note", "title": cleaned_text, "reason": None}
-                ],
-                "followups": [],
-                "warnings": [],
-            }
-            payload = {"type": "final", "answer": answer}
-            return AgentActionModel.model_validate(payload).root
-
         # 容错：模型偶发只吐出残缺 tool_calls 标签（如 "<tool_calls>"），避免后续抛错走 fallback
-        if "<tool_calls" in cleaned.lower():
+        lowered = cleaned.lower()
+        if "<tool_calls" in lowered and "</tool_calls>" not in lowered:
             answer = {
                 "recommendations": [
                     {
@@ -215,6 +210,20 @@ def normalize_action_from_raw(content: str) -> AgentAction | None:
             }
             payload = {"type": "final", "answer": answer}
             return AgentActionModel.model_validate(payload).root
+
+        # 不是 JSON：剥离潜在工具片段后按纯文本 final 处理，避免工具标记泄露到用户侧
+        cleaned_text = re.sub(r"<tool_calls>[\s\S]*?</tool_calls>", "", cleaned, flags=re.IGNORECASE).strip()
+        if cleaned_text:
+            answer = {
+                "recommendations": [
+                    {"type": "note", "title": cleaned_text, "reason": None}
+                ],
+                "followups": [],
+                "warnings": [],
+            }
+            payload = {"type": "final", "answer": answer}
+            return AgentActionModel.model_validate(payload).root
+
         return None
     if isinstance(data, dict) and data.get("type") == "tool_calls" and "calls" in data:
         return AgentActionModel.model_validate(data).root

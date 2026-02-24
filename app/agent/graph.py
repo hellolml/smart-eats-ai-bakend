@@ -216,70 +216,16 @@ def _fallback_final() -> dict[str, Any]:
     ).model_dump()
 
 
-def _best_effort_final_from_observations(state: ChatState) -> dict[str, Any]:
-    # 优先消费已有可用结果，尽量避免 steps_exhausted 直接 fallback
-    if isinstance(state.context, dict) and state.context.get("fridge_items") == []:
-        return FinalAnswer(
-            recommendations=[
-                {
-                    "type": "note",
-                    "title": "看起来你冰箱现在是空的，我先给你几道不用复杂食材也能做的快手菜。",
-                    "reason": "已获取到空冰箱状态",
-                }
-            ],
-            followups=["要不要我按 10 分钟内完成给你 3 道菜？", "你也可以告诉我想吃什么，我直接给详细做法。"],
-            warnings=[],
-        ).model_dump()
-
-    last_search_list: list[dict[str, Any]] | None = None
-    last_error: str | None = None
-    for item in reversed(state.observations):
-        if not isinstance(item, dict):
-            continue
-        tool_name = item.get("tool")
-        result = item.get("result")
-        if tool_name == "search_restaurants":
-            if isinstance(result, list):
-                last_search_list = result
-                break
-            if isinstance(result, dict) and isinstance(result.get("error"), str):
-                last_error = result.get("error")
-        if tool_name in {"get_ip_location", "geocode_location"} and isinstance(result, dict):
-            if isinstance(result.get("error"), str):
-                last_error = result.get("error")
-
-    if isinstance(last_search_list, list) and last_search_list:
-        top = []
-        for row in last_search_list[:3]:
-            if not isinstance(row, dict):
-                continue
-            name = str(row.get("name") or "").strip()
-            addr = ""
-            raw = row.get("raw")
-            if isinstance(raw, dict):
-                addr = str(raw.get("address") or "").strip()
-            if name:
-                top.append(f"{name}（{addr}）" if addr else name)
-        if top:
-            return FinalAnswer(
-                recommendations=[
-                    {"type": "note", "title": "我先给你整理了附近可选店", "reason": "基于已拿到的检索结果"}
-                ],
-                followups=[f"你可以先看这几家：{'；'.join(top)}", "要不要我再按口味/预算帮你筛一轮？"],
-                warnings=[],
-            ).model_dump()
-
-    if last_error in {"missing_location", "missing_ip"}:
-        return FinalAnswer(
-            recommendations=[
-                {"type": "note", "title": "我还缺少精确位置，暂时没法稳妥推荐附近餐厅。", "reason": "位置信息不足"}
-            ],
-            followups=["你可以发我当前城市或地标", "或者开启定位后再试一次"],
-            warnings=[],
-        ).model_dump()
-
+def _best_effort_final_from_observations(state: ChatState, agent_config: AgentConfig) -> dict[str, Any]:
+    # 框架层只负责分发，不包含任何具体业务语义
+    if agent_config.best_effort_fallback_handler:
+        try:
+            business_fallback = agent_config.best_effort_fallback_handler(state)
+        except Exception:
+            business_fallback = None
+        if isinstance(business_fallback, dict):
+            return business_fallback
     return _fallback_final()
-
 
 def _is_fallback_payload(final_json: dict[str, Any]) -> bool:
     recs = final_json.get("recommendations") if isinstance(final_json, dict) else None
@@ -356,69 +302,6 @@ def _strip_structured_wrapper(text: str) -> str:
     return text.strip()
 
 
-def _validate_args(
-    input_schema: dict[str, Any],
-    args: dict[str, Any],
-) -> tuple[bool, dict[str, Any]]:
-    if input_schema.get("type") != "object":
-        return False, {"planner_error": "invalid_schema"}
-
-    properties = input_schema.get("properties", {})
-    required = input_schema.get("required", [])
-    missing = [key for key in required if key not in args]
-    if missing:
-        return False, {
-            "planner_error": "invalid_args",
-            "missing": missing,
-            "allowed_properties": list(properties.keys()),
-            "received_args": args,
-            "expected_schema": input_schema,
-        }
-
-    for key, value in args.items():
-        if key not in properties:
-            continue
-        expected = properties[key].get("type")
-        if expected == "string" and not isinstance(value, str):
-            return False, {
-                "planner_error": "invalid_args",
-                "field": key,
-                "expected": expected,
-                "received": type(value).__name__,
-                "allowed_properties": list(properties.keys()),
-                "expected_schema": input_schema,
-            }
-        if expected == "number" and not isinstance(value, (int, float)):
-            return False, {
-                "planner_error": "invalid_args",
-                "field": key,
-                "expected": expected,
-                "received": type(value).__name__,
-                "allowed_properties": list(properties.keys()),
-                "expected_schema": input_schema,
-            }
-        if expected == "integer" and not isinstance(value, int):
-            return False, {
-                "planner_error": "invalid_args",
-                "field": key,
-                "expected": expected,
-                "received": type(value).__name__,
-                "allowed_properties": list(properties.keys()),
-                "expected_schema": input_schema,
-            }
-        if expected == "boolean" and not isinstance(value, bool):
-            return False, {
-                "planner_error": "invalid_args",
-                "field": key,
-                "expected": expected,
-                "received": type(value).__name__,
-                "allowed_properties": list(properties.keys()),
-                "expected_schema": input_schema,
-            }
-
-    return True, {}
-
-
 def _build_result_preview(
     agent_config: AgentConfig,
     tool_name: str | None,
@@ -442,6 +325,7 @@ def build_langgraph(
     planner = OpenAIPlanner(provider=provider)
     agent_config = agent_config or get_agent_config(None)
     allowed_tools = agent_config.tool_names
+    available_tool_schemas = list_tools(allowed_tools)
     tool_executor = ToolExecutor(
         allowed_tools,
         redis_client,
@@ -586,30 +470,44 @@ def build_langgraph(
         )
         try:
             action = await asyncio.wait_for(
-                planner.plan(system, user, action_normalizer=agent_config.action_normalizer),
+                planner.plan(
+                    system,
+                    user,
+                    available_tool_schemas,
+                    action_normalizer=agent_config.action_normalizer,
+                ),
                 timeout=35,
             )
         except Exception as exc:
+            state.planner_retry_count += 1
             state.observations.append({"planner_error": "planner_exception", "detail": str(exc)})
-            state.final_json = _best_effort_final_from_observations(state)
-            state.action_type = "final"
-            logger.info(
-                "agent_decision session_id=%s action_type=final reason=plan_exception detail=%s",
-                state.session_id,
-                str(exc),
-            )
             state.events.append(
                 {
                     "event": "plan_exception",
-                    "data": {"detail": str(exc)},
+                    "data": {"detail": str(exc), "retry_count": state.planner_retry_count},
                 }
             )
             await _log_plan_event(
                 db,
                 state,
                 "plan_exception",
-                {"detail": str(exc)},
+                {"detail": str(exc), "retry_count": state.planner_retry_count},
             )
+            if state.planner_retry_count >= 2:
+                state.final_json = _best_effort_final_from_observations(state, agent_config)
+                state.action_type = "final"
+                logger.info(
+                    "agent_decision session_id=%s action_type=final reason=plan_exception_retry_exhausted detail=%s",
+                    state.session_id,
+                    str(exc),
+                )
+            else:
+                state.action_type = "retry"
+                logger.info(
+                    "agent_decision session_id=%s action_type=retry reason=plan_exception detail=%s",
+                    state.session_id,
+                    str(exc),
+                )
             return state
         finally:
             reset_llm_log_context(token)
@@ -632,46 +530,70 @@ def build_langgraph(
             )
             return state
 
-        if isinstance(action, ToolCallsAction) or getattr(action, "type", None) == "tool_calls":
-            calls = action.calls if isinstance(action, ToolCallsAction) else getattr(action, "calls", [])
-            if not isinstance(calls, list) or not calls:
-                state.observations.append({"planner_error": "invalid_tool_calls", "detail": "empty"})
-                state.final_json = _best_effort_final_from_observations(state)
+        async def _retry_invalid_tool_calls(errors: list[dict[str, Any]]) -> ChatState:
+            state.planner_retry_count += 1
+            state.observations.append(
+                {
+                    "planner_error": "invalid_tool_calls",
+                    "errors": errors,
+                }
+            )
+            state.events.append(
+                {
+                    "event": "retry",
+                    "data": {"reason": "invalid_tool_calls", "detail": errors},
+                }
+            )
+            await _log_plan_event(
+                db,
+                state,
+                "plan_invalid_tool_calls",
+                {"errors": errors},
+            )
+            logger.info(
+                "agent_decision session_id=%s action_type=invalid_tool_calls errors=%s",
+                state.session_id,
+                errors,
+            )
+            if state.planner_retry_count >= 2:
+                state.final_json = _best_effort_final_from_observations(state, agent_config)
                 state.action_type = "final"
-                await _log_plan_event(
-                    db,
-                    state,
-                    "plan_invalid_tool_calls",
-                    {"detail": "empty"},
-                )
-                logger.info(
-                    "agent_decision session_id=%s action_type=invalid_tool_calls",
-                    state.session_id,
-                )
-                return state
-            normalized_calls: list[dict[str, Any]] = []
-            errors: list[dict[str, Any]] = []
-            for call in calls:
-                if not isinstance(call, dict) or len(call) != 1:
-                    errors.append({"reason": "invalid_format", "call": call})
-                    continue
-                tool_name, args = next(iter(call.items()))
-                if not isinstance(tool_name, str) or not isinstance(args, dict):
-                    errors.append({"reason": "invalid_format", "call": call})
-                    continue
-                args = tool_executor.normalize_args(tool_name, args)
-                tool = get_tool(tool_name, allowed_tools)
-                if not tool:
-                    errors.append({"reason": "unknown_tool", "tool": tool_name})
-                    continue
-                valid, error_obs = _validate_args(tool.input_schema, args)
-                if not valid:
-                    error_obs["tool"] = tool_name
-                    errors.append(error_obs)
-                    continue
-                normalized_calls.append({"name": tool_name, "args": args})
+            else:
+                state.action_type = "retry"
+            return state
 
-            # 防抖：同一轮次同一工具调用次数过多，直接拦截
+        if isinstance(action, ToolAction):
+            action = ToolCallsAction(calls=[{action.name: action.args}])
+
+        if isinstance(action, ToolCallsAction) or getattr(action, "type", None) == "tool_calls":
+            try:
+                raw_calls = action.calls if isinstance(action, ToolCallsAction) else getattr(action, "calls", [])
+                if not isinstance(raw_calls, list) or not raw_calls:
+                    raise ValueError("empty_tool_calls")
+
+                normalized_calls: list[dict[str, Any]] = []
+                for call in raw_calls:
+                    if not isinstance(call, dict) or len(call) != 1:
+                        raise ValueError(f"invalid_call_format:{call}")
+                    tool_name, args = next(iter(call.items()))
+                    if not isinstance(tool_name, str) or not isinstance(args, dict):
+                        raise TypeError(f"invalid_call_types:{call}")
+
+                    tool = get_tool(tool_name, allowed_tools)
+                    if not tool:
+                        raise ValueError(f"unknown_tool:{tool_name}")
+
+                    normalized_calls.append(
+                        {
+                            "name": tool_name,
+                            "args": tool_executor.normalize_args(tool_name, args),
+                        }
+                    )
+            except Exception as exc:
+                return await _retry_invalid_tool_calls(
+                    [{"reason": "parse_error", "detail": str(exc)}]
+                )
+
             repeated_limit_errors: list[dict[str, Any]] = []
             for call in normalized_calls:
                 tool_name = call.get("name")
@@ -693,9 +615,8 @@ def build_langgraph(
                     )
 
             if repeated_limit_errors:
-                errors.extend(repeated_limit_errors)
+                return await _retry_invalid_tool_calls(repeated_limit_errors)
 
-            # eat_out 场景：如果已拿到餐厅检索结果，禁止再反复 geocode，直接给用户可用结果
             if (
                 state.intent == "eat_out"
                 and normalized_calls
@@ -708,49 +629,12 @@ def build_langgraph(
                     for obs in state.observations
                 )
             ):
-                state.final_json = _best_effort_final_from_observations(state)
+                state.final_json = _best_effort_final_from_observations(state, agent_config)
                 state.action_type = "final"
                 logger.info(
                     "agent_decision session_id=%s action_type=final reason=redundant_geocode_after_search",
                     state.session_id,
                 )
-                return state
-
-            if errors:
-                state.planner_retry_count += 1
-                state.observations.append(
-                    {
-                        "planner_error": "invalid_tool_calls",
-                        "errors": errors,
-                    }
-                )
-                state.events.append(
-                    {
-                        "event": "retry",
-                        "data": {"reason": "invalid_tool_calls", "detail": errors},
-                    }
-                )
-                await _log_plan_event(
-                    db,
-                    state,
-                    "plan_invalid_tool_calls",
-                    {"errors": errors},
-                )
-                logger.info(
-                    "agent_decision session_id=%s action_type=invalid_tool_calls",
-                    state.session_id,
-                )
-                if state.planner_retry_count >= 2:
-                    # 对常见死循环做业务兜底，避免直接 fallback
-                    repeated_tools = {
-                        str(item.get("tool"))
-                        for item in errors
-                        if isinstance(item, dict) and item.get("reason") == "max_same_tool_calls_per_turn"
-                    }
-                    state.final_json = _best_effort_final_from_observations(state)
-                    state.action_type = "final"
-                else:
-                    state.action_type = "retry"
                 return state
 
             state.planner_retry_count = 0
@@ -779,132 +663,18 @@ def build_langgraph(
             )
             return state
 
-        if not isinstance(action, ToolAction):
-            state.observations.append({"planner_error": "invalid_action"})
-            state.final_json = _best_effort_final_from_observations(state)
-            state.action_type = "final"
-            await _log_plan_event(
-                db,
-                state,
-                "plan_invalid_action",
-                {"action_type": str(getattr(action, "type", None))},
-            )
-            logger.info(
-                "agent_decision session_id=%s action_type=invalid",
-                state.session_id,
-            )
-            return state
-
-        tool_name = action.name
-        args = tool_executor.normalize_args(action.name, action.args)
-        tool = get_tool(tool_name, allowed_tools)
-        if not tool:
-            state.planner_retry_count += 1
-            state.observations.append(
-                {
-                    "planner_error": "unknown_tool",
-                    "tool": tool_name,
-                    "allowed_tools": [item["name"] for item in list_tools(allowed_tools)],
-                }
-            )
-            state.events.append(
-                {
-                    "event": "retry",
-                    "data": {"reason": "unknown_tool", "tool": tool_name},
-                }
-            )
-            await _log_plan_event(
-                db,
-                state,
-                "plan_unknown_tool",
-                {"tool": tool_name},
-            )
-            logger.info(
-                "agent_decision session_id=%s action_type=unknown_tool tool=%s",
-                state.session_id,
-                tool_name,
-            )
-            if state.planner_retry_count >= 2:
-                state.final_json = _best_effort_final_from_observations(state)
-                state.action_type = "final"
-            else:
-                state.action_type = "retry"
-            return state
-
-        valid, error_obs = _validate_args(tool.input_schema, args)
-        if not valid:
-            state.planner_retry_count += 1
-            state.observations.append(error_obs)
-            state.events.append(
-                {
-                    "event": "retry",
-                    "data": {"reason": "invalid_args", "detail": error_obs},
-                }
-            )
-            await _log_plan_event(
-                db,
-                state,
-                "plan_invalid_args",
-                error_obs,
-            )
-            logger.info(
-                "agent_decision session_id=%s action_type=invalid_args tool=%s",
-                state.session_id,
-                tool_name,
-            )
-            if state.planner_retry_count >= 2:
-                state.final_json = _best_effort_final_from_observations(state)
-                state.action_type = "final"
-            else:
-                state.action_type = "retry"
-            return state
-
-        existing_tool_calls = sum(
-            1
-            for obs in state.observations
-            if isinstance(obs, dict) and obs.get("tool") == tool_name
-        )
-        if existing_tool_calls >= MAX_SAME_TOOL_CALLS_PER_TURN:
-            state.observations.append(
-                {
-                    "planner_error": "max_same_tool_calls_per_turn",
-                    "tool": tool_name,
-                    "limit": MAX_SAME_TOOL_CALLS_PER_TURN,
-                    "existing": existing_tool_calls,
-                }
-            )
-            state.final_json = _best_effort_final_from_observations(state)
-            state.action_type = "final"
-            logger.info(
-                "agent_decision session_id=%s action_type=final reason=max_same_tool_calls_per_turn tool=%s",
-                state.session_id,
-                tool_name,
-            )
-            return state
-
-        state.planner_retry_count = 0
-        state.action_type = "tool"
-        state.action = action
-        state.tool_plan = [{"name": tool_name, "args": args}]
-        state.events.append(
-            {
-                "event": "plan_step",
-                "data": {"type": "tool", "name": tool_name, "args": args},
-            }
-        )
+        state.observations.append({"planner_error": "invalid_action"})
+        state.final_json = _best_effort_final_from_observations(state, agent_config)
+        state.action_type = "final"
         await _log_plan_event(
             db,
             state,
-            "plan_tool",
-            {"tool": tool_name, "args": args},
+            "plan_invalid_action",
+            {"action_type": str(getattr(action, "type", None))},
         )
         logger.info(
-            "agent_decision session_id=%s action_type=tool tool=%s args=%s intent=%s tool_plan=%s",
+            "agent_decision session_id=%s action_type=invalid",
             state.session_id,
-            tool_name,
-            args,
-            state.intent,
-            state.tool_plan,
         )
         return state
 
@@ -919,7 +689,7 @@ def build_langgraph(
                 state.observations.append({"planner_error": "empty_tool_calls_after_plan"})
                 state.action_type = "retry" if state.planner_retry_count < 2 else "final"
                 if state.action_type == "final":
-                    state.final_json = _best_effort_final_from_observations(state)
+                    state.final_json = _best_effort_final_from_observations(state, agent_config)
                 return state
             if len(state.pending_tool_calls) > 4:
                 state.pending_tool_calls = state.pending_tool_calls[:4]
@@ -934,7 +704,7 @@ def build_langgraph(
             state.observations.append({"planner_error": "invalid_tool_action_after_plan"})
             state.action_type = "retry" if state.planner_retry_count < 2 else "final"
             if state.action_type == "final":
-                state.final_json = _best_effort_final_from_observations(state)
+                state.final_json = _best_effort_final_from_observations(state, agent_config)
         return state
 
     async def act_node(state: ChatState) -> ChatState:
@@ -1082,7 +852,7 @@ def build_langgraph(
                 return state
 
         if state.steps_left <= 0:
-            state.final_json = _best_effort_final_from_observations(state)
+            state.final_json = _best_effort_final_from_observations(state, agent_config)
             state.action_type = "final"
             logger.info(
                 "agent_decision session_id=%s action_type=final reason=steps_exhausted_best_effort",
@@ -1117,7 +887,7 @@ def build_langgraph(
                     return state
         state.tool_results_batch = []
         if state.steps_left <= 0:
-            state.final_json = _best_effort_final_from_observations(state)
+            state.final_json = _best_effort_final_from_observations(state, agent_config)
             state.action_type = "final"
             logger.info(
                 "agent_decision session_id=%s action_type=final reason=steps_exhausted_best_effort",

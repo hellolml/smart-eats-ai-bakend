@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Union, Any
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, ConfigDict
 
 
 class RecipeRecommendation(BaseModel):
@@ -34,6 +34,12 @@ class NoteRecommendation(BaseModel):
 Recommendation = Union[RecipeRecommendation, RestaurantRecommendation, NoteRecommendation]
 
 
+class FinalAnswerArgs(BaseModel):
+    recommendations: list[Recommendation] = Field(default_factory=list, description="推荐的美食、餐厅或笔记列表")
+    followups: list[str] = Field(default_factory=list, description="追问或引导用户下一步的话术")
+    warnings: list[str] = Field(default_factory=list, description="需要提醒用户的注意事项")
+
+
 class FinalAnswer(BaseModel):
     recommendations: list[Recommendation] = Field(default_factory=list)
     followups: list[str] = Field(default_factory=list)
@@ -61,6 +67,18 @@ AgentAction = Union[ToolAction, ToolCallsAction, FinalAction]
 
 class AgentActionModel(RootModel[AgentAction]):
     pass
+
+
+class IntentDecisionArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["eat_out", "cook_home", "route", "chat", "unknown"] = Field(
+        ..., description="用户本轮的主意图"
+    )
+    confidence: float = Field(..., ge=0.0, le=1.0, description="意图置信度，范围 0~1")
+    slots: dict[str, Any] = Field(default_factory=dict, description="提取到的结构化槽位")
+    need_clarify: bool = Field(default=False, description="是否需要进一步澄清")
+    clarify_question: str | None = Field(default=None, description="需要澄清时给用户的问题")
 
 
 class IntentDecision(BaseModel):

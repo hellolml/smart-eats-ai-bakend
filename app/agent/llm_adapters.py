@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import re
 import threading
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -13,7 +11,15 @@ from typing import Any, AsyncGenerator, Callable
 import httpx
 from openai import AsyncOpenAI
 
-from app.agent.schemas import AgentAction, AgentActionModel, IntentDecision, ToolAction
+from app.agent.schemas import (
+    AgentAction,
+    FinalAction,
+    FinalAnswer,
+    FinalAnswerArgs,
+    IntentDecision,
+    IntentDecisionArgs,
+    ToolCallsAction,
+)
 from app.common.config import settings
 
 logger = logging.getLogger("llm")
@@ -49,27 +55,6 @@ def _should_log_request(kind: str) -> bool:
         return True
     return mode == kind
 
-
-def _extract_response_text(response: Any) -> str | None:
-    output_text = getattr(response, "output_text", None)
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text
-    output = getattr(response, "output", None)
-    if not isinstance(output, list):
-        return None
-    parts: list[str] = []
-    for item in output:
-        if getattr(item, "type", None) == "output_text":
-            text = getattr(item, "text", None)
-            if isinstance(text, str):
-                parts.append(text)
-        content = getattr(item, "content", None)
-        if isinstance(content, list):
-            for block in content:
-                text = getattr(block, "text", None)
-                if isinstance(text, str):
-                    parts.append(text)
-    return "".join(parts) if parts else None
 
 @dataclass(frozen=True)
 class ProviderConfig:
@@ -144,6 +129,7 @@ class OpenAIPlanner:
         self,
         system: str,
         user: str,
+        available_tools: list[dict[str, Any]],
         action_normalizer: Callable[[str], AgentAction | None] | None = None,
     ) -> AgentAction:
         if not self.client:
@@ -174,55 +160,141 @@ class OpenAIPlanner:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
+        openai_tools = self._build_openai_tools(available_tools)
 
-        # 统一使用 chat.completions 流式接口，收集完整内容后解析。
-        # 流式调用可以更早建立连接、降低 TTFB，部分提供商流式首 token 更快。
-        content = await self._stream_collect(messages)
+        response = await self.client.chat.completions.create(
+            model=self.config.model_planner,
+            messages=messages,
+            tools=openai_tools,
+            tool_choice="auto",
+            timeout=35,
+        )
+
+        message = response.choices[0].message
+        content = self._message_content_to_text(getattr(message, "content", None))
+        tool_calls = getattr(message, "tool_calls", None) or []
 
         logger.info(
-            "planner response provider=%s model=%s session_id=%s turn=%s step=%s raw=%s",
+            "planner response provider=%s model=%s session_id=%s turn=%s step=%s tool_calls=%s content=%s",
             self.config.name,
             self.config.model_planner,
             context.get("session_id"),
             context.get("turn"),
             context.get("step"),
+            [getattr(getattr(item, "function", None), "name", None) for item in tool_calls],
             content,
         )
-        if action_normalizer:
+
+        if tool_calls:
+            calls: list[dict[str, dict[str, Any]]] = []
+            for call in tool_calls:
+                function = getattr(call, "function", None)
+                tool_name = getattr(function, "name", None)
+                if not isinstance(tool_name, str) or not tool_name:
+                    raise RuntimeError("invalid planner response: missing tool name")
+                args = self._normalize_tool_args(tool_name, getattr(function, "arguments", None))
+
+                if tool_name == "submit_final_answer":
+                    answer_args = FinalAnswerArgs.model_validate(args)
+                    answer = FinalAnswer.model_validate(answer_args.model_dump())
+                    return FinalAction(answer=answer)
+
+                calls.append({tool_name: args})
+
+            if calls:
+                return ToolCallsAction(calls=calls)
+
+        if content and action_normalizer:
             mapped = action_normalizer(content)
             if mapped:
                 return mapped
-        try:
-            return AgentActionModel.model_validate_json(content).root
-        except Exception as exc:
-            raise RuntimeError(f"invalid planner response: {exc}") from exc
 
-    async def _stream_collect(self, messages: list[dict[str, str]]) -> str:
-        """流式收集 planner 响应，减少 TTFB。"""
-        stream = await self.client.chat.completions.create(
-            model=self.config.model_planner,
-            messages=messages,
-            stream=True,
+        return self._build_fallback_final_action(content)
+
+    def _build_openai_tools(self, available_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        for item in available_tools:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            description = item.get("description")
+            parameters = item.get("parameters") or item.get("input_schema")
+            if not isinstance(parameters, dict):
+                parameters = {"type": "object", "properties": {}}
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": str(description or ""),
+                        "parameters": parameters,
+                    },
+                }
+            )
+
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "submit_final_answer",
+                    "description": "当你已收集足够信息并准备给用户最终回复时调用。",
+                    "parameters": FinalAnswerArgs.model_json_schema(),
+                },
+            }
         )
-        chunks: list[str] = []
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                chunks.append(delta)
-        content = "".join(chunks)
-        if not content:
-            raise RuntimeError("invalid planner response: empty content")
-        return content
+        return tools
+
+    def _normalize_tool_args(self, tool_name: str, raw_args: Any) -> dict[str, Any]:
+        payload = raw_args if isinstance(raw_args, str) else json.dumps(raw_args or {}, ensure_ascii=False)
+        try:
+            data = json.loads(payload) if payload else {}
+        except Exception as exc:
+            raise RuntimeError(f"invalid tool arguments for {tool_name}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"invalid tool arguments for {tool_name}: expected object")
+        return data
+
+    def _message_content_to_text(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str) and text.strip():
+                        parts.append(text.strip())
+            return "\n".join(parts).strip()
+        return ""
+
+    def _build_fallback_final_action(self, content: str) -> FinalAction:
+        text = content.strip() if isinstance(content, str) else ""
+        if not text:
+            text = "好的。"
+        return FinalAction(
+            answer=FinalAnswer(
+                recommendations=[
+                    {
+                        "type": "note",
+                        "title": text,
+                        "reason": "direct_text_response",
+                    }
+                ],
+                followups=[],
+                warnings=[],
+            )
+        )
 
     async def classify_intent(self, user: str, context: dict[str, Any] | None = None) -> IntentDecision:
-        """让 LLM 输出结构化意图，代码仅做 schema 校验与兜底。"""
+        """让 LLM 通过原生 function calling 输出结构化意图。"""
         if not self.client:
             return IntentDecision()
 
         system = (
             "You are an intent classifier for a food assistant. "
-            "Return strict JSON only with fields: "
-            "intent, confidence, slots, need_clarify, clarify_question. "
+            "Choose exactly one intent and call decide_intent with structured arguments. "
             "intent must be one of: eat_out, cook_home, route, chat, unknown."
         )
         payload = {
@@ -233,14 +305,37 @@ class OpenAIPlanner:
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "decide_intent",
+                    "description": "输出用户意图分类结果。",
+                    "parameters": IntentDecisionArgs.model_json_schema(),
+                },
+            }
+        ]
+
         try:
-            raw = await self._stream_collect(messages)
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-                cleaned = re.sub(r"\s*```$", "", cleaned).strip()
-            data = json.loads(cleaned)
-            return IntentDecision.model_validate(data)
+            response = await self.client.chat.completions.create(
+                model=self.config.model_planner,
+                messages=messages,
+                tools=tools,
+                tool_choice={"type": "function", "function": {"name": "decide_intent"}},
+                timeout=20,
+            )
+            message = response.choices[0].message
+            tool_calls = getattr(message, "tool_calls", None) or []
+            if not tool_calls:
+                return IntentDecision()
+
+            function = getattr(tool_calls[0], "function", None)
+            if getattr(function, "name", None) != "decide_intent":
+                return IntentDecision()
+            args = self._normalize_tool_args("decide_intent", getattr(function, "arguments", None))
+            strict = IntentDecisionArgs.model_validate(args)
+            return IntentDecision.model_validate(strict.model_dump())
         except Exception as exc:
             logger.info("intent_classify_fallback reason=%s", str(exc))
             return IntentDecision()

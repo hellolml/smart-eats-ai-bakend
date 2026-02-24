@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import logging
 from typing import Any
 
@@ -314,6 +315,14 @@ def smart_context_extender(state: ChatState) -> dict:
         extra["recovery_path"] = list(state.recovery_path)
     if state.tool_plan:
         extra["tool_plan"] = list(state.tool_plan)
+
+    if isinstance(state.context_overrides, dict):
+        directive = state.context_overrides.pop("system_directive", None)
+        if isinstance(directive, str) and directive.strip():
+            extra["system_directive"] = directive.strip()
+        if not state.context_overrides:
+            state.context_overrides = None
+
     return extra
 
 
@@ -396,56 +405,121 @@ def smart_system_prompt(payload: dict) -> str:
             base_prompt = f.read()
     except FileNotFoundError:
         base_prompt = "你是 SmartEats 智能助手，帮助用户解决「吃什么」的问题。"
-    
+
+    context_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return (
         f"{base_prompt}\n\n"
         "## Runtime Context（系统注入，非用户输入）\n"
         f"- output_language: {settings.DEFAULT_LANGUAGE}\n"
-        f"- context: {payload}"
+        f"- context: {context_json}"
     )
 
 
-def _build_recipe_final_from_rag_item(item: dict[str, Any]) -> dict[str, Any] | None:
-    title = str(item.get("title") or "").strip()
-    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
 
-    steps_raw = metadata.get("steps")
-    steps: list[str] = []
-    if isinstance(steps_raw, list):
-        steps = [str(step).strip() for step in steps_raw if str(step).strip()]
+def smart_best_effort_fallback(state: ChatState) -> dict[str, Any] | None:
+    """SmartEats 业务层兜底：当步骤耗尽时尽量返回可用结果。"""
+    if isinstance(state.context, dict) and state.context.get("fridge_items") == []:
+        return FinalAnswer(
+            recommendations=[
+                {
+                    "type": "note",
+                    "title": "冰箱空啦，我先给你几道简单快手菜思路。",
+                    "reason": "状态：冰箱为空",
+                }
+            ],
+            followups=["要不要我按 10 分钟内完成给你 3 道菜？", "或者你想改成附近餐厅推荐也可以。"],
+            warnings=[],
+        ).model_dump()
 
-    ingredients_raw = metadata.get("ingredients")
-    ingredients: list[str] = []
-    if isinstance(ingredients_raw, list):
-        ingredients = [str(x).strip() for x in ingredients_raw if str(x).strip()]
+    last_recipe_list: list[dict[str, Any]] | None = None
+    last_search_list: list[dict[str, Any]] | None = None
+    last_error: str | None = None
 
-    if not title and not steps:
-        return None
+    for item in reversed(state.observations):
+        if not isinstance(item, dict):
+            continue
+        tool_name = item.get("tool")
+        result = item.get("result")
 
-    step_lines = [f"{idx + 1}. {step}" for idx, step in enumerate(steps[:8])]
-    ingredients_text = f"食材：{'、'.join(ingredients[:10])}" if ingredients else ""
+        if tool_name == "rag_search_recipes" and isinstance(result, dict):
+            items = result.get("items")
+            if last_recipe_list is None and isinstance(items, list) and items:
+                last_recipe_list = items
+            if isinstance(result.get("error"), str):
+                last_error = result.get("error")
 
-    body_parts: list[str] = []
-    if title:
-        body_parts.append(f"{title}做法：")
-    if ingredients_text:
-        body_parts.append(ingredients_text)
-    if step_lines:
-        body_parts.append("步骤：\n" + "\n".join(step_lines))
-    if not step_lines:
-        body_parts.append("我先给你一个家常做法思路：热锅下油→主料处理→调味收汁。")
+        if tool_name == "search_restaurants":
+            if last_search_list is None and isinstance(result, list) and result:
+                last_search_list = result
+            if isinstance(result, dict) and isinstance(result.get("error"), str):
+                last_error = result.get("error")
 
-    return FinalAnswer(
-        recommendations=[
-            {
-                "type": "recipe",
-                "title": "\n".join(body_parts),
-                "reason": "已根据你点的菜名给出做法",
-            }
-        ],
-        followups=["要不要我再给你这个菜的‘快手版（10分钟）’？", "或者我按2人份把克数配比也写出来。"],
-        warnings=[],
-    ).model_dump()
+        if tool_name in {"get_ip_location", "geocode_location"} and isinstance(result, dict):
+            if isinstance(result.get("error"), str):
+                last_error = result.get("error")
+
+        if last_recipe_list is not None and last_search_list is not None:
+            break
+
+    if isinstance(last_recipe_list, list) and last_recipe_list:
+        recipe_recommendations: list[dict[str, Any]] = []
+        for recipe in last_recipe_list[:3]:
+            if not isinstance(recipe, dict):
+                continue
+            title = str(recipe.get("title") or "").strip()
+            snippet = str(recipe.get("snippet") or "").strip()
+            if not title:
+                continue
+            recipe_recommendations.append(
+                {
+                    "type": "recipe",
+                    "title": title,
+                    "reason": snippet[:80] if snippet else "基于知识库检索",
+                }
+            )
+
+        if recipe_recommendations:
+            return FinalAnswer(
+                recommendations=recipe_recommendations,
+                followups=["你想学哪一道？告诉我菜名，我直接给你详细步骤。", "如果你有忌口或时间限制，我可以继续帮你筛。"],
+                warnings=[],
+            ).model_dump()
+
+    if isinstance(last_search_list, list) and last_search_list:
+        top: list[str] = []
+        for row in last_search_list[:3]:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if name:
+                top.append(name)
+        if top:
+            return FinalAnswer(
+                recommendations=[
+                    {
+                        "type": "note",
+                        "title": "我先给你整理了附近可选店",
+                        "reason": "基于已拿到的检索结果",
+                    }
+                ],
+                followups=[f"你可以先看这几家：{'；'.join(top)}", "要不要我再按口味帮你筛一轮？"],
+                warnings=[],
+            ).model_dump()
+
+    if last_error in {"missing_location", "missing_ip"}:
+        return FinalAnswer(
+            recommendations=[
+                {
+                    "type": "note",
+                    "title": "我还缺少精确位置，暂时没法推荐附近餐厅。",
+                    "reason": "位置信息不足",
+                }
+            ],
+            followups=["你可以发我当前城市或地标", "或者改为在家做饭也可以。"],
+            warnings=[],
+        ).model_dump()
+
+    return None
 
 
 def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> dict | None:
@@ -459,50 +533,62 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         if isinstance(ctx_loc_source, str) and ctx_loc_source:
             state.location_source = ctx_loc_source
     
-    # get_fridge_items: 缓存食材；若在 cook_home 且冰箱为空，直接给业务兜底，避免二次规划超时/回退
+    # get_fridge_items: 缓存食材。表达层交给 LLM，代码层只注入强指令与结构化上下文。
     if tool_name == "get_fridge_items" and isinstance(result, dict):
         items = result.get("items") if isinstance(result.get("items"), list) else []
         if state.context is None:
             state.context = {}
         state.context["fridge_items"] = items
 
-        # 由 LLM 通过工具选择表达意图：一旦 planner 主动调用 get_fridge_items 且结果为空，直接给可执行方案。
         if not items:
-            return FinalAnswer(
-                recommendations=[
-                    {
-                        "type": "note",
-                        "title": "看起来你冰箱现在没食材，我先给你几道 10 分钟内能做的简易方案。",
-                        "reason": "已检测到空冰箱，先给可执行方案避免空转。",
-                    }
-                ],
-                followups=[
-                    "要不要我按‘不买菜也能做’给你 3 个具体做法？",
-                    "如果你准备下楼买菜，我也可以给你最短采购清单。",
-                ],
-                warnings=[],
-            ).model_dump()
+            if state.context_overrides is None:
+                state.context_overrides = {}
+            state.context_overrides["fridge_empty"] = True
+            state.context_overrides["system_directive"] = (
+                "冰箱为空。请结合用户当前诉求与上下文（如生病、口味、时间）生成有温度的可执行建议，"
+                "并调用 submit_final_answer。不要机械模板化回复。"
+            )
         return None
     if tool_name == "search_restaurants":
         _set_task_stage(state, "searched", cause="tool_result_search_restaurants")
-        # 交由 planner 做恢复决策（改写关键词/扩圈/澄清），避免代码层提前 fallback。
         if state.context is None:
             state.context = {}
+
         if isinstance(result, dict) and result.get("error"):
             state.context["last_search_error"] = result.get("error")
+            state.context.pop("suggested_radius_km", None)
             _record_agent_metric(state, "restaurant_search_error", code=result.get("error"))
-        elif isinstance(result, list) and not result:
-            state.context["last_search_error"] = "empty_result"
+            return None
+
+        if isinstance(result, list) and not result:
             retries = int(state.context.get("restaurant_retries") or 0) + 1
             state.context["restaurant_retries"] = retries
-            radius_ladder = [1, 3, 5, 10]
-            state.context["suggested_radius_km"] = radius_ladder[min(retries, len(radius_ladder) - 1)]
+            state.context["last_search_error"] = "empty_result"
+            state.context.pop("suggested_radius_km", None)
             _record_agent_metric(state, "restaurant_search_empty", retries=retries)
-        elif isinstance(result, list) and result:
+
+            if retries >= 1:
+                if state.context_overrides is None:
+                    state.context_overrides = {}
+                state.context_overrides["restaurant_search_retries"] = retries
+                state.context_overrides["system_directive"] = (
+                    "你已至少一次检索餐厅但结果为空。不要继续调用 search_restaurants。"
+                    "请立即调用 submit_final_answer，明确告知当前区域暂未找到合适餐厅，"
+                    "并给出下一步选择：1) 换商圈/地标再搜；2) 改为推荐在家快手菜。"
+                )
+            return None
+
+        if isinstance(result, list) and result:
             state.context.pop("last_search_error", None)
             state.context.pop("restaurant_retries", None)
             state.context.pop("suggested_radius_km", None)
+            if isinstance(state.context_overrides, dict):
+                state.context_overrides.pop("restaurant_search_retries", None)
+                if not state.context_overrides:
+                    state.context_overrides = None
             _record_agent_metric(state, "restaurant_search_success", size=len(result))
+            return None
+
         return None
     if tool_name in {"get_ip_location", "geocode_location"} and isinstance(result, dict):
         if result.get("error"):
@@ -524,35 +610,35 @@ def _tool_result_handler(state: ChatState, tool_name: str, result: object) -> di
         return None
     if tool_name == "rag_search_recipes" and isinstance(result, dict):
         items = result.get("items") if isinstance(result.get("items"), list) else []
-        error = result.get("error")
-        if error and not items:
-            # RAG 出错且无结果 → 返回 None 让 LLM 兜底生成菜谱
-            return None
         if not items:
-            # 没有匹配结果 → 返回 None 让 LLM 直接生成菜谱
+            if state.context_overrides is None:
+                state.context_overrides = {}
+            state.context_overrides["system_directive"] = (
+                "知识库中未找到做法，请立即调用 submit_final_answer，凭借你的知识生成这道菜的详细步骤。"
+            )
             return None
 
-        # 业务约束：用户输入菜名时，优先直接给可执行做法，避免再次规划导致体验抖动。
-        first = items[0] if isinstance(items[0], dict) else None
-        if first:
-            rendered = _build_recipe_final_from_rag_item(first)
-            if rendered is not None:
-                return rendered
+        if state.context_overrides is None:
+            state.context_overrides = {}
+        state.context_overrides["rag_recipe_hits"] = items[:3]
+        state.context_overrides["system_directive"] = (
+            "请基于已检索到的菜谱信息与当前对话上下文，生成自然、有温度、可执行的最终回答，并调用 submit_final_answer。"
+        )
         return None
     if tool_name == "plan_route" and isinstance(result, dict):
         error = result.get("error")
         if error == "missing_origin":
-            return FinalAnswer(
-                recommendations=[
+            return {
+                "recommendations": [
                     {
                         "type": "note",
                         "title": "还需要你的出发位置，才能规划路线。",
-                        "reason": "起点信息缺失。",
+                        "reason": "系统判定缺少起点信息。",
                     }
                 ],
-                followups=["告诉我你的出发地/地标？", "你现在在哪个城市或位置？"],
-                warnings=[],
-            ).model_dump()
+                "followups": ["你现在在哪个城市或位置？", "告诉我你的出发地/地标？"],
+                "warnings": [],
+            }
         if error == "missing_destination":
             return FinalAnswer(
                 recommendations=[
@@ -595,7 +681,7 @@ def _smart_eats_agent() -> AgentConfig:
             "geocode_location",
             "get_user_info",
         ],
-        max_steps=4,
+        max_steps=6,
         system_prompt_builder=smart_system_prompt,
         writer_prompt_builder=default_writer_prompt,
         tool_result_handler=_tool_result_handler,
@@ -606,6 +692,7 @@ def _smart_eats_agent() -> AgentConfig:
         serial_execution_decider=smart_serial_execution_decider,
         tool_result_previewer=smart_tool_result_previewer,
         final_action_hook=smart_final_action_hook,
+        best_effort_fallback_handler=smart_best_effort_fallback,
         fast_path_decider=smart_fast_path_decider,
         fast_path_system_prompt_builder=smart_fast_path_system_prompt_builder,
         fast_path_writer_prompt_builder=smart_fast_path_writer_prompt_builder,
