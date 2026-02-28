@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import time
 
 import redis.asyncio as redis
+from redis.exceptions import RedisError
 
 from app.common.errors import AppError, RATE_LIMITED
+
+logger = logging.getLogger(__name__)
 
 
 async def check_rate_limit(
@@ -22,7 +26,13 @@ async def check_rate_limit(
     pipe.zadd(key, {str(now_ms): now_ms})
     pipe.zcard(key)
     pipe.expire(key, window_seconds)
-    _, _, count, _ = await pipe.execute()
+
+    try:
+        _, _, count, _ = await pipe.execute()
+    except RedisError as exc:
+        logger.warning("rate limit skipped: redis unavailable key=%s err=%s", key, exc)
+        return True
+
     return count <= limit
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -7,6 +8,7 @@ from uuid import uuid4
 
 import redis.asyncio as redis
 from fastapi import HTTPException
+from redis.exceptions import RedisError
 from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,13 +41,18 @@ from app.infra.models.preference import UserPreference, UserProfile
 from app.infra.models.user import User
 from app.infra.external.amap import amap
 
+logger = logging.getLogger(__name__)
+
 
 class AppBffService:
     @staticmethod
     async def issue_tokens(user_id: str, redis_client: redis.Redis) -> dict[str, Any]:
         access_token, _ = create_access_token(user_id)
         refresh_token, refresh_jti = create_refresh_token(user_id)
-        await redis_client.setex(f"rt:{refresh_jti}", settings.REFRESH_TOKEN_TTL_SECONDS, user_id)
+        try:
+            await redis_client.setex(f"rt:{refresh_jti}", settings.REFRESH_TOKEN_TTL_SECONDS, user_id)
+        except RedisError as exc:
+            logger.warning("refresh token persistence skipped: redis unavailable user_id=%s err=%s", user_id, exc)
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -1065,6 +1072,10 @@ class AppBffService:
             provider=payload.get("provider"),
             agent_type=payload.get("agent_type"),
             client_ip=request_client_ip,
+            resume_from_checkpoint=bool(payload.get("resume_from_checkpoint")),
+            checkpoint_ref=payload.get("checkpoint_ref"),
+            replay_from_checkpoint=bool(payload.get("replay_from_checkpoint")),
+            resume_payload=payload.get("resume_payload"),
         )
 
     @staticmethod
