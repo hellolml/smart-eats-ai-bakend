@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.state import ChatState
 from app.agent import history
 from app.common.config import settings
+from app.common.errors import AppError, REDIS_UNAVAILABLE
 from app.common.rate_limit import ensure_rate_limit
 from app.common.security import (
     AuthError,
@@ -126,11 +127,15 @@ class AppBffService:
             raise HTTPException(status_code=401, detail="refresh token invalid")
 
         key = f"rt:{jti}"
-        stored_user = await redis_client.get(key)
-        if stored_user != user_id:
-            raise HTTPException(status_code=401, detail="refresh token revoked")
+        try:
+            stored_user = await redis_client.get(key)
+            if stored_user != user_id:
+                raise HTTPException(status_code=401, detail="refresh token revoked")
+            await redis_client.delete(key)
+        except RedisError as exc:
+            logger.error("refresh failed: redis unavailable user_id=%s err=%s", user_id, exc)
+            raise AppError(code=REDIS_UNAVAILABLE, message="redis unavailable", http_status=503) from exc
 
-        await redis_client.delete(key)
         return await AppBffService.issue_tokens(user_id, redis_client)
 
     @staticmethod
@@ -139,7 +144,11 @@ class AppBffService:
             claims = decode_token(refresh_token, expected_type="refresh")
             jti = claims.get("jti")
             if jti:
-                await redis_client.delete(f"rt:{jti}")
+                try:
+                    await redis_client.delete(f"rt:{jti}")
+                except RedisError as exc:
+                    logger.error("logout failed: redis unavailable jti=%s err=%s", jti, exc)
+                    raise AppError(code=REDIS_UNAVAILABLE, message="redis unavailable", http_status=503) from exc
         except AuthError:
             pass
         return {"logged_out": True}
