@@ -437,6 +437,7 @@ def build_langgraph(
     provider: str | None = None,
     agent_config: AgentConfig | None = None,
 ) -> StateGraph:
+    logger.info("agent_graph_runtime mode=legacy phase=monolith")
     planner = OpenAIPlanner(provider=provider)
     agent_config = agent_config or get_agent_config(None)
     allowed_tools = agent_config.tool_names
@@ -1044,8 +1045,9 @@ def build_langgraph_official(
     provider: str | None = None,
     agent_config: AgentConfig | None = None,
 ) -> StateGraph:
-    resolved_agent_config = agent_config or get_agent_config(None)
-    if getattr(resolved_agent_config, "name", None) == "smart_eats":
+    # legacy official builder: keep for non-smart_eats agents only.
+    # smart_eats should run via dedicated graph and bypass registry/config.
+    if agent_config is None or getattr(agent_config, "name", None) == "smart_eats":
         from app.agent.agents.smart_eats import build_smart_eats_graph
 
         logger.info("agent_graph_runtime mode=official phase=delegated agent=smart_eats")
@@ -1055,8 +1057,8 @@ def build_langgraph_official(
             provider=provider,
         )
 
+    logger.info("agent_graph_runtime mode=official phase=legacy_non_smart_eats")
     planner = OpenAIPlanner(provider=provider)
-    agent_config = resolved_agent_config
     allowed_tools = agent_config.tool_names
     available_tool_schemas = list_tools(allowed_tools)
 
@@ -1286,9 +1288,7 @@ def build_langgraph_official(
 
 
 def _should_use_dedicated_smart_eats_runtime(state: ChatState) -> bool:
-    runtime = (settings.AGENT_GRAPH_RUNTIME or "legacy").strip().lower()
-    if runtime != "official":
-        return False
+    # smart_eats now defaults to dedicated graph-first runtime (independent of legacy/official toggle).
     return (state.agent_type or "smart_eats") == "smart_eats"
 
 

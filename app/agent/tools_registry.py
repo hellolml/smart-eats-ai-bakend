@@ -6,6 +6,14 @@ import pkgutil
 from typing import Any, Awaitable, Callable
 import builtins
 import logging
+import re
+
+from pydantic import Field, create_model
+
+try:
+    from langchain_core.tools import StructuredTool
+except ImportError:  # pragma: no cover
+    StructuredTool = None
 
 
 @dataclass
@@ -75,6 +83,106 @@ def get_tool(name: str, allowlist: list[str] | None = None) -> ToolSpec | None:
     if allowlist and name not in allowlist:
         return None
     return TOOLS.get(name)
+
+
+def _normalize_json_type(field_schema: dict[str, Any]) -> str | None:
+    raw_type = field_schema.get("type")
+    if isinstance(raw_type, str):
+        return raw_type
+    if isinstance(raw_type, builtins.list):
+        non_null_types = [item for item in raw_type if isinstance(item, str) and item != "null"]
+        if non_null_types:
+            return non_null_types[0]
+    return None
+
+
+def _json_schema_to_python_type(field_schema: dict[str, Any]) -> Any:
+    schema_type = _normalize_json_type(field_schema)
+    if schema_type == "string":
+        return str
+    if schema_type == "number":
+        return float
+    if schema_type == "integer":
+        return int
+    if schema_type == "boolean":
+        return bool
+    if schema_type == "array":
+        item_schema = field_schema.get("items")
+        item_type = _json_schema_to_python_type(item_schema) if isinstance(item_schema, dict) else Any
+        return builtins.list[item_type]
+    if schema_type == "object":
+        return builtins.dict[str, Any]
+    return Any
+
+
+def _tool_args_model_name(tool_name: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_]", "_", tool_name)
+    parts = [part for part in normalized.split("_") if part]
+    base = "".join(part.capitalize() for part in parts) or "Tool"
+    return f"{base}Args"
+
+
+def _build_args_model(tool_name: str, input_schema: dict[str, Any]):
+    model_name = _tool_args_model_name(tool_name)
+    if not isinstance(input_schema, dict):
+        return create_model(model_name)
+
+    properties = input_schema.get("properties")
+    if not isinstance(properties, dict):
+        return create_model(model_name)
+
+    required = set(input_schema.get("required") or [])
+    fields: dict[str, tuple[Any, Any]] = {}
+
+    for field_name, schema in properties.items():
+        field_schema = schema if isinstance(schema, dict) else {}
+        python_type = _json_schema_to_python_type(field_schema)
+        description = field_schema.get("description")
+
+        if field_name in required:
+            fields[field_name] = (python_type, Field(default=..., description=description))
+        else:
+            fields[field_name] = (python_type | None, Field(default=None, description=description))
+
+    return create_model(model_name, **fields)
+
+
+def to_langchain_tools(
+    allowlist: list[str] | None = None,
+    runtime_context_factory: Callable[[], dict[str, Any] | None] | None = None,
+) -> list[Any]:
+    if StructuredTool is None:
+        raise RuntimeError("langchain_core.tools.StructuredTool is unavailable")
+    if not TOOLS:
+        load_tools()
+
+    names = set(allowlist or [])
+    tools: list[Any] = []
+
+    for name, spec in TOOLS.items():
+        if allowlist and name not in names:
+            continue
+
+        args_schema = _build_args_model(spec.name, spec.input_schema)
+
+        async def _runner(_spec: ToolSpec = spec, **kwargs: Any) -> Any:
+            payload = dict(kwargs)
+            if runtime_context_factory:
+                context_payload = runtime_context_factory() or {}
+                if isinstance(context_payload, dict):
+                    payload.update(context_payload)
+            return await _spec.func(payload)
+
+        tool = StructuredTool.from_function(
+            coroutine=_runner,
+            name=spec.name,
+            description=spec.description,
+            args_schema=args_schema,
+            infer_schema=False,
+        )
+        tools.append(tool)
+
+    return tools
 
 
 def preview_result(result: Any) -> Any:

@@ -132,6 +132,41 @@ class OpenAIPlanner:
         available_tools: list[dict[str, Any]],
         action_normalizer: Callable[[str], AgentAction | None] | None = None,
     ) -> AgentAction:
+        decision = await self.plan_tool_calls(system, user, available_tools)
+        content = decision.get("content") if isinstance(decision, dict) else ""
+        normalized_calls = decision.get("tool_calls") if isinstance(decision, dict) else []
+
+        if isinstance(normalized_calls, list) and normalized_calls:
+            calls: list[dict[str, dict[str, Any]]] = []
+            for call in normalized_calls:
+                tool_name = call.get("name") if isinstance(call, dict) else None
+                args = call.get("args") if isinstance(call, dict) else None
+                if not isinstance(tool_name, str) or not isinstance(args, dict):
+                    continue
+
+                if tool_name == "submit_final_answer":
+                    answer_args = FinalAnswerArgs.model_validate(args)
+                    answer = FinalAnswer.model_validate(answer_args.model_dump())
+                    return FinalAction(answer=answer)
+
+                calls.append({tool_name: args})
+
+            if calls:
+                return ToolCallsAction(calls=calls)
+
+        if isinstance(content, str) and content and action_normalizer:
+            mapped = action_normalizer(content)
+            if mapped:
+                return mapped
+
+        return self._build_fallback_final_action(content if isinstance(content, str) else "")
+
+    async def plan_tool_calls(
+        self,
+        system: str,
+        user: str,
+        available_tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         if not self.client:
             raise RuntimeError("LLM provider is not configured")
         context = _log_context()
@@ -172,7 +207,7 @@ class OpenAIPlanner:
 
         message = response.choices[0].message
         content = self._message_content_to_text(getattr(message, "content", None))
-        tool_calls = getattr(message, "tool_calls", None) or []
+        raw_tool_calls = getattr(message, "tool_calls", None) or []
 
         logger.info(
             "planner response provider=%s model=%s session_id=%s turn=%s step=%s tool_calls=%s content=%s",
@@ -181,34 +216,35 @@ class OpenAIPlanner:
             context.get("session_id"),
             context.get("turn"),
             context.get("step"),
-            [getattr(getattr(item, "function", None), "name", None) for item in tool_calls],
+            [getattr(getattr(item, "function", None), "name", None) for item in raw_tool_calls],
             content,
         )
 
-        if tool_calls:
-            calls: list[dict[str, dict[str, Any]]] = []
-            for call in tool_calls:
-                function = getattr(call, "function", None)
-                tool_name = getattr(function, "name", None)
-                if not isinstance(tool_name, str) or not tool_name:
-                    raise RuntimeError("invalid planner response: missing tool name")
-                args = self._normalize_tool_args(tool_name, getattr(function, "arguments", None))
+        normalized_calls: list[dict[str, Any]] = []
+        for index, call in enumerate(raw_tool_calls):
+            function = getattr(call, "function", None)
+            tool_name = getattr(function, "name", None)
+            if not isinstance(tool_name, str) or not tool_name:
+                raise RuntimeError("invalid planner response: missing tool name")
+            args = self._normalize_tool_args(tool_name, getattr(function, "arguments", None))
+            call_id = getattr(call, "id", None)
+            if not isinstance(call_id, str) or not call_id:
+                call_id = f"call_{index}"
+            normalized_calls.append(
+                {
+                    "name": tool_name,
+                    "args": args,
+                    "id": call_id,
+                    "type": "tool_call",
+                }
+            )
 
-                if tool_name == "submit_final_answer":
-                    answer_args = FinalAnswerArgs.model_validate(args)
-                    answer = FinalAnswer.model_validate(answer_args.model_dump())
-                    return FinalAction(answer=answer)
+        return {
+            "content": content,
+            "tool_calls": normalized_calls,
+        }
 
-                calls.append({tool_name: args})
-
-            if calls:
-                return ToolCallsAction(calls=calls)
-
-        if content and action_normalizer:
-            mapped = action_normalizer(content)
-            if mapped:
-                return mapped
-
+    def final_action_from_text(self, content: str) -> FinalAction:
         return self._build_fallback_final_action(content)
 
     def _build_openai_tools(self, available_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
