@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.state import ChatState
 from app.agent import history
+from app.agent.llm_adapters import ProviderRegistry
 from app.common.config import settings
 from app.common.errors import AppError, REDIS_UNAVAILABLE
 from app.common.rate_limit import ensure_rate_limit
@@ -46,6 +47,125 @@ logger = logging.getLogger(__name__)
 
 
 class AppBffService:
+    @staticmethod
+    def list_chat_models() -> dict[str, Any]:
+        configured_providers = [
+            item.strip().lower()
+            for item in (settings.LLM_PROVIDERS or "").split(",")
+            if isinstance(item, str) and item.strip()
+        ]
+        default_provider = (settings.LLM_PROVIDER or "qwen").strip().lower()
+        if default_provider and default_provider not in configured_providers:
+            configured_providers.append(default_provider)
+
+        model_aliases = {
+            "qwen3.5-flash": "Qwen3.5-Flash",
+            "qwen3.5-plus": "Qwen3.5-Plus",
+            "qwen3.5-flash-2026-02-23": "Qwen3.5-Flash-2026-02-23",
+            "qwen3.5-plus-2026-02-15": "Qwen3.5-Plus-2026-02-15",
+            "qwen3.5-397b-a17b": "Qwen3.5-397b-a17b",
+        }
+
+        parsed_model_map: dict[str, list[str]] = {}
+        raw_model_pairs = [
+            item.strip()
+            for item in (settings.LLM_MODELS or "").split(",")
+            if isinstance(item, str) and item.strip()
+        ]
+        for pair in raw_model_pairs:
+            if ":" not in pair:
+                continue
+            provider_key, model_id = pair.split(":", 1)
+            provider_key = provider_key.strip().lower()
+            model_id = model_id.strip()
+            if not provider_key or not model_id:
+                continue
+            parsed_model_map.setdefault(provider_key, [])
+            if model_id not in parsed_model_map[provider_key]:
+                parsed_model_map[provider_key].append(model_id)
+
+        display_rows: list[dict[str, str]] = []
+        allowed_set: set[str] = set()
+        provider_to_defaults: dict[str, tuple[str, str]] = {
+            "qwen": (settings.QWEN_MODEL_PLANNER, settings.QWEN_MODEL_WRITER),
+            "deepseek": (settings.DEEPSEEK_MODEL_PLANNER, settings.DEEPSEEK_MODEL_WRITER),
+            "openai": (settings.OPENAI_MODEL_PLANNER, settings.OPENAI_MODEL_WRITER),
+        }
+
+        for provider in configured_providers:
+            if provider not in provider_to_defaults:
+                continue
+            provider_cfg = ProviderRegistry.get(provider)
+            planner_model, writer_model = provider_to_defaults[provider]
+            defaults = [model for model in (planner_model, writer_model) if isinstance(model, str) and model.strip()]
+            configured_models = parsed_model_map.get(provider, [])
+            merged_models: list[str] = []
+            for model in [*configured_models, *defaults]:
+                if model and model not in merged_models:
+                    merged_models.append(model)
+
+            for model_id in merged_models:
+                value = f"{provider}:{model_id}"
+                allowed_set.add(value)
+                display_rows.append(
+                    {
+                        "value": value,
+                        "provider": provider,
+                        "model": model_id,
+                        "label": model_aliases.get(model_id, model_id),
+                        "provider_label": provider_cfg.name,
+                    }
+                )
+
+        if not display_rows:
+            fallback_provider = ProviderRegistry.get(default_provider)
+            fallback_model = fallback_provider.model_planner
+            value = f"{fallback_provider.name}:{fallback_model}"
+            allowed_set.add(value)
+            display_rows.append(
+                {
+                    "value": value,
+                    "provider": fallback_provider.name,
+                    "model": fallback_model,
+                    "label": model_aliases.get(fallback_model, fallback_model),
+                    "provider_label": fallback_provider.name,
+                }
+            )
+
+        default_provider_cfg = ProviderRegistry.get(default_provider)
+        default_model_value = f"{default_provider_cfg.name}:{default_provider_cfg.model_planner}"
+        if default_model_value not in allowed_set and display_rows:
+            default_model_value = display_rows[0]["value"]
+
+        return {
+            "models": display_rows,
+            "default": default_model_value,
+            "providers": configured_providers,
+        }
+
+    @staticmethod
+    def resolve_chat_provider(model_value: str | None) -> str | None:
+        if not isinstance(model_value, str):
+            return None
+        value = model_value.strip()
+        if not value:
+            return None
+        provider_key, _, model_id = value.partition(":")
+        provider_key = provider_key.strip().lower()
+        model_id = model_id.strip()
+        if provider_key not in {"qwen", "deepseek", "openai"}:
+            return None
+        configured_providers = {
+            item.strip().lower()
+            for item in (settings.LLM_PROVIDERS or "").split(",")
+            if isinstance(item, str) and item.strip()
+        }
+        if configured_providers and provider_key not in configured_providers:
+            return None
+        if not model_id:
+            return provider_key
+        return f"{provider_key}:{model_id}"
+
     @staticmethod
     async def issue_tokens(user_id: str, redis_client: redis.Redis) -> dict[str, Any]:
         access_token, _ = create_access_token(user_id)
@@ -1078,7 +1198,7 @@ class AppBffService:
             user_id=user_id,
             message=payload.get("message"),
             context_overrides=payload.get("client_context_overrides"),
-            provider=payload.get("provider"),
+            provider=AppBffService.resolve_chat_provider(payload.get("model")) or payload.get("provider"),
             agent_type=payload.get("agent_type"),
             client_ip=request_client_ip,
             resume_from_checkpoint=bool(payload.get("resume_from_checkpoint")),

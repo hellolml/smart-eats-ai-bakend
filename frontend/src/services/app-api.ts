@@ -64,6 +64,20 @@ export interface AppChatMessage {
     created_at?: string;
 }
 
+export interface AppChatModelOption {
+    value: string;
+    provider: string;
+    model: string;
+    label: string;
+    provider_label?: string;
+}
+
+export interface AppChatModelsResponse {
+    models: AppChatModelOption[];
+    default?: string;
+    providers?: string[];
+}
+
 export type AppRestaurantSort = 'nearest' | 'rating_desc' | 'price_asc';
 
 export interface AppRestaurant {
@@ -456,6 +470,9 @@ export const appApi = {
     },
 
     chat: {
+        async listModels() {
+            return request<AppChatModelsResponse>('/chat/models');
+        },
         async createSession(payload: { title?: string } = {}) {
             return request<AppChatSession>('/chat/session', {
                 method: 'POST',

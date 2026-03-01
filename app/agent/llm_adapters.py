@@ -68,29 +68,32 @@ class ProviderConfig:
 class ProviderRegistry:
     @staticmethod
     def get(provider: str | None) -> ProviderConfig:
-        key = (provider or settings.LLM_PROVIDER or "qwen").lower()
+        raw = (provider or settings.LLM_PROVIDER or "qwen").strip().lower()
+        provider_key, _, model_override = raw.partition(":")
+        key = provider_key or "qwen"
+        override = model_override.strip() or None
         if key == "deepseek":
             return ProviderConfig(
                 name="deepseek",
                 api_key=os.getenv("DEEPSEEK_API_KEY") or settings.DEEPSEEK_API_KEY,
                 base_url=settings.DEEPSEEK_BASE_URL,
-                model_planner=settings.DEEPSEEK_MODEL_PLANNER,
-                model_writer=settings.DEEPSEEK_MODEL_WRITER,
+                model_planner=override or settings.DEEPSEEK_MODEL_PLANNER,
+                model_writer=override or settings.DEEPSEEK_MODEL_WRITER,
             )
         if key == "qwen":
             return ProviderConfig(
                 name="qwen",
                 api_key=os.getenv("DASHSCOPE_API_KEY") or settings.DASHSCOPE_API_KEY,
                 base_url=settings.QWEN_BASE_URL,
-                model_planner=settings.QWEN_MODEL_PLANNER,
-                model_writer=settings.QWEN_MODEL_WRITER,
+                model_planner=override or settings.QWEN_MODEL_PLANNER,
+                model_writer=override or settings.QWEN_MODEL_WRITER,
             )
         return ProviderConfig(
             name="openai",
             api_key=os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY,
             base_url=settings.OPENAI_BASE_URL,
-            model_planner=settings.OPENAI_MODEL_PLANNER,
-            model_writer=settings.OPENAI_MODEL_WRITER,
+            model_planner=override or settings.OPENAI_MODEL_PLANNER,
+            model_writer=override or settings.OPENAI_MODEL_WRITER,
         )
 
 

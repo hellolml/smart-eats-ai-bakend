@@ -18,7 +18,7 @@ import {
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AppChatMessage, AppChatSession, appApi, authStore } from '@/services/app-api';
+import { AppChatMessage, AppChatSession, AppChatModelOption, appApi, authStore } from '@/services/app-api';
 
 type ChatRole = 'user' | 'assistant';
 
@@ -127,6 +127,7 @@ function getStreamBaseUrl(): string {
 
 const DEVICE_LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
 const LOCATION_DENY_TOAST_FLAG = 'ai-chat:geo-deny-toast';
+const MODEL_STORAGE_KEY = 'ai-chat:selected-model';
 
 type DeviceLocation = {
     lat: number;
@@ -139,6 +140,7 @@ type StreamChatReplyOptions = {
     onDelta?: (partialText: string, deltaText: string) => void;
     onFinal?: () => void;
     clientContextOverrides?: Record<string, unknown>;
+    model?: string;
 };
 
 async function streamChatReply(
@@ -153,6 +155,9 @@ async function streamChatReply(
     };
     if (options.clientContextOverrides) {
         requestBody.client_context_overrides = options.clientContextOverrides;
+    }
+    if (options.model) {
+        requestBody.model = options.model;
     }
 
     const response = await fetch(url, {
@@ -304,6 +309,12 @@ const AiChat = () => {
     const [assistantFeedback, setAssistantFeedback] = useState<Record<string, 'like' | 'dislike'>>({});
     const [speechSupported, setSpeechSupported] = useState(false);
     const [isListening, setIsListening] = useState(false);
+    const [modelOptions, setModelOptions] = useState<AppChatModelOption[]>([]);
+    const [selectedModel, setSelectedModel] = useState('');
+    const selectedModelOption = useMemo(
+        () => modelOptions.find((item) => item.value === selectedModel) || null,
+        [modelOptions, selectedModel]
+    );
     const [deviceLocation, setDeviceLocation] = useState<DeviceLocation | null>(null);
     const locationDeniedToastShownRef = React.useRef(
         typeof window !== 'undefined' && window.sessionStorage.getItem(LOCATION_DENY_TOAST_FLAG) === '1'
@@ -514,9 +525,27 @@ const AiChat = () => {
             }
 
             try {
-                // Fetch sessions list
-                const sessionList = await appApi.chat.listSessions();
+                const [sessionList, modelMeta] = await Promise.all([
+                    appApi.chat.listSessions(),
+                    appApi.chat.listModels().catch(() => ({ models: [], default: '' }))
+                ]);
                 setSessions(sessionList);
+
+                const options = Array.isArray(modelMeta.models) ? modelMeta.models : [];
+                setModelOptions(options);
+                const storedModel = typeof window !== 'undefined' ? window.localStorage.getItem(MODEL_STORAGE_KEY) || '' : '';
+                const preferredModel = storedModel || (typeof modelMeta.default === 'string' ? modelMeta.default : '');
+                const resolvedModel = options.some((item) => item.value === preferredModel)
+                    ? preferredModel
+                    : (options[0]?.value || '');
+                setSelectedModel(resolvedModel);
+                if (typeof window !== 'undefined') {
+                    if (resolvedModel) {
+                        window.localStorage.setItem(MODEL_STORAGE_KEY, resolvedModel);
+                    } else {
+                        window.localStorage.removeItem(MODEL_STORAGE_KEY);
+                    }
+                }
 
                 // If sessions exist, load the most recent one
                 if (sessionList.length > 0) {
@@ -572,6 +601,17 @@ const AiChat = () => {
             toast.error('创建新会话失败');
         }
     };
+
+    const onSelectModel = React.useCallback((value: string) => {
+        setSelectedModel(value);
+        if (typeof window !== 'undefined') {
+            if (value) {
+                window.localStorage.setItem(MODEL_STORAGE_KEY, value);
+            } else {
+                window.localStorage.removeItem(MODEL_STORAGE_KEY);
+            }
+        }
+    }, []);
 
     const resolveFreshDeviceLocation = React.useCallback(async (): Promise<DeviceLocation | null> => {
         const current = deviceLocation;
@@ -642,6 +682,7 @@ const AiChat = () => {
         try {
             const reply = await streamChatReply(sessionId, question, {
                 clientContextOverrides,
+                model: selectedModel || undefined,
                 onDelta: (partialText) => {
                     setMessages((prev) =>
                         prev.map((message) =>
@@ -743,6 +784,7 @@ const AiChat = () => {
         try {
             const reply = await streamChatReply(sessionId, previousUser.content, {
                 clientContextOverrides,
+                model: selectedModel || undefined,
                 onDelta: (partialText) => {
                     setMessages((prev) =>
                         prev.map((message) =>
@@ -906,6 +948,28 @@ const AiChat = () => {
                                 {sessionId ? `ID: ${sessionId.slice(0, 8)}` : '初始化中...'}
                             </p>
                         </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <label htmlFor="chat-model-select" className="text-xs text-gray-500 hidden sm:block">模型</label>
+                        <select
+                            id="chat-model-select"
+                            value={selectedModel}
+                            onChange={(e) => onSelectModel(e.target.value)}
+                            className="min-w-[170px] max-w-[220px] rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700 outline-none focus:border-[#7E57FF] focus:ring-2 focus:ring-[#7E57FF]/20"
+                        >
+                            {modelOptions.length === 0 && <option value="">默认模型</option>}
+                            {modelOptions.map((item) => (
+                                <option key={item.value} value={item.value}>
+                                    {item.label}
+                                </option>
+                            ))}
+                        </select>
+                        {selectedModelOption && (
+                            <span className="hidden md:inline text-[11px] text-gray-400 whitespace-nowrap">
+                                {selectedModelOption.provider_label || selectedModelOption.provider}
+                            </span>
+                        )}
                     </div>
                 </div>
 

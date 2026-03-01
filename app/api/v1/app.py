@@ -39,6 +39,12 @@ from app.tasks import fridge_recognition
 router = APIRouter()
 
 
+@router.get("/chat/models")
+async def list_chat_models(request: Request, _user_id: str = Depends(get_current_user_id)):
+    data = AppBffService.list_chat_models()
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
 @router.post("/auth/register")
 async def register(payload: RegisterRequest, request: Request, db: db_dep, redis: redis_dep):
     data = await AppBffService.register(payload.model_dump(), db, redis)

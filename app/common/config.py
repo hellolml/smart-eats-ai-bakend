@@ -50,7 +50,8 @@ class Settings(BaseSettings):
     OPENAI_MODEL_PLANNER: str = "gpt-4o-mini"
     OPENAI_MODEL_WRITER: str = "gpt-4o-mini"
     LLM_PROVIDER: str = "qwen"
-    LLM_PROVIDERS: str = "openai,deepseek,qwen"
+    LLM_PROVIDERS: str = "qwen"
+    LLM_MODELS: str = "qwen:qwen3.5-flash,qwen:qwen3.5-plus,qwen:qwen3.5-flash-2026-02-23,qwen:qwen3.5-plus-2026-02-15,qwen:qwen3.5-397b-a17b"
     DEEPSEEK_API_KEY: str | None = None
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL_PLANNER: str = "deepseek-chat"

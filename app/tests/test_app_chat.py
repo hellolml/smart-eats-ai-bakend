@@ -61,7 +61,7 @@ async def test_app_chat_stream_stop(client):
 
 
 @pytest.mark.asyncio
-async def test_app_chat_stream_accepts_client_location_overrides(client):
+async def test_app_chat_stream_accepts_client_location_overrides(client, monkeypatch):
     resp = await client.post(
         "/api/v1/app/auth/register",
         json={"email": "app_chat_geo@example.com", "password": "secret123", "name": "geo chatter"},
@@ -72,6 +72,27 @@ async def test_app_chat_stream_accepts_client_location_overrides(client):
     resp = await client.post("/api/v1/app/chat/session", headers=headers)
     assert resp.status_code == 200
     session_id = resp.json()["data"]["session_id"]
+
+    async def _fake_plan_tool_calls(self, system, user, available_tools):
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "name": "submit_final_answer",
+                    "args": {
+                        "recommendations": [
+                            {"type": "note", "title": "已收到定位信息", "reason": "location_override_test"}
+                        ],
+                        "followups": [],
+                        "warnings": [],
+                    },
+                    "id": "call_test_final",
+                    "type": "tool_call",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
 
     got_final = False
     current_event = None
@@ -102,3 +123,31 @@ async def test_app_chat_stream_accepts_client_location_overrides(client):
                 break
 
     assert got_final
+
+
+@pytest.mark.asyncio
+async def test_app_chat_models_endpoint_returns_model_options(client):
+    resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_chat_models@example.com", "password": "secret123", "name": "models user"},
+    )
+    assert resp.status_code == 200
+    headers = {"Authorization": f"Bearer {resp.json()['data']['access_token']}"}
+
+    resp = await client.get("/api/v1/app/chat/models", headers=headers)
+    assert resp.status_code == 200
+
+    payload = resp.json()["data"]
+    assert isinstance(payload.get("models"), list)
+    assert payload["models"]
+
+    values = [item.get("value") for item in payload["models"] if isinstance(item, dict)]
+    assert values == [
+        "qwen:qwen3.5-flash",
+        "qwen:qwen3.5-plus",
+        "qwen:qwen3.5-flash-2026-02-23",
+        "qwen:qwen3.5-plus-2026-02-15",
+        "qwen:qwen3.5-397b-a17b",
+    ]
+    assert isinstance(payload.get("default"), str)
+    assert payload["default"] == "qwen:qwen3.5-flash"

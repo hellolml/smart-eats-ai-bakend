@@ -171,6 +171,7 @@ class ChatSessionStreamRequest(BaseModel):
     message: str | None = None
     client_context_overrides: dict[str, Any] | None = None
     provider: str | None = None
+    model: str | None = None
     agent_type: str | None = None
 
 
