@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     DEEPSEEK_MODEL_WRITER: str = "deepseek-chat"
     DASHSCOPE_API_KEY: str | None = None
     QWEN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    QWEN_MODEL_PLANNER: str = "deepseek-v3.2"
-    QWEN_MODEL_WRITER: str = "qwen3.5-plus"
+    QWEN_MODEL_PLANNER: str = "qwen3.5-flash"
+    QWEN_MODEL_WRITER: str = "qwen3.5-flash"
     LLM_REQUEST_LOG: str = "none"
     AGENT_MAX_STEPS: int = 6
     AGENT_GRAPH_RUNTIME: str = "legacy"

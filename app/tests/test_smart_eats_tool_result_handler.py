@@ -179,6 +179,13 @@ def test_plan_route_success_relaxed_to_llm():
     )
 
     assert handled is None
+    assert state.context_overrides is not None
+    assert "system_directive" in state.context_overrides
+    latest_route = state.context_overrides.get("latest_route")
+    assert isinstance(latest_route, dict)
+    assert latest_route.get("distance_m") == 1200
+    assert latest_route.get("duration_s") == 900
+    assert latest_route.get("steps") == ["向东步行", "右转到达"]
 
 
 def test_intent_resolver_delegates_to_llm_and_returns_unknown():
