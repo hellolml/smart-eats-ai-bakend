@@ -1,6 +1,6 @@
 import pytest
 
-from app.agent.graph import _record_metric, reset_agent_metrics
+from app.agent.legacy_builder_helpers import _record_metric, reset_agent_metrics
 from app.agent.state import ChatState
 
 

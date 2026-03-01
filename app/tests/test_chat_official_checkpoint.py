@@ -36,8 +36,8 @@ async def test_chat_stream_official_runtime_resume_from_checkpoint(client, monke
 
     monkeypatch.setattr(factory, "settings", _Settings())
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
-    monkeypatch.setattr("app.agent.graph._ensure_chat_session", _should_not_call_graph_helper)
-    monkeypatch.setattr("app.agent.graph._refresh_observation_context", _should_not_call_graph_helper)
+    monkeypatch.setattr("app.agent.legacy_builder_helpers._ensure_chat_session", _should_not_call_graph_helper)
+    monkeypatch.setattr("app.agent.legacy_builder_helpers._refresh_observation_context", _should_not_call_graph_helper)
 
     resp = await client.post("/api/v1/chat/sessions")
     assert resp.status_code == 200

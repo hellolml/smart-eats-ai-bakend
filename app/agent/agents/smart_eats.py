@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import os
-import re
 import json
 import logging
 from dataclasses import dataclass, field
@@ -82,14 +81,6 @@ class SmartEatsGraphConfig:
     tool_result_previewer: Any = None
     final_action_hook: Any = None
     best_effort_fallback_handler: Any = None
-    fast_path_decider: Any = None
-    fast_path_system_prompt_builder: Any = None
-    fast_path_writer_prompt_builder: Any = None
-    # legacy bridge fields (kept only for compatibility; dedicated graph no longer uses hook injection)
-    tool_result_handler: Any = None
-    intent_resolver: Any = None
-    tool_plan_router: Any = None
-    context_extender: Any = None
 
 
 _SMART_EATS_TOOL_RUNTIME_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
@@ -428,82 +419,6 @@ def _set_task_stage(state: SmartEatsState, next_stage: str, *, cause: str) -> No
     state.task_stage = next_stage
 
 
-def _looks_like_location_update(text: str) -> bool:
-    tokens = (
-        "我在", "在这", "在这里", "在那", "在那边", "定位", "位置", "地址", "附近", "广场", "路", "街", "号", "小区", "商场", "地铁", "站",
-    )
-    if any(token in text for token in tokens):
-        return True
-    return bool(re.search(r"[省市区县镇乡村路街道号弄巷]", text))
-
-
-def _looks_like_explicit_address(text: str) -> bool:
-    tokens = (
-        "我在", "在这", "在这里", "在那", "在那边", "地址", "广场", "路", "街", "号", "小区", "商场", "地铁", "站", "省", "市", "区", "县", "镇", "乡", "村",
-    )
-    if any(token in text for token in tokens):
-        return True
-    return bool(re.search(r"[省市区县镇乡村路街道号弄巷]", text))
-
-
-def _looks_like_food_preference(text: str) -> bool:
-    food_tokens = (
-        "火锅", "烧烤", "麻辣烫", "米粉", "面馆", "烤肉", "串串", "小龙虾", "川菜", "粤菜", "湘菜", "日料", "韩餐", "快餐",
-    )
-    return any(token in text for token in food_tokens)
-
-
-def _extract_food_preference(text: str) -> str | None:
-    food_tokens = (
-        "火锅", "烧烤", "麻辣烫", "米粉", "面馆", "烤肉", "串串", "小龙虾", "川菜", "粤菜", "湘菜", "日料", "韩餐", "快餐",
-    )
-    for token in food_tokens:
-        if token in text:
-            return token
-    return None
-
-
-def _looks_like_eat_out_request(text: str) -> bool:
-    tokens = (
-        "美食", "吃什么", "吃点", "好吃", "餐厅", "饭店", "馆子", "找吃的", "找店", "下馆子", "附近吃", "口味",
-    )
-    return any(token in text for token in tokens) or _looks_like_food_preference(text)
-
-
-def _extract_geocode_query(text: str) -> str:
-    candidate = (text or "").strip()
-    if not candidate:
-        return candidate
-
-    candidate = re.split(r"[，。！？!?；;]", candidate, maxsplit=1)[0].strip()
-
-    for prefix in ("我在", "在", "我想去", "想去", "帮我找", "帮我搜", "帮我查", "帮我看看", "搜一下", "搜索", "查一下", "查找", "找一下", "找找"):
-        if candidate.startswith(prefix) and len(candidate) > len(prefix):
-            candidate = candidate[len(prefix):].strip()
-            break
-
-    for suffix in ("附近吃什么", "附近有啥吃的", "附近有什么吃的", "附近美食", "美食", "好吃的", "餐厅", "饭店", "吃什么", "找吃的", "下馆子", "推荐"):
-        if candidate.endswith(suffix) and len(candidate) > len(suffix):
-            candidate = candidate[: -len(suffix)].strip(" ，。,.!?？！")
-            break
-
-    if candidate.endswith("附近") and len(candidate) > 2:
-        candidate = candidate[:-2].strip()
-
-    return candidate or (text or "").strip()
-
-
-def _recent_eat_out_context(history: list[dict[str, Any]]) -> bool:
-    for msg in reversed(history[-8:]):
-        role = (msg.get("role") or "").lower()
-        content = str(msg.get("content") or "")
-        if role == "user" and any(t in content for t in ("出去吃", "附近吃", "找餐厅", "下馆子", "吃饭", "美食")):
-            return True
-        if role == "assistant" and any(t in content for t in ("附近", "餐厅", "位置", "地标", "城市", "美食")):
-            return True
-    return False
-
-
 def smart_intent_resolver(state: SmartEatsState) -> str | None:
     """意图识别下放给 Planner（LLM）。
 
@@ -517,166 +432,6 @@ def smart_intent_resolver(state: SmartEatsState) -> str | None:
         intent,
     )
     return intent
-
-
-def smart_fast_path_decider(state: SmartEatsState) -> bool:
-    """关闭基于关键词的 fast-path，统一交给 LLM 决策。"""
-    return False
-
-
-def smart_fast_path_system_prompt_builder(state: SmartEatsState) -> str | None:
-    base = smart_system_prompt({"context": state.context or {}})
-    return (
-        f"{base}\n\n"
-        "## Fast Path 输出约束\n"
-        "- 在无需工具调用时，直接用自然语言回答用户。\n"
-        "- 禁止输出 JSON、代码块、字段名或结构化包装。\n"
-        "- 若问题需要实时信息/定位/检索能力，请遵循 system.md 的工具流程。"
-    )
-
-
-def smart_fast_path_writer_prompt_builder(state: SmartEatsState) -> str:
-    """为 fast path 构建 Writer prompt，直接基于最近对话历史生成回复。"""
-    parts: list[str] = []
-    recent = state.history[-10:] if state.history else []
-    if recent:
-        parts.append("对话历史：")
-        for msg in recent:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            if role == "user":
-                parts.append(f"用户: {content}")
-            elif role == "assistant":
-                parts.append(f"助手: {content}")
-        parts.append("")
-    parts.append(f"用户最新消息: {state.message}")
-    parts.append("\n请直接回复用户，语气友好自然。使用中文回答。")
-    return "\n".join(parts)
-
-
-def _normalize_coord(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number != 0 else None
-
-
-def _extract_location_from_context(context: dict[str, Any] | None) -> tuple[float | None, float | None]:
-    if not isinstance(context, dict):
-        return None, None
-
-    env = context.get("environment") if isinstance(context.get("environment"), dict) else {}
-    env_location = env.get("location") if isinstance(env.get("location"), dict) else {}
-    top_location = context.get("location") if isinstance(context.get("location"), dict) else {}
-
-    lat = _normalize_coord(env_location.get("lat"))
-    lng = _normalize_coord(env_location.get("lng"))
-    if lat is None or lng is None:
-        lat = lat if lat is not None else _normalize_coord(top_location.get("lat"))
-        lng = lng if lng is not None else _normalize_coord(top_location.get("lng"))
-    return lat, lng
-
-
-def _extract_location_from_observations(observations: list[dict[str, Any]]) -> tuple[float | None, float | None]:
-    for item in reversed(observations):
-        if not isinstance(item, dict):
-            continue
-        tool_name = item.get("tool")
-        result = item.get("result")
-        if tool_name not in {"get_ip_location", "geocode_location"}:
-            continue
-        if not isinstance(result, dict):
-            continue
-        lat = _normalize_coord(result.get("lat"))
-        lng = _normalize_coord(result.get("lng"))
-        if lat is not None and lng is not None:
-            return lat, lng
-    return None, None
-
-
-def _extract_location_from_observations_by_tool(
-    observations: list[dict[str, Any]],
-    tool_name: str,
-) -> tuple[float | None, float | None]:
-    for item in reversed(observations):
-        if not isinstance(item, dict) or item.get("tool") != tool_name:
-            continue
-        result = item.get("result")
-        if not isinstance(result, dict):
-            continue
-        lat = _normalize_coord(result.get("lat"))
-        lng = _normalize_coord(result.get("lng"))
-        if lat is not None and lng is not None:
-            return lat, lng
-    return None, None
-
-
-def _normalize_restaurant_query(message: str | None) -> str:
-    text = (message or "").strip()
-    if not text:
-        return "美食"
-
-    food_preference = _extract_food_preference(text)
-    if food_preference:
-        return food_preference
-
-    # 用户在更新地址时，不应把整句地址当搜索关键词，默认回退为通用美食检索
-    if _looks_like_location_update(text):
-        return "美食"
-
-    generic_phrases = {
-        "出去吃",
-        "附近吃什么",
-        "附近有啥吃的",
-        "吃什么",
-        "找吃的",
-        "下馆子",
-        "附近餐厅",
-        "推荐",
-        "推荐一下",
-        "推荐几个",
-    }
-    if text in generic_phrases:
-        return "美食"
-
-    # 口语偏好句归一化：我想吃火锅 -> 火锅
-    for prefix in ("我想吃", "想吃", "想来点", "来点", "想整点"):
-        if text.startswith(prefix) and len(text) > len(prefix):
-            candidate = text[len(prefix):].strip(" ，。,.!?？！")
-            if candidate:
-                return candidate
-
-    return text
-
-
-def _has_tool_observation(observations: list[dict[str, Any]], tool_name: str) -> bool:
-    for item in observations:
-        if isinstance(item, dict) and item.get("tool") == tool_name:
-            return True
-    return False
-
-
-def _tool_observation_count(observations: list[dict[str, Any]], tool_name: str) -> int:
-    count = 0
-    for item in observations:
-        if isinstance(item, dict) and item.get("tool") == tool_name:
-            count += 1
-    return count
-
-
-def smart_tool_plan_router(state: SmartEatsState) -> list[dict[str, Any]] | None:
-    """路由主导权下放给 Planner（LLM）。
-
-    这里不再根据关键词/阶段强制工具调用，只保留观测日志。
-    真正的工具编排由 system policy + planner 决策。
-    """
-    logger.info(
-        "router_decision session_id=%s stage=%s reason=llm_owned_routing",
-        state.session_id,
-        state.task_stage or "unknown",
-    )
-    return None
 
 
 def smart_context_extender(state: SmartEatsState) -> dict:
@@ -742,24 +497,6 @@ def smart_tool_args_normalizer(tool_name: str, args: dict[str, Any]) -> dict[str
     return args
 
 
-def smart_serial_execution_decider(calls: list[dict[str, Any]]) -> bool:
-    has_location_tool = False
-    has_search_without_coords = False
-    for call in calls:
-        tool_name = call.get("name")
-        args = call.get("args", {})
-        if tool_name in {"get_ip_location", "geocode_location"}:
-            has_location_tool = True
-        if tool_name == "search_restaurants" and isinstance(args, dict):
-            lat = args.get("lat")
-            lng = args.get("lng")
-            lat_ok = isinstance(lat, (int, float)) and float(lat) != 0.0
-            lng_ok = isinstance(lng, (int, float)) and float(lng) != 0.0
-            if not (lat_ok and lng_ok):
-                has_search_without_coords = True
-    return has_location_tool and has_search_without_coords
-
-
 def smart_tool_result_previewer(tool_name: str, result: object) -> dict[str, Any] | None:
     if tool_name == "plan_route" and isinstance(result, dict):
         return {
@@ -772,12 +509,6 @@ def smart_tool_result_previewer(tool_name: str, result: object) -> dict[str, Any
             "error": result.get("error"),
         }
     return None
-
-
-async def smart_final_action_hook(state: SmartEatsState, _final_json: dict[str, Any], db: Any) -> None:
-    user = (state.message or "").strip()
-    if user.startswith("记住"):
-        await memory.store_memory(db, state.user_id, user)
 
 
 def smart_system_prompt(payload: dict) -> str:
@@ -1071,17 +802,16 @@ def _smart_eats_graph_config() -> SmartEatsGraphConfig:
         writer_prompt_builder=default_writer_prompt,
         action_normalizer=normalize_action_from_raw,
         tool_args_normalizer=smart_tool_args_normalizer,
-        serial_execution_decider=smart_serial_execution_decider,
         tool_result_previewer=smart_tool_result_previewer,
-        final_action_hook=smart_final_action_hook,
         best_effort_fallback_handler=smart_best_effort_fallback,
-        fast_path_decider=smart_fast_path_decider,
-        fast_path_system_prompt_builder=smart_fast_path_system_prompt_builder,
-        fast_path_writer_prompt_builder=smart_fast_path_writer_prompt_builder,
     )
 
 
 def get_smart_eats_agent_config() -> SmartEatsGraphConfig:
+    """Compatibility adapter for legacy registry callers.
+
+    Dedicated smart_eats runtime should call build_smart_eats_graph directly.
+    """
     return _smart_eats_graph_config()
 
 

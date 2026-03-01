@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.agent.agent_registry import get_agent_config
-from app.agent.graph import _refresh_observation_context
+from app.agent.legacy_builder_helpers import _refresh_observation_context
 from app.agent.state import ChatState
 from app.infra.db import AsyncSessionLocal
 from app.infra.models.chat import ChatMessage, ChatSession

@@ -25,7 +25,6 @@ class ChatState:
     final_json: dict[str, Any] | None = None
     planner_retry_count: int = 0
     action: Any | None = None
-    action_type: str | None = None
     provider: str | None = None
     agent_type: str | None = None
     client_ip: str | None = None
@@ -46,3 +45,8 @@ class ChatState:
     user_message_logged: bool = False
     history: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class LegacyChatState(ChatState):
+    action_type: str | None = None

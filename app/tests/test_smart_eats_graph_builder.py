@@ -67,8 +67,8 @@ async def test_build_smart_eats_graph_roundtrip_without_graph_helpers(monkeypatc
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
     monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _noop_refresh_observation_context)
-    monkeypatch.setattr("app.agent.graph._ensure_chat_session", _should_not_call_graph_helper)
-    monkeypatch.setattr("app.agent.graph._refresh_observation_context", _should_not_call_graph_helper)
+    monkeypatch.setattr("app.agent.legacy_builder_helpers._ensure_chat_session", _should_not_call_graph_helper)
+    monkeypatch.setattr("app.agent.legacy_builder_helpers._refresh_observation_context", _should_not_call_graph_helper)
 
     graph = build_smart_eats_graph(
         db=None,

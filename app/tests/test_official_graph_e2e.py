@@ -71,9 +71,9 @@ async def test_official_graph_toolnode_roundtrip(monkeypatch, override_redis):
     async def _noop_save_tool_message(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr("app.agent.graph.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
-    monkeypatch.setattr("app.agent.graph._ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr("app.agent.graph._refresh_observation_context", _noop_refresh_context)
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
+    monkeypatch.setattr("app.agent.legacy_builder_helpers._ensure_chat_session", _noop_ensure_chat_session)
+    monkeypatch.setattr("app.agent.legacy_builder_helpers._refresh_observation_context", _noop_refresh_context)
     monkeypatch.setattr("app.agent.graph.history.save_tool_message", _noop_save_tool_message)
 
     config = create_agent_config(

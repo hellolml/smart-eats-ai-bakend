@@ -2,13 +2,8 @@ from __future__ import annotations
 
 from app.agent.agents.smart_eats import (
     _tool_result_handler,
-    smart_fast_path_decider,
-    smart_fast_path_system_prompt_builder,
-    smart_fast_path_writer_prompt_builder,
-    smart_tool_plan_router,
     smart_intent_resolver,
     smart_tool_args_normalizer,
-    _normalize_restaurant_query,
 )
 from app.agent.state import ChatState
 
@@ -27,14 +22,16 @@ def test_get_fridge_items_empty_relaxed_to_llm():
     assert state.context.get("fridge_items") == []
 
 
-def test_get_fridge_items_empty_in_cook_home_returns_direct_final():
+def test_get_fridge_items_empty_in_cook_home_returns_directive_context():
     state = _build_state()
     state.intent = "cook_home"
 
     handled = _tool_result_handler(state, "get_fridge_items", {"items": []})
 
-    assert isinstance(handled, dict)
-    assert "空冰箱" in handled["recommendations"][0]["reason"]
+    assert handled is None
+    assert state.context_overrides is not None
+    assert state.context_overrides.get("fridge_empty") is True
+    assert "system_directive" in state.context_overrides
 
 
 def test_search_restaurants_results_relaxed_to_llm():
@@ -58,7 +55,10 @@ def test_search_restaurants_empty_sets_recovery_context():
     assert state.context is not None
     assert state.context.get("last_search_error") == "empty_result"
     assert state.context.get("restaurant_retries") == 1
-    assert state.context.get("suggested_radius_km") == 3
+    assert state.context.get("suggested_radius_km") is None
+    assert state.context_overrides is not None
+    assert state.context_overrides.get("restaurant_search_retries") == 1
+    assert "system_directive" in state.context_overrides
 
 
 def test_search_restaurants_missing_location_sets_recovery_context():
@@ -109,7 +109,7 @@ def test_search_recipes_relaxed_to_llm():
     assert handled is None
 
 
-def test_rag_search_recipes_with_steps_returns_direct_recipe_method():
+def test_rag_search_recipes_with_steps_sets_directive_context():
     state = _build_state()
     state.intent = "confirm_recipe"
 
@@ -129,10 +129,12 @@ def test_rag_search_recipes_with_steps_returns_direct_recipe_method():
         },
     )
 
-    assert isinstance(handled, dict)
-    assert handled["recommendations"][0]["type"] == "recipe"
-    assert "土豆炖牛肉做法" in handled["recommendations"][0]["title"]
-    assert "1. 牛肉焯水" in handled["recommendations"][0]["title"]
+    assert handled is None
+    assert state.context_overrides is not None
+    hits = state.context_overrides.get("rag_recipe_hits")
+    assert isinstance(hits, list) and hits
+    assert hits[0].get("title") == "土豆炖牛肉"
+    assert "system_directive" in state.context_overrides
 
 
 def test_plan_route_missing_origin_keeps_hard_guardrail():
@@ -179,87 +181,6 @@ def test_plan_route_success_relaxed_to_llm():
     assert handled is None
 
 
-def test_fast_path_decider_for_simple_chat():
-    state = ChatState(session_id="s1", message="你好", scene="chat")
-
-    assert smart_fast_path_decider(state) is True
-
-
-def test_fast_path_decider_rejects_tool_intent_keyword():
-    state = ChatState(session_id="s1", message="附近吃什么", scene="chat")
-
-    assert smart_fast_path_decider(state) is False
-
-
-def test_fast_path_decider_rejects_context_overrides():
-    state = ChatState(
-        session_id="s1",
-        message="你好",
-        scene="chat",
-        context_overrides={"environment": {"location": {"lat": 1, "lng": 2}}},
-    )
-
-    assert smart_fast_path_decider(state) is False
-
-
-def test_fast_path_decider_rejects_checkpoint_resume():
-    state = ChatState(
-        session_id="s1",
-        message="你好",
-        scene="chat",
-        resume_from_checkpoint=True,
-    )
-
-    assert smart_fast_path_decider(state) is False
-
-
-def test_fast_path_system_prompt_builder_contains_constraints():
-    state = ChatState(
-        session_id="s1",
-        message="hi",
-        context={"system_prompt": "来自上下文的system"},
-    )
-
-    prompt = smart_fast_path_system_prompt_builder(state)
-    assert "Fast Path 输出约束" in prompt
-    assert "禁止输出 JSON" in prompt
-
-
-def test_fast_path_writer_prompt_builder_contains_recent_history_and_message():
-    state = ChatState(
-        session_id="s1",
-        message="继续",
-        history=[
-            {"role": "user", "content": "你好"},
-            {"role": "assistant", "content": "你好呀"},
-        ],
-    )
-
-    prompt = smart_fast_path_writer_prompt_builder(state)
-
-    assert "对话历史：" in prompt
-    assert "用户: 你好" in prompt
-    assert "助手: 你好呀" in prompt
-    assert "用户最新消息: 继续" in prompt
-    assert "使用中文回答" in prompt
-
-
-def test_tool_plan_router_always_delegates_to_llm():
-    state = ChatState(session_id="s1", message="出去吃", intent="eat_out", context={})
-
-    plan = smart_tool_plan_router(state)
-
-    assert plan is None
-
-
-def test_tool_plan_router_non_eat_out_returns_none():
-    state = ChatState(session_id="s1", message="你好", intent="chat", context={})
-
-    plan = smart_tool_plan_router(state)
-
-    assert plan is None
-
-
 def test_intent_resolver_delegates_to_llm_and_returns_unknown():
     state = ChatState(session_id="s1", message="我想吃麻辣烫", history=[])
 
@@ -278,6 +199,3 @@ def test_search_restaurants_args_normalizer_accepts_keyword_and_location():
     assert normalized["lng"] == 108.53
     assert "radius" not in normalized
 
-
-def test_normalize_restaurant_query_strips_colloquial_prefix():
-    assert _normalize_restaurant_query("我想吃火锅") == "火锅"

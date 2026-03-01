@@ -66,19 +66,13 @@ def _ensure_legacy_smart_eats_bridge() -> None:
         max_steps=config.max_steps,
         system_prompt_builder=config.system_prompt_builder,
         writer_prompt_builder=config.writer_prompt_builder,
-        tool_result_handler=config.tool_result_handler,
         action_normalizer=config.action_normalizer,
-        intent_resolver=config.intent_resolver,
-        tool_plan_router=config.tool_plan_router,
-        context_extender=config.context_extender,
         tool_args_normalizer=config.tool_args_normalizer,
         serial_execution_decider=config.serial_execution_decider,
         tool_result_previewer=config.tool_result_previewer,
         final_action_hook=config.final_action_hook,
         best_effort_fallback_handler=config.best_effort_fallback_handler,
-        fast_path_decider=config.fast_path_decider,
-        fast_path_system_prompt_builder=config.fast_path_system_prompt_builder,
-        fast_path_writer_prompt_builder=config.fast_path_writer_prompt_builder,
+        # smart_eats dedicated runtime does not use fast-path; keep bridge minimal.
     )
 
 def create_agent_config(

@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from app.agent.graph import _best_effort_final_from_observations, _render_final_text
+from app.agent.legacy_builder_helpers import _best_effort_final_from_observations
+from app.agent.graph import _render_final_text
 from app.agent.agent_registry import get_agent_config
 from app.agent.state import ChatState
 
@@ -71,8 +72,11 @@ def test_render_final_text_with_recommendations_followups_warnings():
 
     assert "推荐番茄炒蛋（简单快手）" in text
     assert "推荐青椒肉丝" in text
-    assert "你可以继续：想要10分钟内完成；偏清淡口味" in text
-    assert "注意：食材过敏请先确认" in text
+    assert "**你可以继续：**" in text
+    assert "想要10分钟内完成" in text
+    assert "偏清淡口味" in text
+    assert "**注意：**" in text
+    assert "食材过敏请先确认" in text
 
 
 def test_render_final_text_empty_returns_default():

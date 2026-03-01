@@ -7,6 +7,7 @@ from langgraph.graph import StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.agents.smart_eats import build_smart_eats_graph
+from app.agent.legacy_runtime import build_legacy_agent_graph
 from app.common.config import settings
 
 
@@ -21,7 +22,6 @@ def build_agent_graph(
     agent_config: Any,
     provider: str | None = None,
 ) -> StateGraph:
-    runtime = _select_graph_runtime()
     agent_name = getattr(agent_config, "name", None)
     if agent_name == "smart_eats":
         return build_smart_eats_graph(
@@ -30,12 +30,10 @@ def build_agent_graph(
             provider=provider,
         )
 
-    from app.agent.graph import build_langgraph, build_langgraph_official
-
-    builder = build_langgraph_official if runtime == "official" else build_langgraph
-    return builder(
+    return build_legacy_agent_graph(
         db=db,
         redis_client=redis_client,
         provider=provider,
         agent_config=agent_config,
+        runtime=_select_graph_runtime(),
     )

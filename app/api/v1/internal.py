@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.agent.graph import get_agent_metrics_snapshot, reset_agent_metrics
+from app.agent.legacy_builder_helpers import get_agent_metrics_snapshot, reset_agent_metrics
 
 router = APIRouter()
 
