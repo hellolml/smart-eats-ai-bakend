@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+import httpx
 import redis.asyncio as redis
 from fastapi import HTTPException
+from openai import AsyncOpenAI
 from redis.exceptions import RedisError
 from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -895,16 +898,20 @@ class AppBffService:
 
         ingredient_names = [name for name in ingredient_names if isinstance(name, str) and name.strip()]
         query = " ".join(ingredient_names[:4]) if ingredient_names else "home"
-        count = payload.get("count", 2)
+        count = max(1, min(int(payload.get("count", 2)), 5))
 
-        recipes: list[dict[str, Any]] = []
-        try:
-            raw_recipes = await RecipeService.search(redis_client, query)
-            for item in raw_recipes[:count]:
-                recipes.append(map_home_chef_recipe(item, ingredient_names))
-        except Exception:
-            recipes = []
+        # 1) 优先用 LLM 直接生成菜谱+具体做法
+        recipes = await AppBffService._generate_home_chef_recipes_with_llm(ingredient_names, count)
 
+        # 2) LLM 不可用时，退回本地检索+模板步骤
+        if not recipes:
+            try:
+                raw_recipes = await RecipeService.search(redis_client, query)
+                recipes = [map_home_chef_recipe(item, ingredient_names) for item in raw_recipes[:count]]
+            except Exception:
+                recipes = []
+
+        # 3) 最终兜底
         if not recipes:
             recipes = [
                 {
@@ -930,6 +937,105 @@ class AppBffService:
             ][:count]
 
         return {"recipes": recipes}
+
+    @staticmethod
+    async def _generate_home_chef_recipes_with_llm(
+        ingredient_names: list[str],
+        count: int,
+    ) -> list[dict[str, Any]]:
+        try:
+            provider = ProviderRegistry.get(settings.LLM_PROVIDER)
+            if not provider.api_key:
+                return []
+
+            client = AsyncOpenAI(
+                api_key=provider.api_key,
+                base_url=provider.base_url,
+                max_retries=1,
+                timeout=httpx.Timeout(40.0, connect=5.0),
+            )
+
+            prompt = (
+                "你是专业厨师。根据给定食材，生成可执行的家常菜谱。"
+                "严格输出 JSON 数组，不要 markdown，不要解释。"
+                "每个对象包含字段: title, desc, time, cal, img, tag, ingredients, steps。"
+                "其中 ingredients/steps 必须是字符串数组，steps 至少 4 步。"
+                "img 固定为 cooking_dish。"
+            )
+            user_text = json.dumps(
+                {
+                    "ingredients": ingredient_names,
+                    "count": count,
+                    "constraints": ["优先使用现有食材", "步骤清晰可执行"],
+                },
+                ensure_ascii=False,
+            )
+
+            resp = await client.chat.completions.create(
+                model=provider.model_writer,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_text},
+                ],
+                temperature=0.6,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            parsed = AppBffService._parse_recipe_json(content)
+            return AppBffService._normalize_llm_recipes(parsed, count)
+        except Exception as exc:
+            logger.info("home_chef_llm_fallback reason=%s", str(exc))
+            return []
+
+    @staticmethod
+    def _parse_recipe_json(content: str) -> list[dict[str, Any]]:
+        if not content:
+            return []
+        text = content.strip().replace("```json", "").replace("```", "").strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                data = json.loads(text)
+                return data if isinstance(data, list) else []
+            except Exception:
+                pass
+
+        start = text.find("[")
+        end = text.rfind("]")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start : end + 1])
+                return data if isinstance(data, list) else []
+            except Exception:
+                return []
+        return []
+
+    @staticmethod
+    def _normalize_llm_recipes(raw: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            ingredients = item.get("ingredients") if isinstance(item.get("ingredients"), list) else []
+            steps = item.get("steps") if isinstance(item.get("steps"), list) else []
+            if len(steps) < 3:
+                continue
+            results.append(
+                {
+                    "title": title,
+                    "desc": str(item.get("desc") or "家常快手菜")[:20],
+                    "time": str(item.get("time") or "15min"),
+                    "cal": str(item.get("cal") or "250kcal"),
+                    "img": "cooking_dish",
+                    "tag": str(item.get("tag") or "家常")[:12],
+                    "ingredients": [str(x) for x in ingredients if isinstance(x, str)][:12],
+                    "steps": [str(x) for x in steps if isinstance(x, str)][:12],
+                }
+            )
+            if len(results) >= count:
+                break
+        return results
 
     @staticmethod
     async def get_today_card(user_id: str, db: AsyncSession) -> dict[str, Any]:
