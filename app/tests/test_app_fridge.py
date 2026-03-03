@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -14,9 +15,10 @@ async def test_app_fridge_crud_and_scan(client):
     tokens = resp.json()["data"]
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
 
+    expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     resp = await client.post(
         "/api/v1/app/fridge/ingredients",
-        json={"name": "鸡蛋", "quantity": 3, "unit": "个"},
+        json={"name": "鸡蛋", "quantity": 3, "unit": "个", "expiry_date": expiry},
         headers=headers,
     )
     assert resp.status_code == 200
@@ -79,6 +81,16 @@ async def test_app_fridge_crud_and_scan(client):
     assert resp.status_code == 200
     applied = resp.json()["data"]
     assert applied["applied_count"] >= 1
+
+    resp = await client.get("/api/v1/app/fridge/expiring-soon", headers=headers)
+    assert resp.status_code == 200
+    assert isinstance(resp.json()["data"], list)
+
+    resp = await client.post("/api/v1/app/fridge/clear-inventory-plan", headers=headers)
+    assert resp.status_code == 200
+    plan = resp.json()["data"]
+    assert "recipes" in plan
+    assert "query" in plan
 
     resp = await client.delete(f"/api/v1/app/fridge/ingredients/{item['id']}", headers=headers)
     assert resp.status_code == 200

@@ -495,6 +495,77 @@ class AppBffService:
         return [map_ingredient(item) for item in items]
 
     @staticmethod
+    async def get_expiring_ingredients(
+        user_id: str,
+        db: AsyncSession,
+        *,
+        within_days: int = 3,
+    ) -> list[dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        horizon = now + timedelta(days=max(1, min(within_days, 14)))
+        result = await db.execute(
+            select(FridgeItem)
+            .where(FridgeItem.user_id == user_id, FridgeItem.expiry_date.is_not(None))
+            .order_by(FridgeItem.expiry_date.asc())
+        )
+        items = result.scalars().all()
+
+        data: list[dict[str, Any]] = []
+        for item in items:
+            expiry = item.expiry_date
+            if expiry is None:
+                continue
+            expiry_at = expiry if expiry.tzinfo else expiry.replace(tzinfo=timezone.utc)
+            if expiry_at > horizon:
+                continue
+            delta = expiry_at - now
+            hours_left = int(delta.total_seconds() // 3600)
+            if delta.total_seconds() < 0:
+                status = "expired"
+            elif hours_left <= 24:
+                status = "expiring_24h"
+            else:
+                status = "expiring_72h"
+
+            row = map_ingredient(item)
+            row.update(
+                {
+                    "status": status,
+                    "hours_left": hours_left,
+                }
+            )
+            data.append(row)
+        return data
+
+    @staticmethod
+    async def build_clear_inventory_plan(
+        user_id: str,
+        db: AsyncSession,
+        redis_client: redis.Redis,
+    ) -> dict[str, Any]:
+        expiring = await AppBffService.get_expiring_ingredients(user_id, db, within_days=3)
+        if not expiring:
+            result = await db.execute(
+                select(FridgeItem)
+                .where(FridgeItem.user_id == user_id)
+                .order_by(desc(FridgeItem.updated_at))
+                .limit(3)
+            )
+            fallback_items = result.scalars().all()
+            names = [item.name for item in fallback_items]
+        else:
+            names = [item.get("name") for item in expiring[:3] if item.get("name")]
+
+        query = " ".join(names).strip() or "快手菜"
+        recipes = await RecipeService.search(redis_client, query)
+        ingredient_names = names[:]
+        return {
+            "priority_items": expiring[:5],
+            "query": query,
+            "recipes": [map_home_chef_recipe(item, ingredient_names) for item in recipes[:3]],
+        }
+
+    @staticmethod
     async def create_ingredient(user_id: str, payload: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
         item = FridgeItem(
             id=str(uuid4()),

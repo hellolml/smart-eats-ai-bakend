@@ -213,6 +213,28 @@ async def create_ingredient(
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
+@router.get("/fridge/expiring-soon")
+async def get_expiring_ingredients(
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+    within_days: int = Query(3, ge=1, le=14),
+):
+    data = await AppBffService.get_expiring_ingredients(user_id, db, within_days=within_days)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/fridge/clear-inventory-plan")
+async def build_clear_inventory_plan(
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.build_clear_inventory_plan(user_id, db, redis)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
 @router.patch("/fridge/ingredients/{ingredient_id}")
 async def update_ingredient(
     ingredient_id: str,
