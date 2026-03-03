@@ -392,6 +392,8 @@ async def app_blindbox_decision(
     redis: redis_dep,
     user_id: str = Depends(get_current_user_id),
 ):
+    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else None)
     data = await DecisionService.blindbox(
         db,
         redis,
@@ -402,6 +404,7 @@ async def app_blindbox_decision(
         lng=payload.lng,
         budget_level=payload.budget_level,
         scene=payload.scene,
+        client_ip=client_ip,
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
 
@@ -425,6 +428,8 @@ async def app_quick_filter_answer(
     redis: redis_dep,
     user_id: str = Depends(get_current_user_id),
 ):
+    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else None)
     data = await DecisionService.quick_filter_answer(
         redis,
         db,
@@ -435,6 +440,7 @@ async def app_quick_filter_answer(
         lat=payload.lat,
         lng=payload.lng,
         budget_level=payload.budget_level,
+        client_ip=client_ip,
     )
     if data is None:
         raise HTTPException(status_code=404, detail="quick filter flow not found")

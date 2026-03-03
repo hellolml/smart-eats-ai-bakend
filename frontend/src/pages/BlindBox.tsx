@@ -59,10 +59,19 @@ const BlindBox: React.FC = () => {
 
   const fetchDecision = useCallback(async () => {
     try {
+      const location = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
+        if (!navigator.geolocation) return resolve(null);
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+          () => resolve(null),
+          { timeout: 2500, maximumAge: 5 * 60 * 1000 }
+        );
+      });
+
       const resp = await fetch('/api/v1/decisions/blindbox', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ query: '附近美食' })
+        body: JSON.stringify({ query: '附近美食', lat: location?.lat, lng: location?.lng })
       });
       const data = await resp.json();
       const title = data?.data?.decision?.title;

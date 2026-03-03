@@ -37,7 +37,9 @@ class DecisionService:
         lng: float | None,
         budget_level: int | None,
         scene: str | None,
+        client_ip: str | None = None,
     ) -> dict[str, Any]:
+        lat, lng, city = await _resolve_location(lat, lng, city, client_ip=client_ip)
         decision_ctx = await _build_context(city)
         pref = await _get_preference(db, user_id)
 
@@ -131,6 +133,7 @@ class DecisionService:
         lat: float | None,
         lng: float | None,
         budget_level: int | None,
+        client_ip: str | None = None,
     ) -> dict[str, Any] | None:
         raw = await redis_client.get(_flow_key(flow_id))
         if not raw:
@@ -161,12 +164,43 @@ class DecisionService:
             lng=lng,
             budget_level=budget_level,
             scene="quick_filter",
+            client_ip=client_ip,
         )
         state["done"] = True
         state["result"] = decision
         state["next_question"] = None
         await redis_client.setex(_flow_key(flow_id), 1800, _json_dump(state))
         return state
+
+
+async def _resolve_location(
+    lat: float | None,
+    lng: float | None,
+    city: str | None,
+    *,
+    client_ip: str | None,
+) -> tuple[float | None, float | None, str | None]:
+    if lat is not None and lng is not None:
+        resolved_city = city
+        if not resolved_city:
+            try:
+                resolved_city = await amap.reverse_geocode_city(
+                    {"lat": float(lat), "lng": float(lng)},
+                    servers_path=None,
+                )
+            except Exception:
+                resolved_city = city
+        return lat, lng, resolved_city
+
+    if client_ip:
+        try:
+            ip_loc, ip_city = await amap.get_ip_location(client_ip, servers_path=None)
+            if ip_loc and ip_loc.get("lat") is not None and ip_loc.get("lng") is not None:
+                return float(ip_loc["lat"]), float(ip_loc["lng"]), city or ip_city
+        except Exception:
+            pass
+
+    return lat, lng, city
 
 
 async def _build_context(city: str | None) -> DecisionContext:

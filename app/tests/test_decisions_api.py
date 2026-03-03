@@ -49,6 +49,42 @@ async def test_blindbox_returns_single_decision_with_actions(client, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_blindbox_uses_ip_fallback_location_when_no_coords(client, monkeypatch):
+    captured = {}
+
+    async def fake_search_restaurants(redis_client, query, tag, lat, lng, sort, city=None):
+        captured['lat'] = lat
+        captured['lng'] = lng
+        captured['city'] = city
+        return [
+            {
+                "provider": "amap",
+                "provider_id": "poi_ip_001",
+                "name": "附近牛肉面",
+                "rating": 4.7,
+                "price": 35,
+                "geo": {"lat": 31.2304, "lng": 121.4737},
+            }
+        ]
+
+    async def fake_get_ip_location(ip, *, servers_path):
+        assert ip == '8.8.8.8'
+        return ({"lat": 31.2304, "lng": 121.4737}, "上海")
+
+    monkeypatch.setattr(RestaurantService, "search", fake_search_restaurants)
+    monkeypatch.setattr("app.domain.decision.service.amap.get_ip_location", fake_get_ip_location)
+
+    resp = await client.post(
+        "/api/v1/decisions/blindbox",
+        headers={"x-forwarded-for": "8.8.8.8"},
+        json={"query": "附近美食"},
+    )
+    assert resp.status_code == 200
+    assert captured["lat"] == 31.2304
+    assert captured["lng"] == 121.4737
+
+
+@pytest.mark.asyncio
 async def test_quick_filter_three_rounds_then_finalize(client, monkeypatch):
     async def fake_search_restaurants(redis_client, query, tag, lat, lng, sort, city=None):
         return [
