@@ -19,6 +19,7 @@ const FoodHunter = () => {
     const [activeTag, setActiveTag] = useState('');
     const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
     const [focusRestaurantId, setFocusRestaurantId] = useState<string>('');
+    const [focusRestaurantName, setFocusRestaurantName] = useState<string>('');
 
     const locationDeniedToastShownRef = React.useRef(
         typeof window !== 'undefined' && window.sessionStorage.getItem(LOCATION_DENY_TOAST_FLAG) === '1'
@@ -29,6 +30,7 @@ const FoodHunter = () => {
         if (!focus) return;
         if (focus.provider && focus.provider_id) {
             setFocusRestaurantId(`${focus.provider}_${focus.provider_id}`);
+            setFocusRestaurantName(focus.title || '盲盒命中餐厅');
         }
     }, [locationState.state]);
 
@@ -89,6 +91,14 @@ const FoodHunter = () => {
 
         void fetchRestaurants();
     }, [isLoggedIn, query, activeSort, activeTag, location?.lat, location?.lng, locationState.state]);
+
+    useEffect(() => {
+        if (!focusRestaurantId) return;
+        const el = document.querySelector(`[data-restaurant-id="${focusRestaurantId}"]`);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, [focusRestaurantId, restaurants]);
 
     useEffect(() => {
         if (!isLoggedIn) return;
@@ -223,6 +233,18 @@ const FoodHunter = () => {
                 </div>
             </div>
 
+            {focusRestaurantId ? (
+                <div className="bg-[#7E57FF] text-white rounded-2xl px-4 py-3 shadow-sm flex items-center justify-between gap-3">
+                    <div className="text-sm font-bold truncate">🎯 盲盒命中：{focusRestaurantName || '目标餐厅'}</div>
+                    <button
+                        onClick={() => setFocusRestaurantId('')}
+                        className="text-xs bg-white/20 hover:bg-white/30 px-2 py-1 rounded-lg"
+                    >
+                        取消高亮
+                    </button>
+                </div>
+            ) : null}
+
             <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar flex-shrink-0">
                 {tagButtons.map((item) => (
                     <button
@@ -273,6 +295,7 @@ const FoodHunter = () => {
                         return (
                         <div
                             key={cardId}
+                            data-restaurant-id={cardId}
                             className={`bg-white rounded-3xl overflow-hidden shadow-sm border group ${isFocus ? 'border-[#7E57FF] ring-2 ring-purple-200' : 'border-purple-50'}`}
                         >
                             <div className="h-40 bg-purple-100 relative">
