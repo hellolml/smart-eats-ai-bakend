@@ -5,7 +5,7 @@ from app.domain.app.service import AppBffService
 
 @pytest.mark.asyncio
 async def test_home_chef_generate_recipes_with_llm_steps(client, monkeypatch):
-    async def fake_llm(ingredient_names, count):
+    async def fake_llm(ingredient_names, count, preference_profile=None):
         return [
             {
                 "title": "番茄鸡蛋面",

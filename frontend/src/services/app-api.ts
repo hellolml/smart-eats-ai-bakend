@@ -588,7 +588,14 @@ export const appApi = {
     },
 
     homeChef: {
-        async generateRecipes(payload: { ingredients?: string[]; count?: number }) {
+        async generateRecipes(payload: {
+            ingredients?: string[];
+            count?: number;
+            taste_style?: string;
+            dietary_goal?: string;
+            oil_level?: string;
+            salt_level?: string;
+        }) {
             return request<{ recipes: AppHomeChefRecipe[] }>('/home-chef/recipes/generate', {
                 method: 'POST',
                 body: payload

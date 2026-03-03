@@ -21,6 +21,10 @@ const HomeChef = () => {
   const [nameValue, setNameValue] = useState('');
   const [quantityValue, setQuantityValue] = useState('');
   const [groceryList, setGroceryList] = useState<AppGroceryList | null>(null);
+  const [tasteStyle, setTasteStyle] = useState('家常');
+  const [dietaryGoal, setDietaryGoal] = useState('均衡');
+  const [oilLevel, setOilLevel] = useState('少油');
+  const [saltLevel, setSaltLevel] = useState('低盐');
 
   useEffect(() => {
     const fetchIngredients = async () => {
@@ -64,7 +68,14 @@ const HomeChef = () => {
     const toastId = toast.loading('AI正在为您构思菜谱...', { id: 'ai-gen' });
     try {
       const ingredientNames = ingredients.map((i) => i.name);
-      const data = await appApi.homeChef.generateRecipes({ ingredients: ingredientNames, count: 3 });
+      const data = await appApi.homeChef.generateRecipes({
+        ingredients: ingredientNames,
+        count: 3,
+        taste_style: tasteStyle,
+        dietary_goal: dietaryGoal,
+        oil_level: oilLevel,
+        salt_level: saltLevel,
+      });
       setAiRecipes(data.recipes || []);
       toast.success('AI 菜谱已生成！', { id: toastId });
     } catch (e) {
@@ -182,6 +193,21 @@ const HomeChef = () => {
           <button onClick={() => setIsCookingListModalOpen(true)} className="bg-orange-50 text-orange-500 px-3 py-2 rounded-xl flex items-center gap-1.5 text-[10px] font-bold border border-orange-100 shadow-sm">
             <BookOpen size={14} /> 今日菜单({cookingList.length})
           </button>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+          <select value={tasteStyle} onChange={(e) => setTasteStyle(e.target.value)} className="bg-gray-50 rounded-xl px-3 py-2 text-xs">
+            <option>家常</option><option>川味</option><option>粤式</option><option>清淡</option>
+          </select>
+          <select value={dietaryGoal} onChange={(e) => setDietaryGoal(e.target.value)} className="bg-gray-50 rounded-xl px-3 py-2 text-xs">
+            <option>均衡</option><option>减脂</option><option>增肌</option><option>低碳</option>
+          </select>
+          <select value={oilLevel} onChange={(e) => setOilLevel(e.target.value)} className="bg-gray-50 rounded-xl px-3 py-2 text-xs">
+            <option>少油</option><option>正常油量</option><option>低脂</option>
+          </select>
+          <select value={saltLevel} onChange={(e) => setSaltLevel(e.target.value)} className="bg-gray-50 rounded-xl px-3 py-2 text-xs">
+            <option>低盐</option><option>正常咸度</option><option>重口</option>
+          </select>
         </div>
 
         {aiRecipes.length > 0 ? (

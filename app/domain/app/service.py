@@ -896,12 +896,22 @@ class AppBffService:
             result = await db.execute(select(FridgeItem).where(FridgeItem.user_id == user_id).limit(10))
             ingredient_names = [item.name for item in result.scalars().all()]
 
+        pref = await AppBffService._get_or_create_preferences(user_id, db)
+        preference_profile = {
+            "taste_style": payload.get("taste_style") or ",".join(pref.taste_tags or []) or None,
+            "dietary_goal": payload.get("dietary_goal"),
+            "oil_level": payload.get("oil_level"),
+            "salt_level": payload.get("salt_level"),
+            "taboos": pref.avoid_ingredients or [],
+            "allergens": pref.allergens or [],
+        }
+
         ingredient_names = [name for name in ingredient_names if isinstance(name, str) and name.strip()]
         query = " ".join(ingredient_names[:4]) if ingredient_names else "home"
         count = max(1, min(int(payload.get("count", 2)), 5))
 
         # 1) 优先用 LLM 直接生成菜谱+具体做法
-        recipes = await AppBffService._generate_home_chef_recipes_with_llm(ingredient_names, count)
+        recipes = await AppBffService._generate_home_chef_recipes_with_llm(ingredient_names, count, preference_profile)
 
         # 2) LLM 不可用时，退回本地检索+模板步骤
         if not recipes:
@@ -944,6 +954,7 @@ class AppBffService:
     async def _generate_home_chef_recipes_with_llm(
         ingredient_names: list[str],
         count: int,
+        preference_profile: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         try:
             provider = ProviderRegistry.get(settings.LLM_PROVIDER)
@@ -984,7 +995,8 @@ class AppBffService:
                 {
                     "ingredients": ingredient_names,
                     "count": count,
-                    "constraints": ["优先使用现有食材", "步骤清晰可执行"],
+                    "preference_profile": preference_profile or {},
+                    "constraints": ["优先使用现有食材", "步骤清晰可执行", "严格遵守用户口味偏好参数"],
                 },
                 ensure_ascii=False,
             )
