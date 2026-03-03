@@ -16,6 +16,7 @@ async def test_home_chef_generate_recipes_with_llm_steps(client, monkeypatch):
                 "tag": "快手",
                 "ingredients": ["鸡蛋 2个", "番茄 1个", "挂面 100g"],
                 "steps": ["烧水", "煮面", "炒番茄鸡蛋", "合并出锅"],
+                "method_markdown": "### 做法步骤\n1. 烧水\n2. 煮面\n3. 炒番茄鸡蛋\n4. 合并出锅",
             }
         ][:count]
 
@@ -39,3 +40,4 @@ async def test_home_chef_generate_recipes_with_llm_steps(client, monkeypatch):
     assert len(recipes) == 1
     assert recipes[0]["title"] == "番茄鸡蛋面"
     assert len(recipes[0]["steps"]) >= 4
+    assert "### 做法步骤" in recipes[0]["method_markdown"]

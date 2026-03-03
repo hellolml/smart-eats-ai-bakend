@@ -120,6 +120,7 @@ export interface AppHomeChefRecipe {
     tag: string;
     ingredients?: string[];
     steps?: string[];
+    method_markdown?: string;
 }
 
 export interface AppGroceryListItem {

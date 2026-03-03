@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { appApi, AppGroceryList, AppHomeChefRecipe, AppIngredient } from '@/services/app-api';
 
 const HomeChef = () => {
@@ -245,6 +247,15 @@ const HomeChef = () => {
                 <div>
                   <h4 className="font-black text-sm uppercase tracking-widest text-[#7E57FF] flex items-center gap-2"><ChefHat size={18} />所需食材</h4>
                   <div className="grid grid-cols-2 gap-3 mt-3">{selectedRecipe.ingredients?.map((ing, i) => <div key={i} className="bg-gray-50 p-3 rounded-xl text-xs">{ing}</div>)}</div>
+                </div>
+
+                <div>
+                  <h4 className="font-black text-sm uppercase tracking-widest text-[#7E57FF] flex items-center gap-2"><BookOpen size={18} />详细做法</h4>
+                  <div className="mt-3 bg-gray-50 rounded-2xl p-4 prose prose-sm max-w-none prose-headings:my-2 prose-p:my-1 prose-ul:my-1 prose-ol:my-1">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {selectedRecipe.method_markdown || `### 做法步骤\n${(selectedRecipe.steps || []).map((s, i) => `${i + 1}. ${s}`).join('\n')}`}
+                    </ReactMarkdown>
+                  </div>
                 </div>
               </div>
               <div className="p-6 bg-gray-50 border-t border-gray-100 flex gap-3">

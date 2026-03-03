@@ -136,6 +136,20 @@ def map_home_chef_recipe(item: dict[str, Any], ingredient_names: list[str]) -> d
         "调味后小火收汁即可出锅",
     ]
 
+    method_markdown = "\n".join([
+        f"**{title}** 是一道家常快手菜。",
+        "",
+        "### 食材准备",
+        *[f"- {x}" for x in ingredients],
+        "",
+        "### 做法步骤",
+        *[f"{idx + 1}. {x}" for idx, x in enumerate(steps)],
+        "",
+        "### 小贴士",
+        "- 鸡蛋类食材建议先炒到七八分熟再回锅，口感更嫩。",
+        "- 汤汁偏稀可少量水淀粉收汁。",
+    ])
+
     return {
         "title": title,
         "desc": ("、".join(tags[:2])[:15] or "家常快手菜"),
@@ -145,4 +159,5 @@ def map_home_chef_recipe(item: dict[str, Any], ingredient_names: list[str]) -> d
         "tag": tags[0] if tags else "家常",
         "ingredients": ingredients,
         "steps": steps,
+        "method_markdown": method_markdown,
     }

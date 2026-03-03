@@ -923,6 +923,7 @@ class AppBffService:
                     "tag": "高蛋白",
                     "ingredients": ["鸡蛋 3个", "西红柿 2个", "小葱 1根"],
                     "steps": ["西红柿切块，鸡蛋打散", "先炒鸡蛋盛出，再炒西红柿", "回锅翻炒并调味"],
+                    "method_markdown": "### 食材准备\n- 鸡蛋 3个\n- 西红柿 2个\n- 小葱 1根\n\n### 做法步骤\n1. 鸡蛋加少许盐打散，热油快炒至七八分熟盛出。\n2. 西红柿切块下锅炒软，加入少许糖提鲜。\n3. 倒回鸡蛋快速翻炒，让蛋吸收番茄汁。\n4. 撒葱花翻匀即可出锅。\n\n### 小贴士\n- 蛋液加一点水更嫩。\n- 番茄汁偏稀可小火多收一会儿。",
                 },
                 {
                     "title": "青椒炒肉丝",
@@ -933,6 +934,7 @@ class AppBffService:
                     "tag": "家常",
                     "ingredients": ["猪肉 150g", "青椒 2个", "姜蒜 适量"],
                     "steps": ["肉丝腌制 10 分钟", "青椒切丝备用", "先炒肉再合炒青椒"],
+                    "method_markdown": "### 食材准备\n- 猪肉 150g\n- 青椒 2个\n- 姜蒜 适量\n\n### 做法步骤\n1. 肉丝加生抽和淀粉抓匀腌 10 分钟。\n2. 青椒切丝，姜蒜切末。\n3. 先把肉丝滑炒至变色盛出。\n4. 爆香姜蒜后下青椒，再回锅肉丝调味翻炒。\n\n### 小贴士\n- 肉丝不要炒太久，避免发柴。",
                 },
             ][:count]
 
@@ -958,8 +960,9 @@ class AppBffService:
             prompt = (
                 "你是专业厨师。根据给定食材，生成可执行的家常菜谱。"
                 "严格输出 JSON 数组，不要 markdown，不要解释。"
-                "每个对象包含字段: title, desc, time, cal, img, tag, ingredients, steps。"
+                "每个对象包含字段: title, desc, time, cal, img, tag, ingredients, steps, method_markdown。"
                 "其中 ingredients/steps 必须是字符串数组，steps 至少 4 步。"
+                "method_markdown 需要是可直接展示的中文 markdown，包含：菜品简介、食材准备、详细步骤、小贴士。"
                 "img 固定为 cooking_dish。"
             )
             user_text = json.dumps(
@@ -1021,6 +1024,23 @@ class AppBffService:
             steps = item.get("steps") if isinstance(item.get("steps"), list) else []
             if len(steps) < 3:
                 continue
+            norm_ingredients = [str(x) for x in ingredients if isinstance(x, str)][:12]
+            norm_steps = [str(x) for x in steps if isinstance(x, str)][:12]
+            method_markdown = str(item.get("method_markdown") or "").strip()
+            if not method_markdown:
+                method_markdown = "\n".join([
+                    f"**{title}**",
+                    "",
+                    "### 食材准备",
+                    *[f"- {x}" for x in norm_ingredients],
+                    "",
+                    "### 详细步骤",
+                    *[f"{idx + 1}. {x}" for idx, x in enumerate(norm_steps)],
+                    "",
+                    "### 小贴士",
+                    "- 先把高蛋白食材炒至七八分熟，再回锅合炒。",
+                ])
+
             results.append(
                 {
                     "title": title,
@@ -1029,8 +1049,9 @@ class AppBffService:
                     "cal": str(item.get("cal") or "250kcal"),
                     "img": "cooking_dish",
                     "tag": str(item.get("tag") or "家常")[:12],
-                    "ingredients": [str(x) for x in ingredients if isinstance(x, str)][:12],
-                    "steps": [str(x) for x in steps if isinstance(x, str)][:12],
+                    "ingredients": norm_ingredients,
+                    "steps": norm_steps,
+                    "method_markdown": method_markdown,
                 }
             )
             if len(results) >= count:
