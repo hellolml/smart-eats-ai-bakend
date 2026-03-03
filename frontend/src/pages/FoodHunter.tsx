@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { MapPin, Star, Navigation, Search, Filter, LogIn } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { ApiError, AppRestaurant, AppRestaurantSort, appApi, authStore } from '@/services/app-api';
@@ -8,6 +8,7 @@ const LOCATION_DENY_TOAST_FLAG = 'food-hunter:geo-deny-toast';
 
 const FoodHunter = () => {
     const navigate = useNavigate();
+    const locationState = useLocation();
     const isLoggedIn = authStore.isLoggedIn();
     const [restaurants, setRestaurants] = useState<AppRestaurant[]>([]);
     const [loading, setLoading] = useState(false);
@@ -17,10 +18,19 @@ const FoodHunter = () => {
     const [activeSort, setActiveSort] = useState<AppRestaurantSort | null>(null);
     const [activeTag, setActiveTag] = useState('');
     const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+    const [focusRestaurantId, setFocusRestaurantId] = useState<string>('');
 
     const locationDeniedToastShownRef = React.useRef(
         typeof window !== 'undefined' && window.sessionStorage.getItem(LOCATION_DENY_TOAST_FLAG) === '1'
     );
+
+    useEffect(() => {
+        const focus = (locationState.state as any)?.focusRestaurant;
+        if (!focus) return;
+        if (focus.provider && focus.provider_id) {
+            setFocusRestaurantId(`${focus.provider}_${focus.provider_id}`);
+        }
+    }, [locationState.state]);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -43,7 +53,28 @@ const FoodHunter = () => {
                     lat: location?.lat,
                     lng: location?.lng
                 });
-                setRestaurants(rows || []);
+                let nextRows = rows || [];
+                const focus = (locationState.state as any)?.focusRestaurant;
+                if (focus?.provider && focus?.provider_id) {
+                    const targetId = `${focus.provider}_${focus.provider_id}`;
+                    const exists = nextRows.some((r) => (r.id || `${r.provider}_${r.provider_id}`) === targetId);
+                    if (!exists) {
+                        try {
+                            const detail = await appApi.restaurants.detail(focus.provider, focus.provider_id);
+                            nextRows = [
+                                {
+                                    ...detail,
+                                    id: `${detail.provider}_${detail.provider_id}`,
+                                    tag: detail.tag || '盲盒命中',
+                                },
+                                ...nextRows,
+                            ];
+                        } catch {
+                            // ignore missing detail fallback
+                        }
+                    }
+                }
+                setRestaurants(nextRows);
             } catch (e) {
                 console.error('fetch restaurants failed:', e);
                 if (e instanceof ApiError && (e.status === 422 || e.code === 40001)) {
@@ -57,7 +88,7 @@ const FoodHunter = () => {
         };
 
         void fetchRestaurants();
-    }, [isLoggedIn, query, activeSort, activeTag, location?.lat, location?.lng]);
+    }, [isLoggedIn, query, activeSort, activeTag, location?.lat, location?.lng, locationState.state]);
 
     useEffect(() => {
         if (!isLoggedIn) return;
@@ -236,10 +267,13 @@ const FoodHunter = () => {
                 </div>
             ) : (
                 <div className="space-y-4 flex-shrink-0">
-                    {restaurants.map((res) => (
+                    {restaurants.map((res) => {
+                        const cardId = res.id || `${res.provider}_${res.provider_id}`;
+                        const isFocus = Boolean(focusRestaurantId) && focusRestaurantId === cardId;
+                        return (
                         <div
-                            key={res.id || `${res.provider}_${res.provider_id}`}
-                            className="bg-white rounded-3xl overflow-hidden shadow-sm border border-purple-50 group"
+                            key={cardId}
+                            className={`bg-white rounded-3xl overflow-hidden shadow-sm border group ${isFocus ? 'border-[#7E57FF] ring-2 ring-purple-200' : 'border-purple-50'}`}
                         >
                             <div className="h-40 bg-purple-100 relative">
                                 <div className="w-full h-full object-cover bg-gradient-to-br from-purple-100 via-purple-50 to-white" />
@@ -275,7 +309,8 @@ const FoodHunter = () => {
                                 ) : null}
                             </div>
                         </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
         </div>

@@ -44,6 +44,8 @@ async def test_blindbox_returns_single_decision_with_actions(client, monkeypatch
     data = resp.json()["data"]
     assert data["decision"]["title"]
     assert data["decision"]["type"] in {"restaurant", "recipe", "fallback"}
+    if data["decision"]["type"] == "restaurant":
+        assert data["decision"].get("provider_id")
     assert isinstance(data["reasons"], list) and data["reasons"]
     assert isinstance(data["actions"], list)
 

@@ -91,14 +91,26 @@ class DecisionService:
                 }
 
         confidence = min(0.95, max(0.4, (chosen["score"] if chosen else 40.0) / 100.0))
+        actions = _build_actions(chosen)
+        decision_payload: dict[str, Any] = {
+            "type": chosen["type"],
+            "title": chosen["title"],
+            "confidence": round(confidence, 2),
+        }
+        if chosen["type"] == "restaurant":
+            raw = chosen.get("raw") or {}
+            decision_payload.update(
+                {
+                    "provider": raw.get("provider") or "amap",
+                    "provider_id": raw.get("provider_id"),
+                    "navigation_url": actions[0].get("url") if actions else None,
+                }
+            )
+
         return {
-            "decision": {
-                "type": chosen["type"],
-                "title": chosen["title"],
-                "confidence": round(confidence, 2),
-            },
+            "decision": decision_payload,
             "reasons": _build_reasons(chosen["title"], decision_ctx, scene),
-            "actions": _build_actions(chosen),
+            "actions": actions,
             "meta": {
                 "candidates": len(restaurants) if restaurants else 0,
                 "time_slot": _time_slot(decision_ctx.now),

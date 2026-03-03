@@ -19,6 +19,7 @@ const BlindBox: React.FC = () => {
   const [resultIndex, setResultIndex] = useState<number | null>(null);
   const [resultTitle, setResultTitle] = useState<string>('');
   const [resultIsRestaurant, setResultIsRestaurant] = useState<boolean>(false);
+  const [focusRestaurant, setFocusRestaurant] = useState<{ provider?: string; provider_id?: string; title?: string } | null>(null);
   const [particles, setParticles] = useState<any[]>([]);
   const [explosionParticles, setExplosionParticles] = useState<any[]>([]);
   const [confetti, setconfetti] = useState<any[]>([]);
@@ -82,6 +83,8 @@ const BlindBox: React.FC = () => {
           title,
           type,
           iconIndex: hash % FOOD_ICONS.length,
+          provider: data?.data?.decision?.provider,
+          provider_id: data?.data?.decision?.provider_id,
         };
       }
     } catch {
@@ -113,6 +116,11 @@ const BlindBox: React.FC = () => {
       setResultIndex(decision.iconIndex);
       setResultTitle(decision.title);
       setResultIsRestaurant(decision.type === 'restaurant');
+      setFocusRestaurant(decision.type === 'restaurant' ? {
+        provider: decision.provider,
+        provider_id: decision.provider_id,
+        title: decision.title,
+      } : null);
       setStatus('result');
       setParticles([]);
       isAnimating.current = false;
@@ -128,6 +136,7 @@ const BlindBox: React.FC = () => {
     setResultIndex(null);
     setResultTitle('');
     setResultIsRestaurant(false);
+    setFocusRestaurant(null);
     setParticles([]);
     setExplosionParticles([]);
     setconfetti([]);
@@ -235,8 +244,10 @@ const BlindBox: React.FC = () => {
                   className="flex-1 bg-white text-purple-500 py-4 rounded-2xl font-bold shadow-sm border border-purple-100 flex items-center justify-center gap-2 active:scale-95 transition-transform">
                   <RefreshCw size={18} /> 再摇一次
                 </button>
-                <button onClick={() => navigate('/food-hunter')}
-                  className="flex-1 bg-[#7E57FF] text-white py-4 rounded-2xl font-bold shadow-lg shadow-purple-200 flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                <button
+                  onClick={() => navigate('/food-hunter', { state: { focusRestaurant } })}
+                  className="flex-1 bg-[#7E57FF] text-white py-4 rounded-2xl font-bold shadow-lg shadow-purple-200 flex items-center justify-center gap-2 active:scale-95 transition-transform"
+                >
                   <Navigation size={18} /> 导航去吃
                 </button>
               </div>

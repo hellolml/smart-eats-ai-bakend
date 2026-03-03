@@ -106,6 +106,9 @@ export interface AppDecisionResult {
         type: 'restaurant' | 'recipe' | 'fallback';
         title: string;
         confidence?: number;
+        provider?: string;
+        provider_id?: string;
+        navigation_url?: string | null;
     };
     reasons: string[];
     actions: Array<{ type: string; label: string; url: string }>;
