@@ -101,6 +101,30 @@ export interface AppRestaurantDetail extends AppRestaurant {
     raw?: unknown;
 }
 
+export interface AppDecisionResult {
+    decision: {
+        type: 'restaurant' | 'recipe' | 'fallback';
+        title: string;
+        confidence?: number;
+    };
+    reasons: string[];
+    actions: Array<{ type: string; label: string; url: string }>;
+    meta?: Record<string, unknown>;
+}
+
+export interface AppQuickFilterState {
+    flow_id: string;
+    round: number;
+    answers: Record<string, string>;
+    done: boolean;
+    next_question?: {
+        slot: string;
+        question: string;
+        options: string[];
+    } | null;
+    result?: AppDecisionResult;
+}
+
 export interface AuthPayload {
     access_token?: string;
     refresh_token?: string;
@@ -466,6 +490,41 @@ export const appApi = {
         },
         async detail(provider: string, providerId: string) {
             return request<AppRestaurantDetail>(`/restaurants/${provider}/${providerId}`);
+        }
+    },
+
+    decisions: {
+        async blindbox(payload: {
+            query?: string;
+            city?: string;
+            lat?: number;
+            lng?: number;
+            budget_level?: number;
+            scene?: string;
+        }) {
+            return request<AppDecisionResult>('/decisions/blindbox', {
+                method: 'POST',
+                body: payload
+            });
+        },
+        async quickFilterStart(payload: { query?: string } = {}) {
+            return request<AppQuickFilterState>('/decisions/quick-filter/start', {
+                method: 'POST',
+                body: payload
+            });
+        },
+        async quickFilterAnswer(payload: {
+            flow_id: string;
+            answer: string;
+            city?: string;
+            lat?: number;
+            lng?: number;
+            budget_level?: number;
+        }) {
+            return request<AppQuickFilterState>('/decisions/quick-filter/answer', {
+                method: 'POST',
+                body: payload
+            });
         }
     },
 

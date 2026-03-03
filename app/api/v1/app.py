@@ -5,8 +5,9 @@ import json
 from datetime import datetime
 from typing import Annotated, AsyncGenerator
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.agent.graph import run_chat_stream
 from app.api.deps import db_dep, get_current_user_id, minio_dep, parse_restaurants_query, redis_dep
@@ -34,9 +35,32 @@ from app.domain.app.schemas import (
     WheelSpinRequest,
 )
 from app.domain.app.service import AppBffService
+from app.domain.decision.service import DecisionService
 from app.tasks import fridge_recognition
 
 router = APIRouter()
+
+
+class DecisionBlindboxRequest(BaseModel):
+    query: str | None = None
+    city: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    budget_level: int | None = Field(default=None, ge=1, le=5)
+    scene: str | None = None
+
+
+class DecisionQuickFilterStartRequest(BaseModel):
+    query: str | None = None
+
+
+class DecisionQuickFilterAnswerRequest(BaseModel):
+    flow_id: str
+    answer: str
+    city: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    budget_level: int | None = Field(default=None, ge=1, le=5)
 
 
 @router.get("/chat/models")
@@ -335,6 +359,63 @@ async def get_today_card(
     user_id: str = Depends(get_current_user_id),
 ):
     data = await AppBffService.get_today_card(user_id, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/decisions/blindbox")
+async def app_blindbox_decision(
+    payload: DecisionBlindboxRequest,
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await DecisionService.blindbox(
+        db,
+        redis,
+        user_id=user_id,
+        query=payload.query,
+        city=payload.city,
+        lat=payload.lat,
+        lng=payload.lng,
+        budget_level=payload.budget_level,
+        scene=payload.scene,
+    )
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/decisions/quick-filter/start")
+async def app_quick_filter_start(
+    payload: DecisionQuickFilterStartRequest,
+    request: Request,
+    redis: redis_dep,
+    _user_id: str = Depends(get_current_user_id),
+):
+    data = await DecisionService.quick_filter_start(redis, query=payload.query)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/decisions/quick-filter/answer")
+async def app_quick_filter_answer(
+    payload: DecisionQuickFilterAnswerRequest,
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await DecisionService.quick_filter_answer(
+        redis,
+        db,
+        flow_id=payload.flow_id,
+        user_id=user_id,
+        answer=payload.answer,
+        city=payload.city,
+        lat=payload.lat,
+        lng=payload.lng,
+        budget_level=payload.budget_level,
+    )
+    if data is None:
+        raise HTTPException(status_code=404, detail="quick filter flow not found")
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
