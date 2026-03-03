@@ -39,6 +39,7 @@ from app.domain.restaurant.service import RestaurantService
 from app.infra.models.chat import ChatMessage, ChatSession
 from app.infra.models.fridge import FridgeItem, FridgePhoto, RecognitionJob
 from app.infra.models.game import BlindboxRoll, WheelConfig, WheelSpin
+from app.infra.models.grocery import GroceryList, GroceryListItem
 from app.infra.models.preference import UserPreference, UserProfile
 from app.infra.models.user import User
 from app.infra.external.amap import amap
@@ -563,6 +564,147 @@ class AppBffService:
             "priority_items": expiring[:5],
             "query": query,
             "recipes": [map_home_chef_recipe(item, ingredient_names) for item in recipes[:3]],
+        }
+
+    @staticmethod
+    async def create_grocery_list_from_recipe(
+        user_id: str,
+        payload: dict[str, Any],
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        recipe_name = payload.get("recipe_name") or "采购清单"
+        required_items = payload.get("required_items") or []
+
+        result = await db.execute(select(FridgeItem).where(FridgeItem.user_id == user_id))
+        fridge_items = result.scalars().all()
+        fridge_map = {item.name.lower(): item for item in fridge_items}
+
+        list_obj = GroceryList(
+            id=str(uuid4()),
+            user_id=user_id,
+            title=f"{recipe_name} 采购清单",
+            source_recipe=recipe_name,
+        )
+        db.add(list_obj)
+
+        added_items: list[dict[str, Any]] = []
+        for raw in required_items:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "").strip()
+            if not name:
+                continue
+            need_qty = raw.get("quantity")
+            unit = raw.get("unit")
+            category = raw.get("category")
+
+            fridge_item = fridge_map.get(name.lower())
+            missing = True
+            if fridge_item is not None:
+                if need_qty is None or fridge_item.quantity is None:
+                    missing = False
+                else:
+                    try:
+                        missing = float(fridge_item.quantity) < float(need_qty)
+                    except Exception:
+                        missing = False
+
+            if not missing:
+                continue
+
+            item_obj = GroceryListItem(
+                id=str(uuid4()),
+                list_id=list_obj.id,
+                name=name,
+                quantity=need_qty,
+                unit=unit,
+                category=category,
+                checked=False,
+            )
+            db.add(item_obj)
+            added_items.append(
+                {
+                    "id": item_obj.id,
+                    "name": item_obj.name,
+                    "quantity": item_obj.quantity,
+                    "unit": item_obj.unit,
+                    "category": item_obj.category,
+                    "checked": item_obj.checked,
+                }
+            )
+
+        await db.commit()
+        return {
+            "id": list_obj.id,
+            "title": list_obj.title,
+            "source_recipe": list_obj.source_recipe,
+            "items": added_items,
+        }
+
+    @staticmethod
+    async def get_grocery_list(user_id: str, list_id: str, db: AsyncSession) -> dict[str, Any]:
+        list_result = await db.execute(
+            select(GroceryList).where(GroceryList.id == list_id, GroceryList.user_id == user_id)
+        )
+        list_obj = list_result.scalar_one_or_none()
+        if list_obj is None:
+            raise HTTPException(status_code=404, detail="grocery list not found")
+
+        items_result = await db.execute(
+            select(GroceryListItem)
+            .where(GroceryListItem.list_id == list_obj.id)
+            .order_by(GroceryListItem.created_at.asc())
+        )
+        items = items_result.scalars().all()
+        return {
+            "id": list_obj.id,
+            "title": list_obj.title,
+            "source_recipe": list_obj.source_recipe,
+            "items": [
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "quantity": item.quantity,
+                    "unit": item.unit,
+                    "category": item.category,
+                    "checked": item.checked,
+                }
+                for item in items
+            ],
+        }
+
+    @staticmethod
+    async def toggle_grocery_item(
+        user_id: str,
+        list_id: str,
+        item_id: str,
+        checked: bool,
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        list_result = await db.execute(
+            select(GroceryList).where(GroceryList.id == list_id, GroceryList.user_id == user_id)
+        )
+        list_obj = list_result.scalar_one_or_none()
+        if list_obj is None:
+            raise HTTPException(status_code=404, detail="grocery list not found")
+
+        item_result = await db.execute(
+            select(GroceryListItem).where(
+                GroceryListItem.id == item_id,
+                GroceryListItem.list_id == list_id,
+            )
+        )
+        item = item_result.scalar_one_or_none()
+        if item is None:
+            raise HTTPException(status_code=404, detail="grocery item not found")
+
+        item.checked = bool(checked)
+        await db.commit()
+        await db.refresh(item)
+        return {
+            "id": item.id,
+            "name": item.name,
+            "checked": item.checked,
         }
 
     @staticmethod

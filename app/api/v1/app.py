@@ -63,6 +63,22 @@ class DecisionQuickFilterAnswerRequest(BaseModel):
     budget_level: int | None = Field(default=None, ge=1, le=5)
 
 
+class GroceryItemInput(BaseModel):
+    name: str
+    quantity: float | None = None
+    unit: str | None = None
+    category: str | None = None
+
+
+class GroceryListFromRecipeRequest(BaseModel):
+    recipe_name: str
+    required_items: list[GroceryItemInput]
+
+
+class GroceryItemToggleRequest(BaseModel):
+    checked: bool
+
+
 @router.get("/chat/models")
 async def list_chat_models(request: Request, _user_id: str = Depends(get_current_user_id)):
     data = AppBffService.list_chat_models()
@@ -232,6 +248,45 @@ async def build_clear_inventory_plan(
     user_id: str = Depends(get_current_user_id),
 ):
     data = await AppBffService.build_clear_inventory_plan(user_id, db, redis)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/grocery-lists/from-recipe")
+async def create_grocery_list_from_recipe(
+    payload: GroceryListFromRecipeRequest,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.create_grocery_list_from_recipe(
+        user_id,
+        payload.model_dump(),
+        db,
+    )
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/grocery-lists/{list_id}")
+async def get_grocery_list(
+    list_id: str,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.get_grocery_list(user_id, list_id, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.patch("/grocery-lists/{list_id}/items/{item_id}")
+async def toggle_grocery_item(
+    list_id: str,
+    item_id: str,
+    payload: GroceryItemToggleRequest,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.toggle_grocery_item(user_id, list_id, item_id, payload.checked, db)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
