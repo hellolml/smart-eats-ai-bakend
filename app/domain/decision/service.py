@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -49,50 +50,45 @@ class DecisionService:
             sort="rating_desc",
             city=city,
         )
-        recipes = await RecipeService.search(redis_client, query or "快手菜")
+        chosen: dict[str, Any] | None = None
 
-        candidates: list[dict[str, Any]] = []
-        for item in restaurants[:5]:
-            score = _score_restaurant(item, pref, budget_level, decision_ctx, lat, lng)
-            candidates.append(
-                {
-                    "type": "restaurant",
-                    "id": f"amap:{item.get('provider_id') or uuid4()}",
-                    "title": item.get("name") or "餐厅推荐",
-                    "score": score,
-                    "raw": item,
-                }
-            )
-
-        for item in recipes[:5]:
-            score = _score_recipe(item, pref, budget_level, decision_ctx, scene)
-            candidates.append(
-                {
-                    "type": "recipe",
-                    "id": f"recipe:{(item.get('title') or str(uuid4()))}",
-                    "title": item.get("title") or "菜谱推荐",
-                    "score": score,
-                    "raw": item,
-                }
-            )
-
-        candidates.sort(key=lambda x: x["score"], reverse=True)
-        chosen = candidates[0] if candidates else None
-
-        if not chosen:
-            fallback_title = "今天吃一碗热汤面"
-            return {
-                "decision": {
-                    "type": "fallback",
-                    "title": fallback_title,
-                    "confidence": 0.35,
-                },
-                "reasons": _build_reasons(fallback_title, decision_ctx, scene),
-                "actions": [],
-                "meta": {"candidates": 0},
+        # 用户要求：优先从附近餐厅里随机抽一家
+        if restaurants:
+            picked = random.choice(restaurants[:5])
+            score = _score_restaurant(picked, pref, budget_level, decision_ctx, lat, lng)
+            chosen = {
+                "type": "restaurant",
+                "id": f"amap:{picked.get('provider_id') or uuid4()}",
+                "title": picked.get("name") or "附近美食",
+                "score": score,
+                "raw": picked,
             }
+        else:
+            recipes = await RecipeService.search(redis_client, query or "快手菜")
+            if recipes:
+                picked_recipe = random.choice(recipes[:5])
+                score = _score_recipe(picked_recipe, pref, budget_level, decision_ctx, scene)
+                chosen = {
+                    "type": "recipe",
+                    "id": f"recipe:{(picked_recipe.get('title') or str(uuid4()))}",
+                    "title": picked_recipe.get("title") or "家常菜",
+                    "score": score,
+                    "raw": picked_recipe,
+                }
+            else:
+                food_pool = [
+                    "牛肉面", "蛋炒饭", "麻辣香锅", "寿司", "披萨", "汉堡", "沙拉", "饺子", "火锅", "小笼包",
+                ]
+                fallback_title = random.choice(food_pool)
+                chosen = {
+                    "type": "fallback",
+                    "id": f"food:{uuid4()}",
+                    "title": fallback_title,
+                    "score": 45.0,
+                    "raw": {"title": fallback_title},
+                }
 
-        confidence = min(0.95, max(0.4, chosen["score"] / 100.0))
+        confidence = min(0.95, max(0.4, (chosen["score"] if chosen else 40.0) / 100.0))
         return {
             "decision": {
                 "type": chosen["type"],
@@ -102,7 +98,7 @@ class DecisionService:
             "reasons": _build_reasons(chosen["title"], decision_ctx, scene),
             "actions": _build_actions(chosen),
             "meta": {
-                "candidates": len(candidates),
+                "candidates": len(restaurants) if restaurants else 0,
                 "time_slot": _time_slot(decision_ctx.now),
                 "weather": (decision_ctx.weather or {}).get("weather"),
                 "city": decision_ctx.city,
