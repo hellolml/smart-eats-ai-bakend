@@ -958,11 +958,26 @@ class AppBffService:
             )
 
             prompt = (
-                "你是专业厨师。根据给定食材，生成可执行的家常菜谱。"
-                "严格输出 JSON 数组，不要 markdown，不要解释。"
-                "每个对象包含字段: title, desc, time, cal, img, tag, ingredients, steps, method_markdown。"
-                "其中 ingredients/steps 必须是字符串数组，steps 至少 4 步。"
-                "method_markdown 需要是可直接展示的中文 markdown，包含：菜品简介、食材准备、详细步骤、小贴士。"
+                "# Role\n"
+                "你是一位拥有20年经验的米其林三星主厨，擅长把复杂烹饪科学转化为家庭可执行指南。\n\n"
+                "# Task\n"
+                "请根据给定食材生成专业级家常菜谱。\n\n"
+                "# Constraints\n"
+                "1) 精确量化：禁止'适量/少许'，必须给出具体克数(g)/毫升(ml)/勺(tsp/Tbsp)。\n"
+                "2) 逻辑完整：必须覆盖前置准备、正式烹饪、收尾与摆盘建议。\n"
+                "3) 关键细节：关键步骤注明火候(大火/中火/小火)和预期状态(例如：表面微微起泡、颜色转金黄)。\n"
+                "4) 专业解释：给出2-3条核心成功秘诀 + 常见翻车点及补救。\n\n"
+                "# Output\n"
+                "严格输出 JSON 数组，不要 markdown 代码块、不要解释。\n"
+                "每个对象必须包含字段: title, desc, time, cal, img, tag, ingredients, steps, method_markdown。\n"
+                "- ingredients: 字符串数组（带精确数量）\n"
+                "- steps: 字符串数组（至少6步，包含火候/状态）\n"
+                "- method_markdown: 中文 Markdown，且必须包含以下小节：\n"
+                "  ## 1. 菜名与风味简介\n"
+                "  ## 2. 食材清单\n"
+                "  ## 3. 详细烹饪步骤\n"
+                "  ## 4. 主厨的“独门绝技”\n"
+                "  ## 5. 常见翻车避雷指南\n"
                 "img 固定为 cooking_dish。"
             )
             user_text = json.dumps(
@@ -1022,23 +1037,33 @@ class AppBffService:
                 continue
             ingredients = item.get("ingredients") if isinstance(item.get("ingredients"), list) else []
             steps = item.get("steps") if isinstance(item.get("steps"), list) else []
-            if len(steps) < 3:
+            if len(steps) < 6:
                 continue
             norm_ingredients = [str(x) for x in ingredients if isinstance(x, str)][:12]
             norm_steps = [str(x) for x in steps if isinstance(x, str)][:12]
             method_markdown = str(item.get("method_markdown") or "").strip()
             if not method_markdown:
                 method_markdown = "\n".join([
-                    f"**{title}**",
+                    "## 1. 菜名与风味简介",
+                    f"{title}，家常风味，适合工作日晚餐。",
                     "",
-                    "### 食材准备",
+                    "## 2. 食材清单",
+                    "### 主料",
                     *[f"- {x}" for x in norm_ingredients],
+                    "### 辅料/调料",
+                    "- 食用油 15ml",
+                    "- 盐 2g",
                     "",
-                    "### 详细步骤",
+                    "## 3. 详细烹饪步骤",
                     *[f"{idx + 1}. {x}" for idx, x in enumerate(norm_steps)],
                     "",
-                    "### 小贴士",
-                    "- 先把高蛋白食材炒至七八分熟，再回锅合炒。",
+                    "## 4. 主厨的“独门绝技”",
+                    "- 关键蛋白食材先高温定型后回锅，口感更嫩。",
+                    "- 汤汁阶段用中小火收汁，风味更集中。",
+                    "",
+                    "## 5. 常见翻车避雷指南",
+                    "- 火太大易焦糊：转中火并补 10ml 清水。",
+                    "- 口味偏淡：分两次补盐，每次 1g。",
                 ])
 
             results.append(
