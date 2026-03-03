@@ -101,6 +101,43 @@ export interface AppRestaurantDetail extends AppRestaurant {
     raw?: unknown;
 }
 
+export interface AppIngredient {
+    id: string;
+    name: string;
+    quantity?: number | null;
+    unit?: string | null;
+    quantity_text?: string;
+    expiry_date?: string | null;
+    source?: string;
+}
+
+export interface AppHomeChefRecipe {
+    title: string;
+    desc: string;
+    time: string;
+    cal: string;
+    img: string;
+    tag: string;
+    ingredients?: string[];
+    steps?: string[];
+}
+
+export interface AppGroceryListItem {
+    id: string;
+    name: string;
+    quantity?: number | null;
+    unit?: string | null;
+    category?: string | null;
+    checked: boolean;
+}
+
+export interface AppGroceryList {
+    id: string;
+    title: string;
+    source_recipe?: string;
+    items: AppGroceryListItem[];
+}
+
 export interface AppDecisionResult {
     decision: {
         type: 'restaurant' | 'recipe' | 'fallback';
@@ -527,6 +564,51 @@ export const appApi = {
             return request<AppQuickFilterState>('/decisions/quick-filter/answer', {
                 method: 'POST',
                 body: payload
+            });
+        }
+    },
+
+    fridge: {
+        async listIngredients() {
+            return request<AppIngredient[]>('/fridge/ingredients');
+        },
+        async addIngredient(payload: {
+            name: string;
+            quantity?: number;
+            unit?: string;
+            expiry_date?: string;
+            source?: string;
+        }) {
+            return request<AppIngredient>('/fridge/ingredients', { method: 'POST', body: payload });
+        },
+        async deleteIngredient(id: string) {
+            return request<{ deleted: boolean }>(`/fridge/ingredients/${id}`, { method: 'DELETE' });
+        }
+    },
+
+    homeChef: {
+        async generateRecipes(payload: { ingredients?: string[]; count?: number }) {
+            return request<{ recipes: AppHomeChefRecipe[] }>('/home-chef/recipes/generate', {
+                method: 'POST',
+                body: payload
+            });
+        }
+    },
+
+    grocery: {
+        async createFromRecipe(payload: {
+            recipe_name: string;
+            required_items: Array<{ name: string; quantity?: number; unit?: string; category?: string }>;
+        }) {
+            return request<AppGroceryList>('/grocery-lists/from-recipe', { method: 'POST', body: payload });
+        },
+        async get(listId: string) {
+            return request<AppGroceryList>(`/grocery-lists/${listId}`);
+        },
+        async toggleItem(listId: string, itemId: string, checked: boolean) {
+            return request<AppGroceryListItem>(`/grocery-lists/${listId}/items/${itemId}`, {
+                method: 'PATCH',
+                body: { checked }
             });
         }
     },
