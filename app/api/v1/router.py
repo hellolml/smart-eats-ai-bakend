@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import app, auth, chat, context, fridge, games, internal, preferences, recipes, restaurants, today, users
+from app.api.v1 import app, auth, chat, context, decisions, fridge, games, internal, preferences, recipes, restaurants, today, users
 
 router = APIRouter(prefix="/api/v1")
 
@@ -12,6 +12,7 @@ router.include_router(users.router, prefix="/users", tags=["users"])
 router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(context.router, prefix="/context", tags=["context"])
 router.include_router(today.router, prefix="/today", tags=["today"])
+router.include_router(decisions.router, prefix="/decisions", tags=["decisions"])
 router.include_router(preferences.router, tags=["preferences"])
 router.include_router(fridge.router, prefix="/fridge", tags=["fridge"])
 router.include_router(restaurants.router, prefix="/restaurants", tags=["restaurants"])
