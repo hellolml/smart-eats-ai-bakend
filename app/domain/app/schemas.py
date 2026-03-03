@@ -119,10 +119,6 @@ class ScanApplyRequest(BaseModel):
 class HomeChefRecipeGenerateRequest(BaseModel):
     ingredients: list[str] | None = None
     count: int = Field(default=2, ge=1, le=5)
-    taste_style: str | None = None
-    dietary_goal: str | None = None
-    oil_level: str | None = None
-    salt_level: str | None = None
 
 
 class RestaurantsQuery(BaseModel):
