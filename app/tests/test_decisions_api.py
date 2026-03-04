@@ -51,6 +51,101 @@ async def test_blindbox_returns_single_decision_with_actions(client, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_blindbox_avoids_immediate_repeat_when_multiple_candidates(client, monkeypatch):
+    async def fake_search_restaurants(redis_client, query, tag, lat, lng, sort, city=None):
+        return [
+            {
+                "provider": "amap",
+                "provider_id": "poi_repeat_001",
+                "name": "牛腩火锅",
+                "rating": 4.8,
+                "price": 88,
+                "geo": {"lat": 31.23, "lng": 121.47},
+            },
+            {
+                "provider": "amap",
+                "provider_id": "poi_repeat_002",
+                "name": "番茄牛腩",
+                "rating": 4.7,
+                "price": 72,
+                "geo": {"lat": 31.23, "lng": 121.47},
+            },
+        ]
+
+    async def fake_get_weather(city, *, servers_path):
+        return {"city": city, "weather": "晴", "temperature": 24, "display": "24°晴"}
+
+    monkeypatch.setattr(RestaurantService, "search", fake_search_restaurants)
+    monkeypatch.setattr("app.domain.decision.service.amap.get_weather", fake_get_weather)
+    monkeypatch.setattr("app.domain.decision.service.random.choice", lambda seq: seq[0])
+
+    first = await client.post(
+        "/api/v1/decisions/blindbox",
+        json={"query": "附近美食", "city": "上海", "lat": 31.23, "lng": 121.47},
+    )
+    second = await client.post(
+        "/api/v1/decisions/blindbox",
+        json={"query": "附近美食", "city": "上海", "lat": 31.23, "lng": 121.47},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_title = first.json()["data"]["decision"]["title"]
+    second_title = second.json()["data"]["decision"]["title"]
+    assert first_title != second_title
+
+
+@pytest.mark.asyncio
+async def test_blindbox_ai_fallback_returns_chinese_title_when_no_restaurant(client, monkeypatch):
+    async def fake_search_restaurants(redis_client, query, tag, lat, lng, sort, city=None):
+        return []
+
+    async def fake_search_recipes(redis_client, query):
+        return []
+
+    async def fake_ai_choice(**kwargs):
+        return "青椒肉丝盖饭"
+
+    monkeypatch.setattr(RestaurantService, "search", fake_search_restaurants)
+    monkeypatch.setattr(RecipeService, "search", fake_search_recipes)
+    monkeypatch.setattr("app.domain.decision.service._generate_cn_home_style_fallback", fake_ai_choice)
+
+    resp = await client.post(
+        "/api/v1/decisions/blindbox",
+        json={"query": "美食", "scene": "blindbox", "city": "上海", "lat": 31.23, "lng": 121.47},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["decision"]["type"] == "fallback"
+    assert data["decision"]["title"] == "青椒肉丝盖饭"
+
+
+@pytest.mark.asyncio
+async def test_blindbox_scene_skips_recipe_and_uses_cn_fallback(client, monkeypatch):
+    async def fake_search_restaurants(redis_client, query, tag, lat, lng, sort, city=None):
+        return []
+
+    async def fake_search_recipes(redis_client, query):
+        return [{"title": "Nearby Food Recipe 1", "cook_time_min": 10, "calories": 420}]
+
+    async def fake_ai_choice(**kwargs):
+        return "番茄鸡蛋面"
+
+    monkeypatch.setattr(RestaurantService, "search", fake_search_restaurants)
+    monkeypatch.setattr(RecipeService, "search", fake_search_recipes)
+    monkeypatch.setattr("app.domain.decision.service._generate_cn_home_style_fallback", fake_ai_choice)
+
+    resp = await client.post(
+        "/api/v1/decisions/blindbox",
+        json={"query": "美食", "scene": "blindbox", "city": "上海", "lat": 31.23, "lng": 121.47},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["decision"]["type"] == "fallback"
+    assert data["decision"]["title"] == "番茄鸡蛋面"
+
+
+@pytest.mark.asyncio
 async def test_blindbox_uses_ip_fallback_location_when_no_coords(client, monkeypatch):
     captured = {}
 

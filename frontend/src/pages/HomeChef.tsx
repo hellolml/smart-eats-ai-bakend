@@ -9,6 +9,55 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { appApi, AppGroceryList, AppHomeChefRecipe, AppIngredient } from '@/services/app-api';
 
+const UNIT_PATTERN = /(kg|g|mg|ml|l|L|斤|两|个|颗|根|片|块|勺|茶匙|汤匙|tsp|tbsp|cup|cups|oz|lb)$/i;
+
+const parseRequiredItem = (raw: string): { name: string; quantity?: number; unit?: string; category: string } | null => {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const name = tokens[0]?.trim();
+  if (!name) return null;
+
+  const tail = tokens.slice(1).join(' ').trim();
+  if (!tail || tail === '适量') {
+    return { name, category: '主料' };
+  }
+
+  const compact = tail.replace(/\s+/g, '');
+  const qtyUnitMatch = compact.match(/^(\d+(?:\.\d+)?)([a-zA-Z\u4e00-\u9fa5]+)?$/);
+  if (qtyUnitMatch) {
+    const quantity = Number(qtyUnitMatch[1]);
+    const unit = qtyUnitMatch[2] || undefined;
+    return {
+      name,
+      quantity: Number.isFinite(quantity) ? quantity : undefined,
+      unit,
+      category: '主料'
+    };
+  }
+
+  const unitMatch = compact.match(UNIT_PATTERN);
+  if (unitMatch) {
+    const unit = unitMatch[1];
+    const numberText = compact.slice(0, compact.length - unit.length);
+    const quantity = numberText ? Number(numberText.replace(/[^\d.]/g, '')) : undefined;
+    return {
+      name,
+      quantity: Number.isFinite(quantity as number) ? quantity : undefined,
+      unit,
+      category: '主料'
+    };
+  }
+
+  const quantity = Number(compact.replace(/[^\d.]/g, ''));
+  return {
+    name,
+    quantity: Number.isFinite(quantity) ? quantity : undefined,
+    category: '主料'
+  };
+};
+
 const HomeChef = () => {
   const [ingredients, setIngredients] = useState<AppIngredient[]>([]);
   const [isScanning, setIsScanning] = useState(false);
@@ -110,16 +159,15 @@ const HomeChef = () => {
 
   const createGroceryList = async (recipe: AppHomeChefRecipe) => {
     try {
-      const required = (recipe.ingredients || []).map((raw) => {
-        const [name, qty] = raw.split(' ');
-        return { name: name?.trim(), quantity: qty ? Number(qty.replace(/[^\d.]/g, '')) || undefined : undefined, unit: '个', category: '主料' };
-      }).filter((x) => x.name);
-      const list = await appApi.grocery.createFromRecipe({ recipe_name: recipe.title, required_items: required as any });
+      const required = (recipe.ingredients || [])
+        .map((raw) => parseRequiredItem(raw))
+        .filter((x): x is { name: string; quantity?: number; unit?: string; category: string } => Boolean(x?.name));
+      const list = await appApi.grocery.createFromRecipe({ recipe_name: recipe.title, required_items: required });
       setGroceryList(list);
-      toast.success('采购清单已生成');
+      toast.success('食材准备清单已生成');
     } catch (e) {
       console.error(e);
-      toast.error('生成采购清单失败');
+      toast.error('生成食材准备清单失败');
     }
   };
 
@@ -139,7 +187,7 @@ const HomeChef = () => {
   const hasMore = ingredients.length > 0;
 
   return (
-    <div className="h-full overflow-y-auto no-scrollbar flex flex-col gap-5 animate-in fade-in duration-500 pb-28 w-full">
+    <div className="h-full no-scrollbar flex flex-col gap-5 animate-in fade-in duration-500 pb-28 w-full">
       <section className="relative w-full rounded-[2.5rem] overflow-hidden shadow-xl shadow-purple-100/50 border border-purple-100 bg-white flex-shrink-0">
         <div className="p-6 flex flex-col gap-4">
           <div className="flex justify-between items-center">
@@ -189,8 +237,8 @@ const HomeChef = () => {
             {aiRecipes.map((recipe, idx) => {
               const isInMenu = cookingList.some((item) => item.title === recipe.title);
               return (
-                <motion.div key={idx} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.1 }} onClick={() => setSelectedRecipe(recipe)} className="bg-white rounded-[2rem] overflow-hidden border border-purple-50 shadow-sm flex h-32 group cursor-pointer">
-                  <div className="w-32 h-full overflow-hidden flex-shrink-0"><div className="w-full h-full bg-gradient-to-br from-purple-100 via-purple-50 to-white" /></div>
+                <motion.div key={idx} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.1 }} onClick={() => setSelectedRecipe(recipe)} className="bg-white rounded-[2rem] overflow-hidden border border-purple-50 shadow-sm flex min-h-32 h-auto group cursor-pointer">
+                  <div className="w-24 sm:w-32 h-full overflow-hidden flex-shrink-0"><div className="w-full h-full bg-gradient-to-br from-purple-100 via-purple-50 to-white" /></div>
                   <div className="flex-1 p-4 flex flex-col justify-between min-w-0">
                     <div className="min-w-0">
                       <div className="flex justify-between items-start gap-2">
@@ -199,12 +247,12 @@ const HomeChef = () => {
                       </div>
                       <p className="text-[11px] md:text-xs text-gray-400 mt-1 line-clamp-1">{recipe.desc}</p>
                     </div>
-                    <div className="flex items-center justify-between mt-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mt-2">
                       <div className="flex gap-3">
                         <span className="flex items-center gap-1 text-[10px] text-gray-400"><Clock size={12} className="text-purple-400" /> {recipe.time}</span>
                         <span className="flex items-center gap-1 text-[10px] text-gray-400"><Flame size={12} className="text-orange-400" /> {recipe.cal}</span>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap justify-end">
                         <button onClick={(e) => { e.stopPropagation(); handleStartCooking(recipe); }} className={`p-2 rounded-xl ${isInMenu ? 'bg-green-50 text-green-500' : 'bg-purple-50 text-[#7E57FF]'}`}>
                           {isInMenu ? <Check size={14} /> : <Plus size={14} />}
                         </button>
@@ -240,13 +288,13 @@ const HomeChef = () => {
                   <span className="bg-[#FFCC33] text-gray-900 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider">{selectedRecipe.tag}</span>
                   <h3 className="text-2xl font-black text-gray-900 mt-2">{selectedRecipe.title}</h3>
                 </div>
-                <div className="flex gap-6">
+                <div className="flex flex-wrap gap-3 sm:gap-6">
                   <div className="flex items-center gap-2 bg-purple-50 px-4 py-2 rounded-2xl"><Clock size={16} className="text-[#7E57FF]" /><span className="text-xs font-bold text-gray-700">{selectedRecipe.time}</span></div>
                   <div className="flex items-center gap-2 bg-orange-50 px-4 py-2 rounded-2xl"><Flame size={16} className="text-orange-500" /><span className="text-xs font-bold text-gray-700">{selectedRecipe.cal}</span></div>
                 </div>
                 <div>
                   <h4 className="font-black text-sm uppercase tracking-widest text-[#7E57FF] flex items-center gap-2"><ChefHat size={18} />所需食材</h4>
-                  <div className="grid grid-cols-2 gap-3 mt-3">{selectedRecipe.ingredients?.map((ing, i) => <div key={i} className="bg-gray-50 p-3 rounded-xl text-xs">{ing}</div>)}</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">{selectedRecipe.ingredients?.map((ing, i) => <div key={i} className="bg-gray-50 p-3 rounded-xl text-xs">{ing}</div>)}</div>
                 </div>
 
                 <div>
@@ -258,8 +306,8 @@ const HomeChef = () => {
                   </div>
                 </div>
               </div>
-              <div className="p-6 bg-gray-50 border-t border-gray-100 flex gap-3">
-                <button onClick={() => void createGroceryList(selectedRecipe)} className="flex-1 bg-white border border-purple-200 text-[#7E57FF] py-3 rounded-2xl font-bold flex items-center justify-center gap-2"><ShoppingCart size={16} />采购清单</button>
+              <div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row gap-3">
+                <button onClick={() => void createGroceryList(selectedRecipe)} className="flex-1 bg-white border border-purple-200 text-[#7E57FF] py-3 rounded-2xl font-bold flex items-center justify-center gap-2"><ShoppingCart size={16} />食材准备清单</button>
                 <button onClick={() => { handleStartCooking(selectedRecipe); setSelectedRecipe(null); }} className="flex-1 bg-[#7E57FF] text-white py-3 rounded-2xl font-bold">加入今日菜单</button>
               </div>
             </motion.div>

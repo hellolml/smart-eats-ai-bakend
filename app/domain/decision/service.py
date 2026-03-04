@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import random
 from dataclasses import dataclass
@@ -7,10 +9,14 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+import httpx
 import redis.asyncio as redis
+from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.llm_adapters import ProviderRegistry
+from app.common.config import settings
 from app.domain.recipe.service import RecipeService
 from app.domain.restaurant.service import RestaurantService
 from app.infra.external.amap import amap
@@ -52,43 +58,95 @@ class DecisionService:
             sort="rating_desc",
             city=city,
         )
+        recipes: list[dict[str, Any]] = []
         chosen: dict[str, Any] | None = None
 
         # 用户要求：优先从附近餐厅里随机抽一家
         if restaurants:
-            picked = random.choice(restaurants[:5])
-            score = _score_restaurant(picked, pref, budget_level, decision_ctx, lat, lng)
-            chosen = {
-                "type": "restaurant",
-                "id": f"amap:{picked.get('provider_id') or uuid4()}",
-                "title": picked.get("name") or "附近美食",
-                "score": score,
-                "raw": picked,
-            }
-        else:
+            picked = await _pick_with_recent_guard(
+                redis_client,
+                candidates=restaurants,
+                memory_key=_blindbox_memory_key(
+                    user_id=user_id,
+                    client_ip=client_ip,
+                    scope="restaurant",
+                    query=query,
+                    scene=scene,
+                ),
+                candidate_id_fn=_restaurant_candidate_id,
+            )
+            if picked is not None:
+                score = _score_restaurant(picked, pref, budget_level, decision_ctx, lat, lng)
+                chosen = {
+                    "type": "restaurant",
+                    "id": f"amap:{picked.get('provider_id') or uuid4()}",
+                    "title": picked.get("name") or "附近美食",
+                    "score": score,
+                    "raw": picked,
+                }
+
+        if chosen is None and scene not in {"blindbox"}:
             recipes = await RecipeService.search(redis_client, query or "快手菜")
             if recipes:
-                picked_recipe = random.choice(recipes[:5])
-                score = _score_recipe(picked_recipe, pref, budget_level, decision_ctx, scene)
-                chosen = {
-                    "type": "recipe",
-                    "id": f"recipe:{(picked_recipe.get('title') or str(uuid4()))}",
-                    "title": picked_recipe.get("title") or "家常菜",
-                    "score": score,
-                    "raw": picked_recipe,
-                }
-            else:
-                food_pool = [
-                    "牛肉面", "蛋炒饭", "麻辣香锅", "寿司", "披萨", "汉堡", "沙拉", "饺子", "火锅", "小笼包",
-                ]
-                fallback_title = random.choice(food_pool)
+                picked_recipe = await _pick_with_recent_guard(
+                    redis_client,
+                    candidates=recipes,
+                    memory_key=_blindbox_memory_key(
+                        user_id=user_id,
+                        client_ip=client_ip,
+                        scope="recipe",
+                        query=query,
+                        scene=scene,
+                    ),
+                    candidate_id_fn=_recipe_candidate_id,
+                )
+                if picked_recipe is not None:
+                    score = _score_recipe(picked_recipe, pref, budget_level, decision_ctx, scene)
+                    chosen = {
+                        "type": "recipe",
+                        "id": f"recipe:{(picked_recipe.get('title') or str(uuid4()))}",
+                        "title": picked_recipe.get("title") or "家常菜",
+                        "score": score,
+                        "raw": picked_recipe,
+                    }
+
+        if chosen is None:
+            ai_choice = await _generate_cn_home_style_fallback(
+                query=query,
+                scene=scene,
+                weather=decision_ctx.weather,
+            )
+            if ai_choice is not None:
                 chosen = {
                     "type": "fallback",
                     "id": f"food:{uuid4()}",
-                    "title": fallback_title,
-                    "score": 45.0,
-                    "raw": {"title": fallback_title},
+                    "title": ai_choice,
+                    "score": 46.0,
+                    "raw": {"title": ai_choice, "source": "ai_generated"},
                 }
+
+        if chosen is None:
+            food_pool = [
+                "番茄炒蛋盖饭", "青椒肉丝盖饭", "宫保鸡丁", "鱼香肉丝", "麻婆豆腐", "蒜香小酥肉", "锅贴", "生煎包", "鸡丝凉面", "葱油拌面",
+            ]
+            fallback_title = await _pick_fallback_title_with_recent_guard(
+                redis_client,
+                memory_key=_blindbox_memory_key(
+                    user_id=user_id,
+                    client_ip=client_ip,
+                    scope="fallback",
+                    query=query,
+                    scene=scene,
+                ),
+                candidates=food_pool,
+            )
+            chosen = {
+                "type": "fallback",
+                "id": f"food:{uuid4()}",
+                "title": fallback_title,
+                "score": 45.0,
+                "raw": {"title": fallback_title, "source": "fallback_pool"},
+            }
 
         confidence = min(0.95, max(0.4, (chosen["score"] if chosen else 40.0) / 100.0))
         actions = _build_actions(chosen)
@@ -439,6 +497,187 @@ _QUESTION_SET = [
 
 def _flow_key(flow_id: str) -> str:
     return f"decision:quick_filter:{flow_id}"
+
+
+def _blindbox_memory_key(
+    *,
+    user_id: str | None,
+    client_ip: str | None,
+    scope: str,
+    query: str | None,
+    scene: str | None,
+) -> str:
+    identity = user_id or (client_ip or "anon")
+    seed = f"{scope}|{identity}|{(query or '').strip()}|{(scene or '').strip()}"
+    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:20]
+    return f"decision:blindbox:last:{digest}"
+
+
+def _restaurant_candidate_id(item: dict[str, Any]) -> str:
+    return str(item.get("provider_id") or item.get("name") or "")
+
+
+def _recipe_candidate_id(item: dict[str, Any]) -> str:
+    return str(item.get("title") or item.get("id") or "")
+
+
+async def _pick_with_recent_guard(
+    redis_client: redis.Redis,
+    *,
+    candidates: list[dict[str, Any]],
+    memory_key: str,
+    candidate_id_fn,
+) -> dict[str, Any] | None:
+    unique_candidates = _unique_candidates(candidates, candidate_id_fn)
+    last_id = _decode_redis_text(await redis_client.get(memory_key))
+
+    if len(unique_candidates) == 1:
+        only = unique_candidates[0]
+        only_id = _normalize_candidate_id(candidate_id_fn(only))
+        if only_id and only_id == _normalize_candidate_id(last_id):
+            return None
+        if only_id:
+            await redis_client.setex(memory_key, 600, only_id)
+        return only
+
+    pool = [
+        item
+        for item in unique_candidates
+        if _normalize_candidate_id(candidate_id_fn(item)) != _normalize_candidate_id(last_id)
+    ]
+    picked = random.choice(pool or unique_candidates)
+    picked_id = _normalize_candidate_id(candidate_id_fn(picked))
+    if picked_id:
+        await redis_client.setex(memory_key, 600, picked_id)
+    return picked
+
+
+async def _pick_fallback_title_with_recent_guard(
+    redis_client: redis.Redis,
+    *,
+    memory_key: str,
+    candidates: list[str],
+) -> str:
+    unique_candidates = _unique_titles(candidates)
+    if len(unique_candidates) == 1:
+        return unique_candidates[0]
+
+    last_id = _decode_redis_text(await redis_client.get(memory_key))
+    pool = [item for item in unique_candidates if _normalize_candidate_id(item) != _normalize_candidate_id(last_id)]
+    picked = random.choice(pool or unique_candidates)
+    await redis_client.setex(memory_key, 600, _normalize_candidate_id(picked))
+    return picked
+
+
+def _normalize_candidate_id(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _decode_redis_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return ""
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def _unique_candidates(candidates: list[dict[str, Any]], candidate_id_fn) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in candidates:
+        cid = _normalize_candidate_id(candidate_id_fn(item))
+        if not cid:
+            cid = hashlib.sha1(_json_dump(item).encode("utf-8")).hexdigest()
+        if cid in seen:
+            continue
+        seen.add(cid)
+        unique.append(item)
+    return unique or candidates
+
+
+def _unique_titles(candidates: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        cid = _normalize_candidate_id(item)
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        unique.append(item)
+    return unique or candidates
+
+
+async def _generate_cn_home_style_fallback(
+    *,
+    query: str | None,
+    scene: str | None,
+    weather: dict[str, Any] | None,
+) -> str | None:
+    try:
+        provider = ProviderRegistry.get(settings.LLM_PROVIDER)
+        if not provider.api_key:
+            return None
+
+        client = AsyncOpenAI(
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            max_retries=1,
+            timeout=httpx.Timeout(20.0, connect=5.0),
+        )
+        prompt = (
+            "你是中文美食推荐助手。\n"
+            "当附近餐厅没有结果时，请在‘家常便饭菜/小吃’范围内给出一个推荐菜名。\n"
+            "必须满足：\n"
+            "1) 只输出中文菜名，不要解释，不要标点，不要编号；\n"
+            "2) 禁止输出英文或拼音；\n"
+            "3) 优先常见家常菜或常见小吃。"
+        )
+        user_text = json.dumps(
+            {
+                "query": query or "美食",
+                "scene": scene or "blindbox",
+                "weather": weather or {},
+            },
+            ensure_ascii=False,
+        )
+        resp = await client.chat.completions.create(
+            model=provider.model_writer,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_text},
+            ],
+            temperature=0.8,
+        )
+        text = str(resp.choices[0].message.content or "").strip()
+        text = text.replace("\n", " ").replace("\r", " ").strip(" 。；;:：!！?？")
+        if not text:
+            return None
+        if not _is_chinese_text(text):
+            return None
+        return text[:16]
+    except Exception:
+        return None
+
+
+def _is_chinese_text(text: str) -> bool:
+    clean = text.strip()
+    if not clean:
+        return False
+    has_cjk = False
+    for ch in clean:
+        code = ord(ch)
+        if 0x4E00 <= code <= 0x9FFF:
+            has_cjk = True
+            continue
+        if ch in "·-（）() ":
+            continue
+        if ch.isdigit():
+            continue
+        return False
+    return has_cjk
 
 
 def _json_dump(obj: dict[str, Any]) -> str:

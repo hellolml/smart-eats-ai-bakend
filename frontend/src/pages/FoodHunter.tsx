@@ -18,12 +18,54 @@ const FoodHunter = () => {
     const [activeSort, setActiveSort] = useState<AppRestaurantSort | null>(null);
     const [activeTag, setActiveTag] = useState('');
     const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+    const [locationPromptVisible, setLocationPromptVisible] = useState(false);
+    const [locationHint, setLocationHint] = useState('');
     const [focusRestaurantId, setFocusRestaurantId] = useState<string>('');
     const [focusRestaurantName, setFocusRestaurantName] = useState<string>('');
 
     const locationDeniedToastShownRef = React.useRef(
         typeof window !== 'undefined' && window.sessionStorage.getItem(LOCATION_DENY_TOAST_FLAG) === '1'
     );
+
+    const requestLocation = React.useCallback(() => {
+        if (typeof window === 'undefined' || !window.navigator.geolocation) {
+            setLocationPromptVisible(true);
+            setLocationHint('当前设备不支持定位，已使用默认结果。');
+            return;
+        }
+
+        window.navigator.geolocation.getCurrentPosition(
+            (position) => {
+                setLocation({
+                    lat: position.coords.latitude,
+                    lng: position.coords.longitude
+                });
+                setLocationPromptVisible(false);
+                setLocationHint('');
+            },
+            (geoError) => {
+                setLocationPromptVisible(true);
+                if (geoError.code === 1) {
+                    if (!locationDeniedToastShownRef.current) {
+                        locationDeniedToastShownRef.current = true;
+                        window.sessionStorage.setItem(LOCATION_DENY_TOAST_FLAG, '1');
+                        toast('未授权定位，已使用默认结果', { duration: 2200 });
+                    }
+                    setLocationHint('定位权限未开启，可在浏览器设置中开启后重试。');
+                    return;
+                }
+                if (geoError.code === 3) {
+                    setLocationHint('定位请求超时，请重试。');
+                    return;
+                }
+                setLocationHint('定位失败，请稍后重试。');
+            },
+            {
+                timeout: 5000,
+                maximumAge: 5 * 60 * 1000
+            }
+        );
+    }, []);
 
     useEffect(() => {
         const focus = (locationState.state as any)?.focusRestaurant;
@@ -102,28 +144,8 @@ const FoodHunter = () => {
 
     useEffect(() => {
         if (!isLoggedIn) return;
-        if (typeof window === 'undefined' || !window.navigator.geolocation) return;
-
-        window.navigator.geolocation.getCurrentPosition(
-            (position) => {
-                setLocation({
-                    lat: position.coords.latitude,
-                    lng: position.coords.longitude
-                });
-            },
-            (geoError) => {
-                if (geoError.code === 1 && !locationDeniedToastShownRef.current) {
-                    locationDeniedToastShownRef.current = true;
-                    window.sessionStorage.setItem(LOCATION_DENY_TOAST_FLAG, '1');
-                    toast('未授权定位，已使用默认结果', { duration: 2200 });
-                }
-            },
-            {
-                timeout: 5000,
-                maximumAge: 5 * 60 * 1000
-            }
-        );
-    }, [isLoggedIn]);
+        requestLocation();
+    }, [isLoggedIn, requestLocation]);
 
     const tagButtons = useMemo(
         () => [
@@ -232,6 +254,21 @@ const FoodHunter = () => {
                     <Filter size={16} />
                 </div>
             </div>
+
+            {locationPromptVisible ? (
+                <div className="bg-white rounded-2xl border border-yellow-100 p-4 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <p className="text-sm font-bold text-gray-700">开启定位，获取附近餐厅</p>
+                        <p className="text-xs text-gray-500 mt-1 truncate">{locationHint || '定位后可优先展示你附近的真实餐厅。'}</p>
+                    </div>
+                    <button
+                        onClick={requestLocation}
+                        className="flex-shrink-0 px-3 py-2 rounded-xl bg-[#7E57FF] text-white text-xs font-bold active:scale-95 transition-transform"
+                    >
+                        开启定位
+                    </button>
+                </div>
+            ) : null}
 
             {focusRestaurantId ? (
                 <div className="bg-[#7E57FF] text-white rounded-2xl px-4 py-3 shadow-sm flex items-center justify-between gap-3">

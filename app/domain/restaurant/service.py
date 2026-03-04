@@ -48,7 +48,7 @@ class RestaurantService:
                 f"{lng},{lat}",
                 keywords,
                 types,
-                page_size=5,
+                page_size=15,
                 servers_path=settings.MCP_SERVERS_CONFIG_PATH,
             )
         else:
@@ -56,7 +56,7 @@ class RestaurantService:
                 keywords,
                 types,
                 city=city,
-                page_size=5,
+                page_size=15,
                 servers_path=settings.MCP_SERVERS_CONFIG_PATH,
             )
         if not pois:
@@ -64,7 +64,7 @@ class RestaurantService:
         filtered = [item for item in pois if _is_food_poi(item)]
         if not filtered:
             return []
-        results = [_normalize_poi(item) for item in filtered][:5]
+        results = [_normalize_poi(item) for item in filtered][:15]
         await redis_client.setex(
             cache_key,
             settings.AMAP_SEARCH_CACHE_TTL_SECONDS,

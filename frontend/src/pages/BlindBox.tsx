@@ -72,7 +72,7 @@ const BlindBox: React.FC = () => {
       const resp = await fetch('/api/v1/decisions/blindbox', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ query: '附近美食', lat: location?.lat, lng: location?.lng })
+        body: JSON.stringify({ query: '美食', scene: 'blindbox', lat: location?.lat, lng: location?.lng })
       });
       const data = await resp.json();
       const title = data?.data?.decision?.title;

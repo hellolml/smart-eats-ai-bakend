@@ -34,11 +34,15 @@ async def test_app_grocery_list_from_recipe_flow(client):
     assert create.status_code == 200
     data = create.json()["data"]
     list_id = data["id"]
+    assert data["title"] == "番茄炒蛋 食材准备清单"
 
     item_names = [i["name"] for i in data["items"]]
     assert "egg" not in item_names
     assert "tomato" in item_names
     assert "scallion" in item_names
+
+    tomato = next(i for i in data["items"] if i["name"] == "tomato")
+    assert tomato["unit"] == "pcs"
 
     get_list = await client.get(f"/api/v1/app/grocery-lists/{list_id}", headers=headers)
     assert get_list.status_code == 200

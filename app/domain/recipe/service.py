@@ -19,6 +19,6 @@ class RecipeService:
         if cached:
             return json.loads(cached)
 
-        results = search_recipes(query, limit=5)
+        results = search_recipes(query, limit=15)
         await redis_client.setex(cache_key, 300, json.dumps(results, ensure_ascii=True))
         return results

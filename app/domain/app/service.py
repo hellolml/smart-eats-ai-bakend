@@ -575,8 +575,10 @@ class AppBffService:
         payload: dict[str, Any],
         db: AsyncSession,
     ) -> dict[str, Any]:
-        recipe_name = payload.get("recipe_name") or "采购清单"
+        recipe_name = str(payload.get("recipe_name") or "").strip() or "食材准备清单"
         required_items = payload.get("required_items") or []
+
+        title = recipe_name if recipe_name.endswith("食材准备清单") else f"{recipe_name} 食材准备清单"
 
         result = await db.execute(select(FridgeItem).where(FridgeItem.user_id == user_id))
         fridge_items = result.scalars().all()
@@ -585,7 +587,7 @@ class AppBffService:
         list_obj = GroceryList(
             id=str(uuid4()),
             user_id=user_id,
-            title=f"{recipe_name} 采购清单",
+            title=title,
             source_recipe=recipe_name,
         )
         db.add(list_obj)
