@@ -58,6 +58,7 @@ async def init_db() -> None:
         fridge,
         game,
         grocery,
+        group_decision,
         memory,
         preference,
         recipe,

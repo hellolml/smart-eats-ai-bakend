@@ -10,6 +10,7 @@ import Wheel from '@/pages/Wheel';
 import AiChat from '@/pages/AiChat';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
+import GroupDecisionResult from '@/pages/GroupDecisionResult';
 import router from '@/config/router.json';
 import { AUTH_NAV_PATHS, GUEST_NAV_PATHS } from '@/config/access-control';
 
@@ -38,7 +39,8 @@ const routeMap: Record<string, React.ReactNode> = {
     Wheel: <Wheel />,
     AiChat: <AiChat />,
     Login: <Login />,
-    Register: <Register />
+    Register: <Register />,
+    GroupDecisionResult: <GroupDecisionResult />
 };
 
 const routerIconMap: Record<string, any> = {

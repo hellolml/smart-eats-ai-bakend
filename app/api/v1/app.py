@@ -36,6 +36,7 @@ from app.domain.app.schemas import (
 )
 from app.domain.app.service import AppBffService
 from app.domain.decision.service import DecisionService
+from app.domain.group_decision.service import GroupDecisionService
 from app.tasks import fridge_recognition
 
 router = APIRouter()
@@ -77,6 +78,26 @@ class GroceryListFromRecipeRequest(BaseModel):
 
 class GroceryItemToggleRequest(BaseModel):
     checked: bool
+
+
+class GroupDecisionOptionInput(BaseModel):
+    title: str
+    item_type: str = "restaurant"
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class GroupDecisionCreateRequest(BaseModel):
+    title: str = "今晚吃什么"
+    city: str | None = None
+    options: list[GroupDecisionOptionInput] = Field(default_factory=list, min_length=2, max_length=12)
+    expires_hours: int = Field(default=24, ge=1, le=168)
+
+
+class GroupDecisionVoteRequest(BaseModel):
+    item_id: str
+    voter_name: str = Field(min_length=1, max_length=64)
+    voter_key: str = Field(min_length=1, max_length=64)
+    note: str | None = Field(default=None, max_length=300)
 
 
 @router.get("/chat/models")
@@ -499,6 +520,57 @@ async def app_quick_filter_answer(
     )
     if data is None:
         raise HTTPException(status_code=404, detail="quick filter flow not found")
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/group-decisions")
+async def app_create_group_decision(
+    payload: GroupDecisionCreateRequest,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await GroupDecisionService.create_session(
+        db,
+        creator_user_id=user_id,
+        title=payload.title,
+        options=[x.model_dump() for x in payload.options],
+        city=payload.city,
+        base_url=str(request.base_url),
+        expires_hours=payload.expires_hours,
+    )
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/group-decisions/{session_id}/vote")
+async def app_vote_group_decision(
+    session_id: str,
+    payload: GroupDecisionVoteRequest,
+    request: Request,
+    db: db_dep,
+):
+    data = await GroupDecisionService.submit_vote(
+        db,
+        session_id=session_id,
+        item_id=payload.item_id,
+        voter_name=payload.voter_name,
+        voter_key=payload.voter_key,
+        note=payload.note,
+    )
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/group-decisions/{session_id}/result")
+async def app_group_decision_result(
+    session_id: str,
+    request: Request,
+    db: db_dep,
+):
+    data = await GroupDecisionService.get_result(
+        db,
+        session_id=session_id,
+        base_url=str(request.base_url),
+    )
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 

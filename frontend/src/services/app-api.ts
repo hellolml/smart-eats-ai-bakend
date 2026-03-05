@@ -166,6 +166,35 @@ export interface AppQuickFilterState {
     result?: AppDecisionResult;
 }
 
+export interface AppGroupDecisionItem {
+    id: string;
+    title: string;
+    item_type?: string;
+    meta?: Record<string, unknown>;
+    votes?: number;
+}
+
+export interface AppGroupDecisionSession {
+    id: string;
+    title: string;
+    city?: string;
+    status?: string;
+    share_url: string;
+    share_token?: string;
+    items: AppGroupDecisionItem[];
+}
+
+export interface AppGroupDecisionResult {
+    id: string;
+    title: string;
+    city?: string;
+    status?: string;
+    share_url: string;
+    winner?: AppGroupDecisionItem | null;
+    items: AppGroupDecisionItem[];
+    total_votes: number;
+}
+
 export interface AuthPayload {
     access_token?: string;
     refresh_token?: string;
@@ -566,6 +595,43 @@ export const appApi = {
                 method: 'POST',
                 body: payload
             });
+        }
+    },
+
+    groupDecisions: {
+        async create(payload: {
+            title?: string;
+            city?: string;
+            expires_hours?: number;
+            options: Array<{ title: string; item_type?: string; meta?: Record<string, unknown> }>;
+        }) {
+            return request<AppGroupDecisionSession>('/group-decisions', {
+                method: 'POST',
+                body: payload
+            });
+        },
+        async vote(payload: {
+            session_id: string;
+            item_id: string;
+            voter_name: string;
+            voter_key: string;
+            note?: string;
+        }) {
+            return request<{ ok: boolean; session_id: string; item_id: string }>(
+                `/group-decisions/${payload.session_id}/vote`,
+                {
+                    method: 'POST',
+                    body: {
+                        item_id: payload.item_id,
+                        voter_name: payload.voter_name,
+                        voter_key: payload.voter_key,
+                        note: payload.note
+                    }
+                }
+            );
+        },
+        async result(sessionId: string) {
+            return request<AppGroupDecisionResult>(`/group-decisions/${sessionId}/result`);
         }
     },
 

@@ -43,5 +43,9 @@
     "Register": {
         "title": "注册",
         "path": "/register"
+    },
+    "GroupDecisionResult": {
+        "title": "群组投票结果",
+        "path": "/group-decision/:sessionId"
     }
 }
