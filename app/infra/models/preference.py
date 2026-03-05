@@ -34,3 +34,30 @@ class UserPreference(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class UserTasteProfile(Base):
+    __tablename__ = "user_taste_profile"
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    dislikes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    allergens: Mapped[list[str]] = mapped_column(JSON, default=list)
+    diet_goal: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    budget_range: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    spice_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PreferenceEvent(Base):
+    __tablename__ = "preference_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    event_name: Mapped[str] = mapped_column(String(64), index=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

@@ -20,7 +20,7 @@ from app.common.config import settings
 from app.domain.recipe.service import RecipeService
 from app.domain.restaurant.service import RestaurantService
 from app.infra.external.amap import amap
-from app.infra.models.preference import UserPreference
+from app.infra.models.preference import UserPreference, UserTasteProfile
 
 
 @dataclass
@@ -48,6 +48,8 @@ class DecisionService:
         lat, lng, city = await _resolve_location(lat, lng, city, client_ip=client_ip)
         decision_ctx = await _build_context(city)
         pref = await _get_preference(db, user_id)
+        taste_profile = await _get_taste_profile(db, user_id)
+        hard_filter_terms = _hard_filter_terms(pref, taste_profile)
 
         restaurants = await RestaurantService.search(
             redis_client,
@@ -58,6 +60,13 @@ class DecisionService:
             sort="rating_desc",
             city=city,
         )
+        if restaurants and hard_filter_terms:
+            restaurants = [
+                item
+                for item in restaurants
+                if not _contains_blocked_terms(str(item.get("name") or ""), hard_filter_terms)
+            ]
+
         recipes: list[dict[str, Any]] = []
         chosen: dict[str, Any] | None = None
 
@@ -87,6 +96,12 @@ class DecisionService:
 
         if chosen is None and scene not in {"blindbox"}:
             recipes = await RecipeService.search(redis_client, query or "快手菜")
+            if recipes and hard_filter_terms:
+                recipes = [
+                    item
+                    for item in recipes
+                    if not _contains_blocked_terms(str(item.get("title") or ""), hard_filter_terms)
+                ]
             if recipes:
                 picked_recipe = await _pick_with_recent_guard(
                     redis_client,
@@ -292,6 +307,29 @@ async def _get_preference(db: AsyncSession, user_id: str | None) -> UserPreferen
         return None
     result = await db.execute(select(UserPreference).where(UserPreference.user_id == user_id))
     return result.scalar_one_or_none()
+
+
+async def _get_taste_profile(db: AsyncSession, user_id: str | None) -> UserTasteProfile | None:
+    if not user_id:
+        return None
+    result = await db.execute(select(UserTasteProfile).where(UserTasteProfile.user_id == user_id))
+    return result.scalar_one_or_none()
+
+
+def _hard_filter_terms(pref: UserPreference | None, taste_profile: UserTasteProfile | None) -> set[str]:
+    terms: set[str] = set()
+    if pref:
+        terms.update({x.strip().lower() for x in (pref.avoid_ingredients or []) if str(x).strip()})
+        terms.update({x.strip().lower() for x in (pref.allergens or []) if str(x).strip()})
+    if taste_profile:
+        terms.update({x.strip().lower() for x in (taste_profile.dislikes or []) if str(x).strip()})
+        terms.update({x.strip().lower() for x in (taste_profile.allergens or []) if str(x).strip()})
+    return terms
+
+
+def _contains_blocked_terms(text: str, terms: set[str]) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in terms)
 
 
 def _score_restaurant(

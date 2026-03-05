@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import db_dep, get_current_user_id, redis_dep
 from app.common.errors import envelope
+from app.domain.preferences.service import get_or_create_taste_profile, record_preference_event
 from app.infra.models.preference import UserPreference, UserProfile
 
 router = APIRouter()
@@ -31,6 +32,17 @@ class PreferenceResponse(BaseModel):
     budget_level: int | None = None
 
 
+class TasteProfileResponse(BaseModel):
+    user_id: str
+    dislikes: list[str] = Field(default_factory=list)
+    allergens: list[str] = Field(default_factory=list)
+    diet_goal: str | None = None
+    budget_range: str | None = None
+    spice_level: int | None = Field(default=None, ge=0, le=5)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    updated_at: str | None = None
+
+
 class UpdateProfileRequest(BaseModel):
     health_goal: str | None = None
     current_state: str | None = None
@@ -47,6 +59,16 @@ class UpdatePreferenceRequest(BaseModel):
     budget_level: int | None = None
 
 
+class TasteProfilePatchRequest(BaseModel):
+    dislikes: list[str] | None = None
+    allergens: list[str] | None = None
+    diet_goal: Literal["fat_loss", "muscle_gain", "sugar_control", "balanced"] | None = None
+    budget_range: Literal["low", "medium", "high"] | None = None
+    spice_level: int | None = Field(default=None, ge=0, le=5)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    confirm_sensitive: bool = False
+
+
 async def _invalidate_context_cache(redis_client: Any, user_id: str) -> None:
     pattern = f"context:user:{user_id}:*"
     keys = []
@@ -54,6 +76,19 @@ async def _invalidate_context_cache(redis_client: Any, user_id: str) -> None:
         keys.append(key)
     if keys:
         await redis_client.delete(*keys)
+
+
+def _to_taste_profile_response(profile) -> dict[str, Any]:
+    return TasteProfileResponse(
+        user_id=profile.user_id,
+        dislikes=profile.dislikes or [],
+        allergens=profile.allergens or [],
+        diet_goal=profile.diet_goal,
+        budget_range=profile.budget_range,
+        spice_level=profile.spice_level,
+        confidence=float(profile.confidence or 0.0),
+        updated_at=profile.updated_at.isoformat() if profile.updated_at else None,
+    ).model_dump()
 
 
 @router.get("/users/me/profile")
@@ -181,3 +216,47 @@ async def update_preferences(
         budget_level=pref.budget_level,
     ).model_dump()
     return envelope(data, trace_id)
+
+
+@router.get("/preferences/taste-profile")
+async def get_taste_profile(
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    profile = await get_or_create_taste_profile(db, user_id)
+    await db.commit()
+    trace_id = getattr(request.state, "trace_id", "")
+    return envelope(_to_taste_profile_response(profile), trace_id)
+
+
+@router.patch("/preferences/taste-profile")
+async def patch_taste_profile(
+    payload: TasteProfilePatchRequest,
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    profile = await get_or_create_taste_profile(db, user_id)
+    updates = payload.model_dump(exclude_unset=True)
+
+    if "allergens" in updates and updates["allergens"] is not None and not payload.confirm_sensitive:
+        raise HTTPException(status_code=409, detail="allergens update requires confirm_sensitive=true")
+
+    updates.pop("confirm_sensitive", None)
+    for field, value in updates.items():
+        setattr(profile, field, value)
+
+    await record_preference_event(
+        db,
+        user_id=user_id,
+        event_name="preference_applied",
+        payload={"source": "api_patch", "fields": sorted(list(updates.keys()))},
+    )
+    await db.commit()
+    await db.refresh(profile)
+    await _invalidate_context_cache(redis, user_id)
+
+    trace_id = getattr(request.state, "trace_id", "")
+    return envelope(_to_taste_profile_response(profile), trace_id)

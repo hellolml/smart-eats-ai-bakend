@@ -79,4 +79,40 @@ async def _ensure_sqlite_columns(conn) -> None:
     if "deleted_at" not in cols:
         await conn.exec_driver_sql("ALTER TABLE chat_sessions ADD COLUMN deleted_at DATETIME")
 
+    await conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS user_taste_profile (
+            user_id VARCHAR(36) PRIMARY KEY,
+            dislikes JSON,
+            allergens JSON,
+            diet_goal VARCHAR(64),
+            budget_range VARCHAR(32),
+            spice_level INTEGER,
+            confidence FLOAT DEFAULT 0,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    taste_cols_result = await conn.exec_driver_sql("PRAGMA table_info(user_taste_profile)")
+    taste_cols = {row[1] for row in taste_cols_result.fetchall()}
+    if "confidence" not in taste_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_taste_profile ADD COLUMN confidence FLOAT DEFAULT 0")
+    if "updated_at" not in taste_cols:
+        await conn.exec_driver_sql(
+            "ALTER TABLE user_taste_profile ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+        )
+
+    await conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS preference_events (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36),
+            event_name VARCHAR(64),
+            payload_json JSON,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
     await conn.exec_driver_sql("DROP TABLE IF EXISTS chat_checkpoints")

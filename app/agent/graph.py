@@ -31,6 +31,7 @@ from app.agent.state import ChatState
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
 from app.agent import history
+from app.domain.preferences.service import apply_extracted_preferences, extract_preferences_from_text
 from app.agent.legacy_builder_helpers import (
     _ensure_chat_session,
     _fallback_final,
@@ -101,6 +102,21 @@ def _render_final_text(final_json: dict[str, Any]) -> str:
     if text:
         return text
     return "好的。"
+
+
+async def _apply_turn_preference_extraction(
+    db: AsyncSession,
+    *,
+    user_id: str | None,
+    user_message: str | None,
+) -> None:
+    if not user_id:
+        return
+    extracted = extract_preferences_from_text(user_message)
+    if not extracted:
+        return
+    await apply_extracted_preferences(db, user_id=user_id, extracted=extracted, allow_sensitive=False)
+    await db.commit()
 
 
 def _strip_structured_wrapper(text: str) -> str:
@@ -191,6 +207,11 @@ async def _stream_fast_path_answer(
     ).model_dump()
     await history.save_assistant_message(
         db, redis_client, state.session_id, answer_text, fast_final,
+    )
+    await _apply_turn_preference_extraction(
+        db,
+        user_id=state.user_id,
+        user_message=state.message,
     )
     yield {"event": "final", "data": {"stopped": False, "answer": fast_final}}
 
@@ -458,6 +479,11 @@ async def run_chat_stream(
                 answer_text,
                 latest_state.final_json,
             )
+            await _apply_turn_preference_extraction(
+                db,
+                user_id=latest_state.user_id,
+                user_message=latest_state.message,
+            )
         else:
             temp_state = _state_from_dict(latest_state)
             await history.save_assistant_message(
@@ -466,6 +492,11 @@ async def run_chat_stream(
                 temp_state.session_id,
                 answer_text,
                 temp_state.final_json,
+            )
+            await _apply_turn_preference_extraction(
+                db,
+                user_id=temp_state.user_id,
+                user_message=temp_state.message,
             )
         yield {"event": "final", "data": {"stopped": False, "answer": final_json}}
     except Exception as exc:
