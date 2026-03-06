@@ -74,10 +74,24 @@ const GroupDecisionResult: React.FC = () => {
     }
   };
 
+  const normalizedShareUrl = React.useMemo(() => {
+    if (!data?.id) return data?.share_url || '';
+    const token = searchParams.get('token') || (() => {
+      try {
+        return data.share_url ? new URL(data.share_url).searchParams.get('token') || '' : '';
+      } catch {
+        return '';
+      }
+    })();
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const query = token ? `?token=${encodeURIComponent(token)}` : '';
+    return `${origin}/#/group-decision/${data.id}${query}`;
+  }, [data, searchParams]);
+
   const copyShareLink = async () => {
-    if (!data?.share_url) return;
+    if (!normalizedShareUrl) return;
     try {
-      const ok = await copyText(data.share_url);
+      const ok = await copyText(normalizedShareUrl);
       if (ok) toast.success('分享链接已复制');
       else toast.error('复制失败，请手动复制');
     } catch {

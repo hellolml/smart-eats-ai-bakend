@@ -57,10 +57,24 @@ const GroupDecisionCreate: React.FC = () => {
     });
   };
 
+  const builtShareUrl = React.useMemo(() => {
+    if (!created) return '';
+    const token = created.share_token || (() => {
+      try {
+        return new URL(created.share_url).searchParams.get('token') || '';
+      } catch {
+        return '';
+      }
+    })();
+    const query = token ? `?token=${encodeURIComponent(token)}` : '';
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    return `${origin}/#/group-decision/${created.id}${query}`;
+  }, [created]);
+
   const handleCopy = async () => {
-    if (!created?.share_url) return;
+    if (!builtShareUrl) return;
     try {
-      const ok = await copyText(created.share_url);
+      const ok = await copyText(builtShareUrl);
       if (ok) toast.success('链接已复制');
       else toast.error('复制失败，请手动复制');
     } catch {
@@ -70,14 +84,14 @@ const GroupDecisionCreate: React.FC = () => {
 
   const goVotePage = () => {
     if (!created) return;
-    const tokenFromUrl = (() => {
+    const token = created.share_token || (() => {
       try {
         return new URL(created.share_url).searchParams.get('token') || '';
       } catch {
         return '';
       }
     })();
-    const query = tokenFromUrl ? `?token=${encodeURIComponent(tokenFromUrl)}` : '';
+    const query = token ? `?token=${encodeURIComponent(token)}` : '';
     navigate(`/group-decision/${created.id}${query}`);
   };
 
@@ -173,7 +187,7 @@ const GroupDecisionCreate: React.FC = () => {
       {created ? (
         <div className="bg-white rounded-xl border p-4 space-y-3">
           <p className="text-sm font-medium">创建成功</p>
-          <p className="text-xs text-gray-500 break-all">{created.share_url}</p>
+          <p className="text-xs text-gray-500 break-all">{builtShareUrl || created.share_url}</p>
           <div className="flex gap-2">
             <button
               onClick={handleCopy}
