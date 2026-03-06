@@ -3,6 +3,27 @@ import React from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
+const copyText = async (text: string) => {
+  if (!text) return false;
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  if (typeof document !== 'undefined') {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok;
+  }
+  return false;
+};
+
 const GroupDecisionResult: React.FC = () => {
   const { sessionId = '' } = useParams();
   const [searchParams] = useSearchParams();
@@ -53,14 +74,35 @@ const GroupDecisionResult: React.FC = () => {
     }
   };
 
+  const copyShareLink = async () => {
+    if (!data?.share_url) return;
+    try {
+      const ok = await copyText(data.share_url);
+      if (ok) toast.success('分享链接已复制');
+      else toast.error('复制失败，请手动复制');
+    } catch {
+      toast.error('复制失败，请手动复制');
+    }
+  };
+
   if (loading) return <div className="p-4 text-sm text-gray-500">加载中...</div>;
   if (!data) return <div className="p-4 text-sm text-gray-500">没有找到该群组决策</div>;
 
   return (
     <div className="max-w-xl mx-auto p-4 space-y-4">
       <div className="bg-white rounded-xl border p-4">
-        <h1 className="text-lg font-semibold">{data.title}</h1>
-        <p className="text-xs text-gray-500 mt-1">总票数：{data.total_votes}</p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold truncate">{data.title}</h1>
+            <p className="text-xs text-gray-500 mt-1">总票数：{data.total_votes}</p>
+          </div>
+          <button
+            onClick={copyShareLink}
+            className="flex-shrink-0 text-xs px-2 py-1 rounded-md bg-purple-50 text-[#7E57FF]"
+          >
+            复制分享链接
+          </button>
+        </div>
         {data.winner ? (
           <div className="mt-3 text-sm">
             当前领先：<span className="font-medium">{data.winner.title}</span>（{data.winner.votes || 0}票）

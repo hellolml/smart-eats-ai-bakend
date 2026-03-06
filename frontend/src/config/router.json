@@ -47,5 +47,9 @@
     "GroupDecisionResult": {
         "title": "群组投票结果",
         "path": "/group-decision/:sessionId"
+    },
+    "GroupDecisionCreate": {
+        "title": "发起群组决策",
+        "path": "/group-decision/create"
     }
 }

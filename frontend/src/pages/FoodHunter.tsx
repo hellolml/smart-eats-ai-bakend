@@ -270,6 +270,19 @@ const FoodHunter = () => {
                 </div>
             ) : null}
 
+            <div className="bg-white rounded-2xl border border-purple-100 p-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <p className="text-sm font-bold text-gray-700">和朋友一起投票决定吃什么</p>
+                    <p className="text-xs text-gray-500 mt-1 truncate">创建群组决策，分享链接后大家直接投票。</p>
+                </div>
+                <button
+                    onClick={() => navigate('/group-decision/create')}
+                    className="flex-shrink-0 px-3 py-2 rounded-xl bg-[#7E57FF] text-white text-xs font-bold active:scale-95 transition-transform"
+                >
+                    发起群组决策
+                </button>
+            </div>
+
             {focusRestaurantId ? (
                 <div className="bg-[#7E57FF] text-white rounded-2xl px-4 py-3 shadow-sm flex items-center justify-between gap-3">
                     <div className="text-sm font-bold truncate">🎯 盲盒命中：{focusRestaurantName || '目标餐厅'}</div>
