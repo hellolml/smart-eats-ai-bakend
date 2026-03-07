@@ -35,9 +35,9 @@ from app.domain.app.schemas import (
     RegisterConfirmRequest,
     RegisterOtpRequest,
     RegisterRequest,
+    OtpLoginConfirmRequest,
+    OtpLoginRequest,
     RestaurantsQuery,
-    SmsLoginConfirmRequest,
-    SmsLoginRequest,
     ScanApplyRequest,
     UpdateMeRequest,
     WheelCurrentUpdateRequest,
@@ -238,16 +238,16 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
-@router.post("/auth/login/sms/request")
-async def login_sms_request(payload: SmsLoginRequest, request: Request, db: db_dep, redis: redis_dep):
-    data = await AppBffService.login_sms_request(payload.phone, redis, db)
+@router.post("/auth/login/otp/request")
+async def login_otp_request(payload: OtpLoginRequest, request: Request, db: db_dep, redis: redis_dep):
+    data = await AppBffService.login_otp_request(payload.account, redis, db)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
-@router.post("/auth/login/sms/confirm")
-async def login_sms_confirm(payload: SmsLoginConfirmRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+@router.post("/auth/login/otp/confirm")
+async def login_otp_confirm(payload: OtpLoginConfirmRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
     client_ip = request.client.host if request.client else "unknown"
-    data = await AppBffService.login_sms_confirm(payload.phone, payload.code, redis, db, client_ip)
+    data = await AppBffService.login_otp_confirm(payload.account, payload.code, redis, db, client_ip)
     if data.get("refresh_token"):
         data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))

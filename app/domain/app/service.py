@@ -516,67 +516,93 @@ class AppBffService:
         return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 
     @staticmethod
-    async def login_sms_request(phone: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
-        clean_phone = (phone or "").strip()
-        if not clean_phone:
-            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="phone required", http_status=400)
+    async def login_otp_request(account: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
+        target = (account or "").strip()
+        if not target:
+            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="account required", http_status=400)
 
-        user = (await db.execute(select(User).where(User.phone == clean_phone))).scalar_one_or_none()
-        if user is None:
-            user = User(
-                id=str(uuid4()),
-                email=None,
-                phone=clean_phone,
-                nickname=f"用户{clean_phone[-4:]}" if len(clean_phone) >= 4 else "用户",
-                password_hash=hash_password(str(uuid4())),
-            )
-            db.add(user)
-            await db.commit()
+        if "@" in target:
+            user = (await db.execute(select(User).where(User.email == target))).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    id=str(uuid4()),
+                    email=target,
+                    phone=None,
+                    nickname=(target.split("@")[0] or "用户")[:64],
+                    password_hash=hash_password(str(uuid4())),
+                )
+                db.add(user)
+                await db.commit()
+        else:
+            user = (await db.execute(select(User).where(User.phone == target))).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    id=str(uuid4()),
+                    email=None,
+                    phone=target,
+                    nickname=f"用户{target[-4:]}" if len(target) >= 4 else "用户",
+                    password_hash=hash_password(str(uuid4())),
+                )
+                db.add(user)
+                await db.commit()
 
         code = f"{random.randint(0, 999999):06d}"
-        await redis_client.setex(f"otp:login_sms:{clean_phone}", 10 * 60, AppBffService._sha256(code))
-        await redis_client.setex(f"otp:login_sms:attempts:{clean_phone}", 10 * 60, "0")
-        send_resp = await AppBffService._send_sms_code(clean_phone, code, "login")
+        await redis_client.setex(f"otp:login:{target}", 10 * 60, AppBffService._sha256(code))
+        await redis_client.setex(f"otp:login:attempts:{target}", 10 * 60, "0")
+        send_resp = await AppBffService._send_code_by_account(target, code, "login")
         return {"sent": True, **send_resp}
 
     @staticmethod
-    async def login_sms_confirm(
-        phone: str,
+    async def login_otp_confirm(
+        account: str,
         code: str,
         redis_client: redis.Redis,
         db: AsyncSession,
         client_ip: str,
     ) -> dict[str, Any]:
-        clean_phone = (phone or "").strip()
-        if not clean_phone:
-            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="phone required", http_status=400)
+        target = (account or "").strip()
+        if not target:
+            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="account required", http_status=400)
 
-        code_hash = await redis_client.get(f"otp:login_sms:{clean_phone}")
+        code_hash = await redis_client.get(f"otp:login:{target}")
         if not code_hash:
             raise AppError(code=AUTH_OTP_INVALID, message="login code invalid or expired", http_status=400)
 
-        attempts_key = f"otp:login_sms:attempts:{clean_phone}"
+        attempts_key = f"otp:login:attempts:{target}"
         attempts = await redis_client.incr(attempts_key)
         if attempts > 5:
-            await redis_client.delete(f"otp:login_sms:{clean_phone}")
+            await redis_client.delete(f"otp:login:{target}")
             raise AppError(code=AUTH_OTP_INVALID, message="login code invalid or expired", http_status=400)
 
         if AppBffService._sha256(code) != code_hash:
             raise AppError(code=AUTH_OTP_INVALID, message="login code invalid or expired", http_status=400)
 
-        user = (await db.execute(select(User).where(User.phone == clean_phone))).scalar_one_or_none()
-        if user is None:
-            user = User(
-                id=str(uuid4()),
-                email=None,
-                phone=clean_phone,
-                nickname=f"用户{clean_phone[-4:]}" if len(clean_phone) >= 4 else "用户",
-                password_hash=hash_password(str(uuid4())),
-            )
-            db.add(user)
-            await db.commit()
+        if "@" in target:
+            user = (await db.execute(select(User).where(User.email == target))).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    id=str(uuid4()),
+                    email=target,
+                    phone=None,
+                    nickname=(target.split("@")[0] or "用户")[:64],
+                    password_hash=hash_password(str(uuid4())),
+                )
+                db.add(user)
+                await db.commit()
+        else:
+            user = (await db.execute(select(User).where(User.phone == target))).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    id=str(uuid4()),
+                    email=None,
+                    phone=target,
+                    nickname=f"用户{target[-4:]}" if len(target) >= 4 else "用户",
+                    password_hash=hash_password(str(uuid4())),
+                )
+                db.add(user)
+                await db.commit()
 
-        await redis_client.delete(f"otp:login_sms:{clean_phone}")
+        await redis_client.delete(f"otp:login:{target}")
         await redis_client.delete(attempts_key)
         return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 

@@ -487,22 +487,31 @@ export const appApi = {
             return data;
         },
 
-        async loginSmsRequest(payload: { phone: string }) {
-            return request<{ sent: boolean; debug_code?: string }>('/auth/login/sms/request', {
+        async loginOtpRequest(payload: { account: string }) {
+            return request<{ sent: boolean; debug_code?: string }>('/auth/login/otp/request', {
                 method: 'POST',
                 auth: false,
                 body: payload
             });
         },
 
-        async loginSmsConfirm(payload: { phone: string; code: string }) {
-            const data = await request<AuthPayload>('/auth/login/sms/confirm', {
+        async loginOtpConfirm(payload: { account: string; code: string }) {
+            const data = await request<AuthPayload>('/auth/login/otp/confirm', {
                 method: 'POST',
                 auth: false,
                 body: payload
             });
             setTokens(data);
             return data;
+        },
+
+        // Backward-compatible wrappers
+        async loginSmsRequest(payload: { phone: string }) {
+            return this.loginOtpRequest({ account: payload.phone });
+        },
+
+        async loginSmsConfirm(payload: { phone: string; code: string }) {
+            return this.loginOtpConfirm({ account: payload.phone, code: payload.code });
         },
 
         async loginOneClick(payload: { token: string }) {

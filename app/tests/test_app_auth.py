@@ -328,22 +328,38 @@ async def test_app_oauth_github_start_and_callback(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_app_sms_login_flow(client):
-    request_resp = await client.post(
-        "/api/v1/app/auth/login/sms/request",
-        json={"phone": "15500001111"},
+async def test_app_otp_login_flow_phone_and_email(client):
+    phone_request = await client.post(
+        "/api/v1/app/auth/login/otp/request",
+        json={"account": "15500001111"},
     )
-    assert request_resp.status_code == 200
-    code = request_resp.json()["data"]["debug_code"]
+    assert phone_request.status_code == 200
+    phone_code = phone_request.json()["data"]["debug_code"]
 
-    confirm_resp = await client.post(
-        "/api/v1/app/auth/login/sms/confirm",
-        json={"phone": "15500001111", "code": code},
+    phone_confirm = await client.post(
+        "/api/v1/app/auth/login/otp/confirm",
+        json={"account": "15500001111", "code": phone_code},
     )
-    assert confirm_resp.status_code == 200
-    data = confirm_resp.json()["data"]
-    assert data["access_token"]
-    assert data["refresh_token"]
+    assert phone_confirm.status_code == 200
+    phone_data = phone_confirm.json()["data"]
+    assert phone_data["access_token"]
+    assert phone_data["refresh_token"]
+
+    email_request = await client.post(
+        "/api/v1/app/auth/login/otp/request",
+        json={"account": "otp_login@example.com"},
+    )
+    assert email_request.status_code == 200
+    email_code = email_request.json()["data"]["debug_code"]
+
+    email_confirm = await client.post(
+        "/api/v1/app/auth/login/otp/confirm",
+        json={"account": "otp_login@example.com", "code": email_code},
+    )
+    assert email_confirm.status_code == 200
+    email_data = email_confirm.json()["data"]
+    assert email_data["access_token"]
+    assert email_data["refresh_token"]
 
 
 @pytest.mark.asyncio

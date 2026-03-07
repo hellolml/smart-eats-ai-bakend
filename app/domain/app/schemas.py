@@ -104,12 +104,12 @@ class OAuthCallbackRequest(BaseModel):
     state: str
 
 
-class SmsLoginRequest(BaseModel):
-    phone: str
+class OtpLoginRequest(BaseModel):
+    account: str
 
 
-class SmsLoginConfirmRequest(BaseModel):
-    phone: str
+class OtpLoginConfirmRequest(BaseModel):
+    account: str
     code: str
 
 

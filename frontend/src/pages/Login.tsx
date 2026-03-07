@@ -17,7 +17,8 @@ const Login = () => {
     const [identifier, setIdentifier] = useState('');
     const [password, setPassword] = useState('');
 
-    const [smsPhone, setSmsPhone] = useState('');
+    const [otpType, setOtpType] = useState<'phone' | 'email'>('phone');
+    const [otpAccount, setOtpAccount] = useState('');
     const [smsCode, setSmsCode] = useState('');
 
     const [oneClickToken, setOneClickToken] = useState('');
@@ -63,19 +64,19 @@ const Login = () => {
     };
 
     const handleSmsRequest = async () => {
-        if (!smsPhone.trim()) {
-            toast.error('请输入手机号');
+        if (!otpAccount.trim()) {
+            toast.error(otpType === 'phone' ? '请输入手机号' : '请输入邮箱');
             return;
         }
         setLoading(true);
         toast.loading('正在发送验证码...', { id: 'sms-request' });
         try {
-            const data = await appApi.auth.loginSmsRequest({ phone: smsPhone.trim() });
+            const data = await appApi.auth.loginOtpRequest({ account: otpAccount.trim() });
             if (data.debug_code) {
                 setSmsCode(data.debug_code);
                 toast.success(`验证码已发送（开发模式：${data.debug_code}）`, { id: 'sms-request' });
             } else {
-                toast.success('验证码已发送，请查收短信', { id: 'sms-request' });
+                toast.success(otpType === 'phone' ? '验证码已发送，请查收短信' : '验证码已发送，请查收邮箱', { id: 'sms-request' });
             }
         } catch (error) {
             toast.error(error instanceof ApiError ? error.message : '验证码发送失败', { id: 'sms-request' });
@@ -86,22 +87,22 @@ const Login = () => {
 
     const handleSmsConfirm = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!smsPhone.trim() || !smsCode.trim()) {
-            toast.error('请填写手机号和验证码');
+        if (!otpAccount.trim() || !smsCode.trim()) {
+            toast.error(otpType === 'phone' ? '请填写手机号和验证码' : '请填写邮箱和验证码');
             return;
         }
 
         setLoading(true);
         toast.loading('正在验证并登录...', { id: 'sms-confirm' });
         try {
-            await appApi.auth.loginSmsConfirm({
-                phone: smsPhone.trim(),
+            await appApi.auth.loginOtpConfirm({
+                account: otpAccount.trim(),
                 code: smsCode.trim()
             });
-            toast.success('短信登录成功', { id: 'sms-confirm' });
+            toast.success(otpType === 'phone' ? '短信登录成功' : '邮箱验证码登录成功', { id: 'sms-confirm' });
             navigate('/');
         } catch (error) {
-            toast.error(error instanceof ApiError ? error.message : '短信登录失败', { id: 'sms-confirm' });
+            toast.error(error instanceof ApiError ? error.message : '验证码登录失败', { id: 'sms-confirm' });
         } finally {
             setLoading(false);
         }
@@ -295,15 +296,32 @@ const Login = () => {
 
                     {loginMode === 'sms' && (
                         <form onSubmit={handleSmsConfirm} className="flex flex-col gap-3 md:gap-4">
+                            <div className="flex p-1 bg-gray-50 rounded-xl md:rounded-2xl">
+                                <button
+                                    type="button"
+                                    onClick={() => setOtpType('phone')}
+                                    className={`flex-1 py-2 text-[11px] md:text-sm font-bold rounded-lg md:rounded-xl transition-all ${otpType === 'phone' ? 'bg-white text-[#7E57FF] shadow-sm' : 'text-gray-400'}`}
+                                >
+                                    手机号验证码
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setOtpType('email')}
+                                    className={`flex-1 py-2 text-[11px] md:text-sm font-bold rounded-lg md:rounded-xl transition-all ${otpType === 'email' ? 'bg-white text-[#7E57FF] shadow-sm' : 'text-gray-400'}`}
+                                >
+                                    邮箱验证码
+                                </button>
+                            </div>
+
                             <div className="relative">
                                 <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-gray-400">
-                                    <Phone size={16} />
+                                    {otpType === 'phone' ? <Phone size={16} /> : <Mail size={16} />}
                                 </div>
                                 <input
-                                    type="tel"
-                                    placeholder="请输入手机号"
-                                    value={smsPhone}
-                                    onChange={(e) => setSmsPhone(e.target.value)}
+                                    type={otpType === 'phone' ? 'tel' : 'email'}
+                                    placeholder={otpType === 'phone' ? '请输入手机号' : '请输入邮箱'}
+                                    value={otpAccount}
+                                    onChange={(e) => setOtpAccount(e.target.value)}
                                     className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all"
                                 />
                             </div>
