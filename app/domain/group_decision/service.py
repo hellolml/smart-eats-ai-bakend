@@ -15,12 +15,14 @@ from app.common.errors import (
     GROUP_DECISION_LINK_EXPIRED,
     GROUP_DECISION_NOT_FOUND,
     GROUP_DECISION_NO_VALID_OPTIONS,
+    GROUP_DECISION_NOT_OPEN,
     GROUP_DECISION_ONLY_CREATOR_CAN_CLOSE,
     GROUP_DECISION_OPTIONS_REQUIRED,
     GROUP_DECISION_VOTE_ITEM_NOT_FOUND,
 )
 from app.infra.models.group_decision import GroupDecisionSession, GroupVote, GroupVoteItem
 
+STATUS_DRAFT = "draft"
 STATUS_OPEN = "open"
 STATUS_CLOSED = "closed"
 
@@ -97,6 +99,7 @@ class GroupDecisionService:
         city: str | None,
         base_url: str,
         expires_hours: int = 24,
+        as_draft: bool = False,
     ) -> dict[str, Any]:
         if not options:
             raise AppError(code=GROUP_DECISION_OPTIONS_REQUIRED, message="options required", http_status=400)
@@ -109,7 +112,7 @@ class GroupDecisionService:
             creator_user_id=creator_user_id,
             title=(title or "今晚吃什么")[:128],
             city=city,
-            status=STATUS_OPEN,
+            status=STATUS_DRAFT if as_draft else STATUS_OPEN,
             share_token=share_token,
             expires_at=now + timedelta(hours=max(1, min(expires_hours, 168))),
         )
@@ -172,8 +175,10 @@ class GroupDecisionService:
         expires_at = _normalize_utc(session.expires_at)
         if expires_at and expires_at <= now and session.status != STATUS_CLOSED:
             session.status = STATUS_CLOSED
-        if session.status != STATUS_OPEN:
+        if session.status == STATUS_CLOSED:
             raise AppError(code=GROUP_DECISION_ALREADY_CLOSED, message="group decision already closed", http_status=400)
+        if session.status != STATUS_OPEN:
+            raise AppError(code=GROUP_DECISION_NOT_OPEN, message="group decision is not open", http_status=400)
 
         item = (
             await db.execute(
@@ -225,6 +230,32 @@ class GroupDecisionService:
         }
 
     @staticmethod
+    async def open_session(
+        db: AsyncSession,
+        *,
+        session_id: str,
+        actor_user_id: str,
+        base_url: str,
+    ) -> dict[str, Any]:
+        session = await _load_session(db, session_id)
+        if session.creator_user_id != actor_user_id:
+            raise AppError(code=GROUP_DECISION_ONLY_CREATOR_CAN_CLOSE, message="only creator can open this group decision", http_status=403)
+
+        if session.status == STATUS_CLOSED:
+            raise AppError(code=GROUP_DECISION_ALREADY_CLOSED, message="group decision already closed", http_status=400)
+
+        session.status = STATUS_OPEN
+        await db.commit()
+        share_link = _share_url(base_url, session_id, session.share_token)
+        return {
+            "id": session.id,
+            "title": session.title,
+            "city": session.city,
+            "status": session.status,
+            "share_url": share_link,
+        }
+
+    @staticmethod
     async def close_session(
         db: AsyncSession,
         *,
@@ -235,6 +266,8 @@ class GroupDecisionService:
         session = await _load_session(db, session_id)
         if session.creator_user_id != actor_user_id:
             raise AppError(code=GROUP_DECISION_ONLY_CREATOR_CAN_CLOSE, message="only creator can close this group decision", http_status=403)
+        if session.status != STATUS_OPEN:
+            raise AppError(code=GROUP_DECISION_NOT_OPEN, message="group decision is not open", http_status=400)
 
         ranked, total_votes = await _calc_ranked_items(db, session_id)
         winner = ranked[0] if ranked else None

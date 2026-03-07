@@ -603,11 +603,17 @@ export const appApi = {
             title?: string;
             city?: string;
             expires_hours?: number;
+            as_draft?: boolean;
             options: Array<{ title: string; item_type?: string; meta?: Record<string, unknown> }>;
         }) {
             return request<AppGroupDecisionSession>('/group-decisions', {
                 method: 'POST',
                 body: payload
+            });
+        },
+        async open(session_id: string) {
+            return request<{ id: string; status: string; share_url: string }>(`/group-decisions/${session_id}/open`, {
+                method: 'POST'
             });
         },
         async vote(payload: {

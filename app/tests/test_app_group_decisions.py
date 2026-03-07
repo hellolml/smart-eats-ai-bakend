@@ -108,6 +108,68 @@ async def test_only_creator_can_close_group_decision(client):
 
 
 @pytest.mark.asyncio
+async def test_group_decision_draft_open_close_state_machine(client):
+    owner_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "group_owner4@example.com", "password": "secret123", "name": "Owner4"},
+    )
+    assert owner_resp.status_code == 200
+    owner_token = owner_resp.json()["data"]["access_token"]
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+
+    other_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "group_other2@example.com", "password": "secret123", "name": "Other2"},
+    )
+    assert other_resp.status_code == 200
+    other_token = other_resp.json()["data"]["access_token"]
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+
+    create_resp = await client.post(
+        "/api/v1/app/group-decisions",
+        headers=owner_headers,
+        json={
+            "title": "工作餐",
+            "as_draft": True,
+            "options": [
+                {"title": "黄焖鸡", "item_type": "restaurant", "meta": {}},
+                {"title": "麻辣烫", "item_type": "restaurant", "meta": {}},
+            ],
+        },
+    )
+    assert create_resp.status_code == 200
+    data = create_resp.json()["data"]
+    session_id = data["id"]
+    item_id = data["items"][0]["id"]
+    share_token = data["share_token"]
+    assert data["status"] == "draft"
+
+    vote_in_draft = await client.post(
+        f"/api/v1/app/group-decisions/{session_id}/vote?token={share_token}",
+        json={"item_id": item_id, "voter_name": "guest", "voter_key": "guest-1"},
+    )
+    assert vote_in_draft.status_code == 400
+    assert vote_in_draft.json()["code"] == 44010
+
+    open_by_other = await client.post(f"/api/v1/app/group-decisions/{session_id}/open", headers=other_headers)
+    assert open_by_other.status_code == 403
+
+    open_by_owner = await client.post(f"/api/v1/app/group-decisions/{session_id}/open", headers=owner_headers)
+    assert open_by_owner.status_code == 200
+    assert open_by_owner.json()["data"]["status"] == "open"
+
+    vote_in_open = await client.post(
+        f"/api/v1/app/group-decisions/{session_id}/vote?token={share_token}",
+        json={"item_id": item_id, "voter_name": "guest", "voter_key": "guest-1"},
+    )
+    assert vote_in_open.status_code == 200
+
+    close_by_owner = await client.post(f"/api/v1/app/group-decisions/{session_id}/close", headers=owner_headers)
+    assert close_by_owner.status_code == 200
+    assert close_by_owner.json()["data"]["status"] == "closed"
+
+
+@pytest.mark.asyncio
 async def test_group_decision_requires_valid_share_token(client):
     resp = await client.post(
         "/api/v1/app/auth/register",

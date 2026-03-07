@@ -91,6 +91,7 @@ class GroupDecisionCreateRequest(BaseModel):
     city: str | None = None
     options: list[GroupDecisionOptionInput] = Field(default_factory=list, min_length=2, max_length=12)
     expires_hours: int = Field(default=24, ge=1, le=168)
+    as_draft: bool = False
 
 
 class GroupDecisionVoteRequest(BaseModel):
@@ -538,6 +539,7 @@ async def app_create_group_decision(
         city=payload.city,
         base_url=str(request.base_url),
         expires_hours=payload.expires_hours,
+        as_draft=payload.as_draft,
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
 
@@ -558,6 +560,22 @@ async def app_vote_group_decision(
         voter_key=payload.voter_key,
         share_token=token,
         note=payload.note,
+    )
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/group-decisions/{session_id}/open")
+async def app_open_group_decision(
+    session_id: str,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await GroupDecisionService.open_session(
+        db,
+        session_id=session_id,
+        actor_user_id=user_id,
+        base_url=str(request.base_url),
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
 
