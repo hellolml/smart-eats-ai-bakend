@@ -131,4 +131,23 @@ async def _ensure_sqlite_columns(conn) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_group_votes_session_voter ON group_votes(session_id, voter_key)"
     )
 
+    user_session_cols_result = await conn.exec_driver_sql("PRAGMA table_info(user_sessions)")
+    user_session_cols = {row[1] for row in user_session_cols_result.fetchall()}
+    if "session_family_id" not in user_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_sessions ADD COLUMN session_family_id VARCHAR(36)")
+    if "current_refresh_jti" not in user_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_sessions ADD COLUMN current_refresh_jti VARCHAR(64)")
+    if "refresh_expires_at" not in user_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_sessions ADD COLUMN refresh_expires_at DATETIME")
+    if "last_ip" not in user_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_sessions ADD COLUMN last_ip VARCHAR(64)")
+    if "status" not in user_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_sessions ADD COLUMN status VARCHAR(24) DEFAULT 'active'")
+    if "revoke_reason" not in user_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_sessions ADD COLUMN revoke_reason VARCHAR(64)")
+    if "rotation_counter" not in user_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_sessions ADD COLUMN rotation_counter INTEGER DEFAULT 0")
+    if "last_seen_at" not in user_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE user_sessions ADD COLUMN last_seen_at DATETIME")
+
     await conn.exec_driver_sql("DROP TABLE IF EXISTS chat_checkpoints")

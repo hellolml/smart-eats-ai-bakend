@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
@@ -42,6 +43,7 @@ from app.domain.restaurant.service import RestaurantService
 from app.infra.models.chat import ChatMessage, ChatSession
 from app.infra.models.fridge import FridgeItem, FridgePhoto, RecognitionJob
 from app.infra.models.game import BlindboxRoll, WheelConfig, WheelSpin
+from app.infra.models.auth import UserSession
 from app.infra.models.grocery import GroceryList, GroceryListItem
 from app.infra.models.preference import UserPreference, UserProfile
 from app.infra.models.user import User
@@ -171,21 +173,87 @@ class AppBffService:
         return f"{provider_key}:{model_id}"
 
     @staticmethod
-    async def issue_tokens(user_id: str, redis_client: redis.Redis) -> dict[str, Any]:
+    def _sha256(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    async def issue_tokens(
+        user_id: str,
+        redis_client: redis.Redis,
+        db: AsyncSession,
+        *,
+        ip: str | None = None,
+        device_info: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
         access_token, _ = create_access_token(user_id)
-        refresh_token, refresh_jti = create_refresh_token(user_id)
+
+        if session_id:
+            existing = (await db.execute(select(UserSession).where(UserSession.id == session_id))).scalar_one_or_none()
+            if existing is None:
+                session_id = None
+
+        if session_id is None:
+            session_id = str(uuid4())
+            family_id = str(uuid4())
+            session = UserSession(
+                id=session_id,
+                user_id=user_id,
+                session_family_id=family_id,
+                refresh_token_hash="",
+                device_info=(device_info or "")[:255] or None,
+                ip=ip,
+                last_ip=ip,
+                status="active",
+                rotation_counter=0,
+                last_seen_at=now,
+            )
+            db.add(session)
+        else:
+            session = (await db.execute(select(UserSession).where(UserSession.id == session_id))).scalar_one()
+            family_id = session.session_family_id or str(uuid4())
+            session.session_family_id = family_id
+            session.last_seen_at = now
+            session.last_ip = ip
+            if device_info:
+                session.device_info = device_info[:255]
+            session.status = "active"
+            session.revoked_at = None
+            session.revoke_reason = None
+
+        rotation = int(session.rotation_counter or 0) + 1
+        refresh_token, refresh_jti = create_refresh_token(
+            user_id,
+            session_id=session_id,
+            family_id=family_id,
+            rotation=rotation,
+        )
+
+        old_jti = session.current_refresh_jti
+        session.current_refresh_jti = refresh_jti
+        session.refresh_token_hash = AppBffService._sha256(refresh_jti)
+        session.rotation_counter = rotation
+        session.refresh_expires_at = now + timedelta(seconds=settings.REFRESH_TOKEN_TTL_SECONDS)
+
+        await db.commit()
+
         try:
             await redis_client.setex(f"rt:{refresh_jti}", settings.REFRESH_TOKEN_TTL_SECONDS, user_id)
+            if old_jti:
+                await redis_client.setex(f"rtu:{old_jti}", settings.REFRESH_TOKEN_TTL_SECONDS, session_id)
         except RedisError as exc:
             logger.warning("refresh token persistence skipped: redis unavailable user_id=%s err=%s", user_id, exc)
+
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer",
+            "session_id": session_id,
         }
 
     @staticmethod
-    async def register(payload: dict[str, Any], db: AsyncSession, redis_client: redis.Redis) -> dict[str, Any]:
+    async def register(payload: dict[str, Any], db: AsyncSession, redis_client: redis.Redis, client_ip: str) -> dict[str, Any]:
         email = payload.get("email")
         phone = payload.get("phone")
         if not email and not phone:
@@ -210,7 +278,7 @@ class AppBffService:
         )
         db.add(user)
         await db.commit()
-        return await AppBffService.issue_tokens(user.id, redis_client)
+        return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 
     @staticmethod
     async def login(
@@ -227,6 +295,11 @@ class AppBffService:
             window_seconds=60,
         )
 
+        lock_key = f"auth:lock:{account}"
+        fail_key = f"auth:fail:{account}"
+        if await redis_client.exists(lock_key):
+            raise HTTPException(status_code=423, detail="account temporarily locked")
+
         if "@" in account:
             result = await db.execute(select(User).where(User.email == account))
         else:
@@ -234,12 +307,33 @@ class AppBffService:
 
         user = result.scalar_one_or_none()
         if user is None or not verify_password(payload["password"], user.password_hash):
+            failures = await redis_client.incr(fail_key)
+            if failures == 1:
+                await redis_client.expire(fail_key, 3600)
+            if failures >= 5:
+                await redis_client.setex(lock_key, 15 * 60, "1")
             raise HTTPException(status_code=401, detail="invalid credentials")
 
-        return await AppBffService.issue_tokens(user.id, redis_client)
+        await redis_client.delete(fail_key)
+        return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 
     @staticmethod
-    async def refresh(refresh_token: str, redis_client: redis.Redis) -> dict[str, Any]:
+    async def _revoke_family(db: AsyncSession, redis_client: redis.Redis, user_id: str, family_id: str, reason: str) -> None:
+        sessions = (
+            await db.execute(
+                select(UserSession).where(UserSession.user_id == user_id, UserSession.session_family_id == family_id)
+            )
+        ).scalars().all()
+        for s in sessions:
+            s.status = "risk_locked"
+            s.revoked_at = datetime.now(timezone.utc)
+            s.revoke_reason = reason[:64]
+            if s.current_refresh_jti:
+                await redis_client.delete(f"rt:{s.current_refresh_jti}")
+        await db.commit()
+
+    @staticmethod
+    async def refresh(refresh_token: str, redis_client: redis.Redis, db: AsyncSession, client_ip: str) -> dict[str, Any]:
         try:
             claims = decode_token(refresh_token, expected_type="refresh")
         except AuthError as exc:
@@ -247,32 +341,56 @@ class AppBffService:
 
         jti = claims.get("jti")
         user_id = str(claims.get("sub"))
-        if not jti or not user_id:
+        session_id = str(claims.get("sid") or "")
+        family_id = str(claims.get("fid") or "")
+        if not jti or not user_id or not session_id:
             raise HTTPException(status_code=401, detail="refresh token invalid")
 
-        key = f"rt:{jti}"
+        session = (await db.execute(select(UserSession).where(UserSession.id == session_id))).scalar_one_or_none()
+        if session is None or session.user_id != user_id or session.status != "active":
+            raise HTTPException(status_code=401, detail="refresh token revoked")
+
+        if session.current_refresh_jti != jti:
+            await AppBffService._revoke_family(db, redis_client, user_id, family_id or (session.session_family_id or ""), "replay")
+            raise HTTPException(status_code=401, detail="refresh token replay detected")
+
         try:
-            stored_user = await redis_client.get(key)
+            stored_user = await redis_client.get(f"rt:{jti}")
             if stored_user != user_id:
                 raise HTTPException(status_code=401, detail="refresh token revoked")
-            await redis_client.delete(key)
+            await redis_client.delete(f"rt:{jti}")
+            await redis_client.setex(f"rtu:{jti}", settings.REFRESH_TOKEN_TTL_SECONDS, session_id)
         except RedisError as exc:
             logger.error("refresh failed: redis unavailable user_id=%s err=%s", user_id, exc)
             raise AppError(code=REDIS_UNAVAILABLE, message="redis unavailable", http_status=503) from exc
 
-        return await AppBffService.issue_tokens(user_id, redis_client)
+        return await AppBffService.issue_tokens(
+            user_id,
+            redis_client,
+            db,
+            ip=client_ip,
+            session_id=session_id,
+        )
 
     @staticmethod
-    async def logout(refresh_token: str, redis_client: redis.Redis) -> dict[str, Any]:
+    async def logout(refresh_token: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
         try:
             claims = decode_token(refresh_token, expected_type="refresh")
             jti = claims.get("jti")
+            session_id = claims.get("sid")
             if jti:
                 try:
                     await redis_client.delete(f"rt:{jti}")
                 except RedisError as exc:
                     logger.error("logout failed: redis unavailable jti=%s err=%s", jti, exc)
                     raise AppError(code=REDIS_UNAVAILABLE, message="redis unavailable", http_status=503) from exc
+            if session_id:
+                s = (await db.execute(select(UserSession).where(UserSession.id == str(session_id)))).scalar_one_or_none()
+                if s:
+                    s.status = "revoked"
+                    s.revoked_at = datetime.now(timezone.utc)
+                    s.revoke_reason = "logout"
+                    await db.commit()
         except AuthError:
             pass
         return {"logged_out": True}
@@ -292,6 +410,72 @@ class AppBffService:
             raise HTTPException(status_code=401, detail="invalid credentials")
 
         user.password_hash = hash_password(new_password)
+        await db.commit()
+        return {"updated": True}
+
+    @staticmethod
+    async def password_reset_request(account: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
+        if "@" in account:
+            user = (await db.execute(select(User).where(User.email == account))).scalar_one_or_none()
+        else:
+            user = (await db.execute(select(User).where(User.phone == account))).scalar_one_or_none()
+
+        # keep response generic to avoid account enumeration
+        if user is None:
+            return {"sent": True}
+
+        code = f"{random.randint(0, 999999):06d}"
+        await redis_client.setex(
+            f"otp:pwdreset:{account}",
+            10 * 60,
+            AppBffService._sha256(code),
+        )
+        await redis_client.setex(f"otp:pwdreset:attempts:{account}", 10 * 60, "0")
+        resp: dict[str, Any] = {"sent": True}
+        if settings.DEBUG:
+            resp["debug_code"] = code
+        return resp
+
+    @staticmethod
+    async def password_reset_confirm(
+        account: str,
+        code: str,
+        new_password: str,
+        redis_client: redis.Redis,
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        code_hash = await redis_client.get(f"otp:pwdreset:{account}")
+        if not code_hash:
+            raise HTTPException(status_code=400, detail="reset code invalid or expired")
+
+        attempts_key = f"otp:pwdreset:attempts:{account}"
+        attempts = await redis_client.incr(attempts_key)
+        if attempts > 5:
+            await redis_client.delete(f"otp:pwdreset:{account}")
+            raise HTTPException(status_code=400, detail="reset code invalid or expired")
+
+        if AppBffService._sha256(code) != code_hash:
+            raise HTTPException(status_code=400, detail="reset code invalid or expired")
+
+        if "@" in account:
+            user = (await db.execute(select(User).where(User.email == account))).scalar_one_or_none()
+        else:
+            user = (await db.execute(select(User).where(User.phone == account))).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=404, detail="user not found")
+
+        user.password_hash = hash_password(new_password)
+
+        sessions = (await db.execute(select(UserSession).where(UserSession.user_id == user.id))).scalars().all()
+        for s in sessions:
+            s.status = "revoked"
+            s.revoked_at = datetime.now(timezone.utc)
+            s.revoke_reason = "password_reset"
+            if s.current_refresh_jti:
+                await redis_client.delete(f"rt:{s.current_refresh_jti}")
+
+        await redis_client.delete(f"otp:pwdreset:{account}")
+        await redis_client.delete(attempts_key)
         await db.commit()
         return {"updated": True}
 

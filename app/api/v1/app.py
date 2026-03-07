@@ -26,6 +26,8 @@ from app.domain.app.schemas import (
     LogoutRequest,
     MePreferencesUpdateRequest,
     GoalStateUpdateRequest,
+    PasswordResetConfirmRequest,
+    PasswordResetRequestRequest,
     RefreshRequest,
     RegisterRequest,
     RestaurantsQuery,
@@ -109,7 +111,8 @@ async def list_chat_models(request: Request, _user_id: str = Depends(get_current
 
 @router.post("/auth/register")
 async def register(payload: RegisterRequest, request: Request, db: db_dep, redis: redis_dep):
-    data = await AppBffService.register(payload.model_dump(), db, redis)
+    client_ip = request.client.host if request.client else "unknown"
+    data = await AppBffService.register(payload.model_dump(), db, redis, client_ip)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -121,8 +124,9 @@ async def login(payload: LoginRequest, request: Request, db: db_dep, redis: redi
 
 
 @router.post("/auth/refresh")
-async def refresh(payload: RefreshRequest, request: Request, redis: redis_dep):
-    data = await AppBffService.refresh(payload.refresh_token, redis)
+async def refresh(payload: RefreshRequest, request: Request, db: db_dep, redis: redis_dep):
+    client_ip = request.client.host if request.client else "unknown"
+    data = await AppBffService.refresh(payload.refresh_token, redis, db, client_ip)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -130,10 +134,11 @@ async def refresh(payload: RefreshRequest, request: Request, redis: redis_dep):
 async def logout(
     payload: LogoutRequest,
     request: Request,
+    db: db_dep,
     redis: redis_dep,
     _user_id: str = Depends(get_current_user_id),
 ):
-    data = await AppBffService.logout(payload.refresh_token, redis)
+    data = await AppBffService.logout(payload.refresh_token, redis, db)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -148,6 +153,34 @@ async def change_password(
         user_id=user_id,
         old_password=payload.old_password,
         new_password=payload.new_password,
+        db=db,
+    )
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/password/reset-request")
+async def password_reset_request(
+    payload: PasswordResetRequestRequest,
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+):
+    data = await AppBffService.password_reset_request(payload.account, redis, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/password/reset-confirm")
+async def password_reset_confirm(
+    payload: PasswordResetConfirmRequest,
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+):
+    data = await AppBffService.password_reset_confirm(
+        account=payload.account,
+        code=payload.code,
+        new_password=payload.new_password,
+        redis_client=redis,
         db=db,
     )
     return envelope(data, getattr(request.state, "trace_id", ""))

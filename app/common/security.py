@@ -49,7 +49,13 @@ def create_access_token(user_id: str) -> tuple[str, str]:
     return _encode_token(payload), jti
 
 
-def create_refresh_token(user_id: str) -> tuple[str, str]:
+def create_refresh_token(
+    user_id: str,
+    *,
+    session_id: str | None = None,
+    family_id: str | None = None,
+    rotation: int | None = None,
+) -> tuple[str, str]:
     jti = str(uuid4())
     now = _now()
     payload = {
@@ -61,6 +67,12 @@ def create_refresh_token(user_id: str) -> tuple[str, str]:
         "exp": now + timedelta(seconds=settings.REFRESH_TOKEN_TTL_SECONDS),
         "jti": jti,
     }
+    if session_id:
+        payload["sid"] = session_id
+    if family_id:
+        payload["fid"] = family_id
+    if rotation is not None:
+        payload["rot"] = int(rotation)
     return _encode_token(payload), jti
 
 

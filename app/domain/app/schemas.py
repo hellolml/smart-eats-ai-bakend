@@ -76,6 +76,16 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class PasswordResetRequestRequest(BaseModel):
+    account: str
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    account: str
+    code: str
+    new_password: str
+
+
 class UpdateMeRequest(BaseModel):
     name: str | None = None
     avatar: str | None = None

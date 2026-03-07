@@ -112,3 +112,66 @@ async def test_app_logout_accepts_camel_refresh_token(client):
     )
     assert resp.status_code == 200
     assert resp.json()["data"]["logged_out"] is True
+
+
+@pytest.mark.asyncio
+async def test_app_password_reset_flow(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_reset@example.com", "password": "old123", "name": "reset"},
+    )
+    assert register_resp.status_code == 200
+
+    req_resp = await client.post(
+        "/api/v1/app/auth/password/reset-request",
+        json={"account": "app_reset@example.com"},
+    )
+    assert req_resp.status_code == 200
+    code = req_resp.json()["data"]["debug_code"]
+
+    confirm_resp = await client.post(
+        "/api/v1/app/auth/password/reset-confirm",
+        json={"account": "app_reset@example.com", "code": code, "new_password": "new456"},
+    )
+    assert confirm_resp.status_code == 200
+
+    old_login = await client.post(
+        "/api/v1/app/auth/login",
+        json={"account": "app_reset@example.com", "password": "old123"},
+    )
+    assert old_login.status_code == 401
+
+    new_login = await client.post(
+        "/api/v1/app/auth/login",
+        json={"account": "app_reset@example.com", "password": "new456"},
+    )
+    assert new_login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_app_refresh_token_replay_detected(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_replay@example.com", "password": "secret123", "name": "replay"},
+    )
+    assert register_resp.status_code == 200
+    tokens = register_resp.json()["data"]
+
+    first_refresh = await client.post(
+        "/api/v1/app/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    assert first_refresh.status_code == 200
+
+    replay_refresh = await client.post(
+        "/api/v1/app/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    assert replay_refresh.status_code == 401
+
+    latest_refresh = first_refresh.json()["data"]["refresh_token"]
+    blocked_refresh = await client.post(
+        "/api/v1/app/auth/refresh",
+        json={"refresh_token": latest_refresh},
+    )
+    assert blocked_refresh.status_code == 401
