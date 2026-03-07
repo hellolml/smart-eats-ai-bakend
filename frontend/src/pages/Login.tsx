@@ -21,6 +21,11 @@ const Login = () => {
 
     const [oneClickToken, setOneClickToken] = useState('');
 
+    const [showResetModal, setShowResetModal] = useState(false);
+    const [resetAccount, setResetAccount] = useState('');
+    const [resetCode, setResetCode] = useState('');
+    const [resetNewPassword, setResetNewPassword] = useState('');
+
     const handlePasswordLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!identifier.trim() || !password) {
@@ -130,6 +135,52 @@ const Login = () => {
         }
     };
 
+    const handleResetRequest = async () => {
+        if (!resetAccount.trim()) {
+            toast.error('请输入手机号或邮箱');
+            return;
+        }
+        setLoading(true);
+        toast.loading('正在发送重置验证码...', { id: 'reset-request' });
+        try {
+            const data = await appApi.auth.resetPasswordRequest({ account: resetAccount.trim() });
+            if (data.debug_code) {
+                setResetCode(data.debug_code);
+                toast.success(`验证码已发送（开发模式：${data.debug_code}）`, { id: 'reset-request' });
+            } else {
+                toast.success('验证码已发送，请查收', { id: 'reset-request' });
+            }
+        } catch (error) {
+            toast.error(error instanceof ApiError ? error.message : '发送失败', { id: 'reset-request' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleResetConfirm = async () => {
+        if (!resetAccount.trim() || !resetCode.trim() || !resetNewPassword) {
+            toast.error('请填写完整重置信息');
+            return;
+        }
+        setLoading(true);
+        toast.loading('正在重置密码...', { id: 'reset-confirm' });
+        try {
+            await appApi.auth.resetPasswordConfirm({
+                account: resetAccount.trim(),
+                code: resetCode.trim(),
+                newPassword: resetNewPassword,
+            });
+            toast.success('密码重置成功，请使用新密码登录', { id: 'reset-confirm' });
+            setShowResetModal(false);
+            setResetCode('');
+            setResetNewPassword('');
+        } catch (error) {
+            toast.error(error instanceof ApiError ? error.message : '重置失败', { id: 'reset-confirm' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
         <div className="h-full flex flex-col justify-center items-center px-4 py-4 overflow-hidden">
             <motion.div
@@ -212,6 +263,19 @@ const Login = () => {
                                             className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all"
                                         />
                                     </div>
+                                </div>
+
+                                <div className="flex justify-end">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setResetAccount(identifier.trim());
+                                            setShowResetModal(true);
+                                        }}
+                                        className="text-[10px] md:text-xs font-bold text-[#7E57FF] hover:underline"
+                                    >
+                                        忘记密码？
+                                    </button>
                                 </div>
 
                                 <button
@@ -335,6 +399,57 @@ const Login = () => {
                     </div>
                 </div>
             </motion.div>
+
+            {showResetModal && (
+                <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 px-4">
+                    <div className="w-full max-w-sm bg-white rounded-2xl p-4 space-y-3">
+                        <div className="text-sm font-semibold">重置密码</div>
+                        <input
+                            type="text"
+                            placeholder="手机号或邮箱"
+                            value={resetAccount}
+                            onChange={(e) => setResetAccount(e.target.value)}
+                            className="w-full bg-gray-50 rounded-xl px-3 py-2 text-sm outline-none"
+                        />
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                placeholder="验证码"
+                                value={resetCode}
+                                onChange={(e) => setResetCode(e.target.value)}
+                                className="flex-1 bg-gray-50 rounded-xl px-3 py-2 text-sm outline-none"
+                            />
+                            <button
+                                onClick={handleResetRequest}
+                                className="px-3 py-2 text-xs rounded-xl bg-gray-100 text-gray-700"
+                            >
+                                发验证码
+                            </button>
+                        </div>
+                        <input
+                            type="password"
+                            placeholder="新密码"
+                            value={resetNewPassword}
+                            onChange={(e) => setResetNewPassword(e.target.value)}
+                            className="w-full bg-gray-50 rounded-xl px-3 py-2 text-sm outline-none"
+                        />
+                        <div className="flex justify-end gap-2">
+                            <button
+                                onClick={() => setShowResetModal(false)}
+                                className="px-3 py-2 text-xs rounded-xl bg-gray-100 text-gray-700"
+                            >
+                                取消
+                            </button>
+                            <button
+                                onClick={handleResetConfirm}
+                                className="px-3 py-2 text-xs rounded-xl bg-[#7E57FF] text-white"
+                            >
+                                确认重置
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

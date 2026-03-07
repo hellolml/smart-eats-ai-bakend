@@ -547,6 +547,26 @@ export const appApi = {
             });
         },
 
+        async resetPasswordRequest(payload: { account: string }) {
+            return request<{ sent: boolean; debug_code?: string }>('/auth/password/reset-request', {
+                method: 'POST',
+                auth: false,
+                body: payload
+            });
+        },
+
+        async resetPasswordConfirm(payload: { account: string; code: string; newPassword: string }) {
+            return request<{ updated: boolean }>('/auth/password/reset-confirm', {
+                method: 'POST',
+                auth: false,
+                body: {
+                    account: payload.account,
+                    code: payload.code,
+                    new_password: payload.newPassword
+                }
+            });
+        },
+
         async logoutAll() {
             try {
                 return await request<{ revoked: number }>('/auth/logout-all', {
