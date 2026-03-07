@@ -9,7 +9,7 @@ type LoginMode = 'password' | 'sms' | 'oneclick';
 
 const Login = () => {
     const navigate = useNavigate();
-    const showOneClickLogin = String(process.env.APP_SHOW_ONECLICK_LOGIN || 'false').toLowerCase() === 'true';
+    const showOneClickLogin = String(__APP_SHOW_ONECLICK_LOGIN__ || 'false').toLowerCase() === 'true';
     const [loginType, setLoginType] = useState<'phone' | 'email'>('phone');
     const [loginMode, setLoginMode] = useState<LoginMode>('password');
     const [loading, setLoading] = useState(false);
