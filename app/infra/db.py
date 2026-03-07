@@ -116,4 +116,19 @@ async def _ensure_sqlite_columns(conn) -> None:
         """
     )
 
+    group_session_cols_result = await conn.exec_driver_sql("PRAGMA table_info(group_decision_sessions)")
+    group_session_cols = {row[1] for row in group_session_cols_result.fetchall()}
+    if "closed_at" not in group_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE group_decision_sessions ADD COLUMN closed_at DATETIME")
+    if "winner_item_id" not in group_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE group_decision_sessions ADD COLUMN winner_item_id VARCHAR(36)")
+    if "total_votes" not in group_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE group_decision_sessions ADD COLUMN total_votes INTEGER DEFAULT 0")
+    if "result_snapshot" not in group_session_cols:
+        await conn.exec_driver_sql("ALTER TABLE group_decision_sessions ADD COLUMN result_snapshot JSON")
+
+    await conn.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_group_votes_session_voter ON group_votes(session_id, voter_key)"
+    )
+
     await conn.exec_driver_sql("DROP TABLE IF EXISTS chat_checkpoints")

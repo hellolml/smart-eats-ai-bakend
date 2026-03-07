@@ -560,6 +560,22 @@ async def app_vote_group_decision(
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
+@router.post("/group-decisions/{session_id}/close")
+async def app_close_group_decision(
+    session_id: str,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await GroupDecisionService.close_session(
+        db,
+        session_id=session_id,
+        actor_user_id=user_id,
+        base_url=str(request.base_url),
+    )
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
 @router.get("/group-decisions/{session_id}/result")
 async def app_group_decision_result(
     session_id: str,
