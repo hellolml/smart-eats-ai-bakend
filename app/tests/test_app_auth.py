@@ -51,7 +51,7 @@ async def test_app_auth_flow(client):
 async def test_app_change_password(client):
     resp = await client.post(
         "/api/v1/app/auth/register",
-        json={"email": "app_changepw@example.com", "password": "old123", "name": "name"},
+        json={"email": "app_changepw@example.com", "password": "oldPass123", "name": "name"},
     )
     assert resp.status_code == 200
     tokens = resp.json()["data"]
@@ -59,21 +59,21 @@ async def test_app_change_password(client):
 
     resp = await client.post(
         "/api/v1/app/auth/password/change",
-        json={"old_password": "old123", "new_password": "new456"},
+        json={"old_password": "oldPass123", "new_password": "newPass456"},
         headers=headers,
     )
     assert resp.status_code == 200
 
     resp = await client.post(
         "/api/v1/app/auth/login",
-        json={"account": "app_changepw@example.com", "password": "old123"},
+        json={"account": "app_changepw@example.com", "password": "oldPass123"},
     )
     assert resp.status_code == 401
     assert resp.json()["code"] == 41009
 
     resp = await client.post(
         "/api/v1/app/auth/login",
-        json={"account": "app_changepw@example.com", "password": "new456"},
+        json={"account": "app_changepw@example.com", "password": "newPass456"},
     )
     assert resp.status_code == 200
 
@@ -82,13 +82,13 @@ async def test_app_change_password(client):
 async def test_app_login_accepts_phone_payload(client):
     resp = await client.post(
         "/api/v1/app/auth/register",
-        json={"phone": "15509296651", "password": "12345678", "name": "phone_user"},
+        json={"phone": "15509296651", "password": "abc12345", "name": "phone_user"},
     )
     assert resp.status_code == 200
 
     resp = await client.post(
         "/api/v1/app/auth/login",
-        json={"phone": "15509296651", "password": "12345678"},
+        json={"phone": "15509296651", "password": "abc12345"},
     )
     assert resp.status_code == 200
     data = resp.json()["data"]
@@ -119,7 +119,7 @@ async def test_app_logout_accepts_camel_refresh_token(client):
 async def test_app_password_reset_flow(client):
     register_resp = await client.post(
         "/api/v1/app/auth/register",
-        json={"email": "app_reset@example.com", "password": "old123", "name": "reset"},
+        json={"email": "app_reset@example.com", "password": "oldPass123", "name": "reset"},
     )
     assert register_resp.status_code == 200
 
@@ -132,19 +132,19 @@ async def test_app_password_reset_flow(client):
 
     confirm_resp = await client.post(
         "/api/v1/app/auth/password/reset-confirm",
-        json={"account": "app_reset@example.com", "code": code, "new_password": "new456"},
+        json={"account": "app_reset@example.com", "code": code, "new_password": "newPass456"},
     )
     assert confirm_resp.status_code == 200
 
     old_login = await client.post(
         "/api/v1/app/auth/login",
-        json={"account": "app_reset@example.com", "password": "old123"},
+        json={"account": "app_reset@example.com", "password": "oldPass123"},
     )
     assert old_login.status_code == 401
 
     new_login = await client.post(
         "/api/v1/app/auth/login",
-        json={"account": "app_reset@example.com", "password": "new456"},
+        json={"account": "app_reset@example.com", "password": "newPass456"},
     )
     assert new_login.status_code == 200
 
@@ -215,7 +215,7 @@ async def test_app_login_lock_after_multiple_failures(client):
     for _ in range(5):
         bad = await client.post(
             "/api/v1/app/auth/login",
-            json={"account": "app_lock@example.com", "password": "wrong"},
+            json={"account": "app_lock@example.com", "password": "wrong123"},
         )
         assert bad.status_code == 401
 
@@ -387,7 +387,7 @@ async def test_app_auth_events_endpoint(client):
     # trigger one auth event
     login_fail = await client.post(
         "/api/v1/app/auth/login",
-        json={"account": "app_events@example.com", "password": "wrong"},
+        json={"account": "app_events@example.com", "password": "wrong123"},
     )
     assert login_fail.status_code == 401
 

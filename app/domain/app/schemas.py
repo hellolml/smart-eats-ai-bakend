@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, TypeAdapter, ValidationInfo, field_validator, model_validator
+
+
+PHONE_CN_RE = re.compile(r"^1[3-9]\d{9}$")
+
+
+def _is_valid_cn_phone(value: str) -> bool:
+    return bool(PHONE_CN_RE.fullmatch(value.strip()))
+
+
+def _is_valid_email(value: str) -> bool:
+    try:
+        TypeAdapter(EmailStr).validate_python(value)
+        return True
+    except Exception:
+        return False
+
+
+def _validate_password_strength(value: str) -> str:
+    if not (8 <= len(value) <= 64):
+        raise ValueError("password length must be between 8 and 64")
+    if not re.search(r"[A-Za-z]", value):
+        raise ValueError("password must contain at least one letter")
+    if not re.search(r"\d", value):
+        raise ValueError("password must contain at least one number")
+    return value
 
 
 class RegisterRequest(BaseModel):
@@ -12,10 +38,41 @@ class RegisterRequest(BaseModel):
     password: str
     name: str | None = None
 
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        if value is None:
+            return value
+        clean = value.strip()
+        if not _is_valid_cn_phone(clean):
+            raise ValueError("phone must match ^1[3-9]\\d{9}$")
+        return clean
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str):
+        return _validate_password_strength(value)
+
 
 class RegisterOtpRequest(BaseModel):
     email: EmailStr | None = None
     phone: str | None = None
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        if value is None:
+            return value
+        clean = value.strip()
+        if not _is_valid_cn_phone(clean):
+            raise ValueError("phone must match ^1[3-9]\\d{9}$")
+        return clean
+
+    @model_validator(mode="after")
+    def validate_identity(self):
+        if not self.email and not self.phone:
+            raise ValueError("email or phone required")
+        return self
 
 
 class RegisterConfirmRequest(BaseModel):
@@ -25,10 +82,39 @@ class RegisterConfirmRequest(BaseModel):
     password: str
     name: str | None = None
 
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        if value is None:
+            return value
+        clean = value.strip()
+        if not _is_valid_cn_phone(clean):
+            raise ValueError("phone must match ^1[3-9]\\d{9}$")
+        return clean
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str):
+        return _validate_password_strength(value)
+
+    @model_validator(mode="after")
+    def validate_identity(self):
+        if not self.email and not self.phone:
+            raise ValueError("email or phone required")
+        return self
+
 
 class LoginRequest(BaseModel):
     account: str
     password: str
+
+    @field_validator("account")
+    @classmethod
+    def validate_account(cls, value: str):
+        clean = value.strip()
+        if not (_is_valid_cn_phone(clean) or _is_valid_email(clean)):
+            raise ValueError("account must be a valid phone or email")
+        return clean
 
     @model_validator(mode="before")
     @classmethod
@@ -88,15 +174,41 @@ class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
 
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str):
+        return _validate_password_strength(value)
+
 
 class PasswordResetRequestRequest(BaseModel):
     account: str
+
+    @field_validator("account")
+    @classmethod
+    def validate_account(cls, value: str):
+        clean = value.strip()
+        if not (_is_valid_cn_phone(clean) or _is_valid_email(clean)):
+            raise ValueError("account must be a valid phone or email")
+        return clean
 
 
 class PasswordResetConfirmRequest(BaseModel):
     account: str
     code: str
     new_password: str
+
+    @field_validator("account")
+    @classmethod
+    def validate_account(cls, value: str):
+        clean = value.strip()
+        if not (_is_valid_cn_phone(clean) or _is_valid_email(clean)):
+            raise ValueError("account must be a valid phone or email")
+        return clean
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str):
+        return _validate_password_strength(value)
 
 
 class OAuthCallbackRequest(BaseModel):
@@ -107,10 +219,26 @@ class OAuthCallbackRequest(BaseModel):
 class OtpLoginRequest(BaseModel):
     account: str
 
+    @field_validator("account")
+    @classmethod
+    def validate_account(cls, value: str):
+        clean = value.strip()
+        if not (_is_valid_cn_phone(clean) or _is_valid_email(clean)):
+            raise ValueError("account must be a valid phone or email")
+        return clean
+
 
 class OtpLoginConfirmRequest(BaseModel):
     account: str
     code: str
+
+    @field_validator("account")
+    @classmethod
+    def validate_account(cls, value: str):
+        clean = value.strip()
+        if not (_is_valid_cn_phone(clean) or _is_valid_email(clean)):
+            raise ValueError("account must be a valid phone or email")
+        return clean
 
 
 class OneClickLoginRequest(BaseModel):
