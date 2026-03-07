@@ -26,6 +26,7 @@ from app.domain.app.schemas import (
     LogoutRequest,
     MePreferencesUpdateRequest,
     GoalStateUpdateRequest,
+    OAuthCallbackRequest,
     PasswordResetConfirmRequest,
     PasswordResetRequestRequest,
     RefreshRequest,
@@ -151,6 +152,52 @@ async def register_confirm(payload: RegisterConfirmRequest, request: Request, re
     data = await AppBffService.register_confirm(payload.model_dump(), db, redis, client_ip)
     if data.get("refresh_token"):
         _set_refresh_cookie(response, data["refresh_token"])
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/auth/oauth/{provider}/start")
+async def oauth_start(provider: str, request: Request, redis: redis_dep):
+    data = await AppBffService.oauth_start(provider, redis)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/oauth/{provider}/callback")
+async def oauth_callback(
+    provider: str,
+    payload: OAuthCallbackRequest,
+    request: Request,
+    response: Response,
+    db: db_dep,
+    redis: redis_dep,
+):
+    client_ip = request.client.host if request.client else "unknown"
+    data = await AppBffService.oauth_callback(provider, payload.code, payload.state, redis, db, client_ip)
+    if data.get("refresh_token"):
+        _set_refresh_cookie(response, data["refresh_token"])
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/oauth/{provider}/bind")
+async def oauth_bind(
+    provider: str,
+    payload: OAuthCallbackRequest,
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.oauth_bind(user_id, provider, payload.code, payload.state, redis, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.delete("/auth/oauth/{provider}")
+async def oauth_unbind(
+    provider: str,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.oauth_unbind(user_id, provider, db)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 

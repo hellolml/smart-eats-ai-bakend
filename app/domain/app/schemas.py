@@ -99,6 +99,11 @@ class PasswordResetConfirmRequest(BaseModel):
     new_password: str
 
 
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    state: str
+
+
 class UpdateMeRequest(BaseModel):
     name: str | None = None
     avatar: str | None = None

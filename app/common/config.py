@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     REFRESH_COOKIE_SECURE: bool = False
     REFRESH_COOKIE_SAMESITE: str = "lax"
 
+    GITHUB_OAUTH_CLIENT_ID: str | None = None
+    GITHUB_OAUTH_CLIENT_SECRET: str | None = None
+    GITHUB_OAUTH_REDIRECT_URI: str | None = None
+
     CHAT_CANCEL_TTL: int = 600
     CHAT_HISTORY_LIMIT: int = 30
     CHAT_HISTORY_CACHE_LIMIT: int = 120

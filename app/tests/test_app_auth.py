@@ -276,3 +276,76 @@ async def test_app_sessions_and_logout_all(client):
         json={"refresh_token": tokens2["refresh_token"]},
     )
     assert refresh_after_logout_all.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_app_oauth_github_start_and_callback(client, monkeypatch):
+    async def fake_fetch(_code: str):
+        return {
+            "provider": "github",
+            "provider_uid": "gh_123",
+            "nickname": "GH User",
+            "email": "gh_user@example.com",
+            "access_token": "gh_access",
+        }
+
+    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_REDIRECT_URI", "http://localhost/callback")
+    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_CLIENT_SECRET", "secret")
+    monkeypatch.setattr("app.domain.app.service.AppBffService._oauth_fetch_github_user", staticmethod(fake_fetch))
+
+    start_resp = await client.get("/api/v1/app/auth/oauth/github/start")
+    assert start_resp.status_code == 200
+    start_data = start_resp.json()["data"]
+    assert start_data["auth_url"]
+    assert start_data["state"]
+
+    callback_resp = await client.post(
+        "/api/v1/app/auth/oauth/github/callback",
+        json={"code": "abc", "state": start_data["state"]},
+    )
+    assert callback_resp.status_code == 200
+    data = callback_resp.json()["data"]
+    assert data["access_token"]
+    assert data["refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_app_oauth_bind_unbind(client, monkeypatch):
+    async def fake_fetch(_code: str):
+        return {
+            "provider": "github",
+            "provider_uid": "gh_bind_1",
+            "nickname": "GH Bind",
+            "email": "gh_bind@example.com",
+            "access_token": "gh_access",
+        }
+
+    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_REDIRECT_URI", "http://localhost/callback")
+    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_CLIENT_SECRET", "secret")
+    monkeypatch.setattr("app.domain.app.service.AppBffService._oauth_fetch_github_user", staticmethod(fake_fetch))
+
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "oauth_bind_local@example.com", "password": "secret123", "name": "local"},
+    )
+    assert register_resp.status_code == 200
+    tokens = register_resp.json()["data"]
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    start_resp = await client.get("/api/v1/app/auth/oauth/github/start")
+    assert start_resp.status_code == 200
+    state = start_resp.json()["data"]["state"]
+
+    bind_resp = await client.post(
+        "/api/v1/app/auth/oauth/github/bind",
+        json={"code": "abc", "state": state},
+        headers=headers,
+    )
+    assert bind_resp.status_code == 200
+    assert bind_resp.json()["data"]["bound"] is True
+
+    unbind_resp = await client.delete("/api/v1/app/auth/oauth/github", headers=headers)
+    assert unbind_resp.status_code == 200
+    assert unbind_resp.json()["data"]["removed"] is True

@@ -25,6 +25,8 @@ from app.common.errors import (
     AUTH_ACCOUNT_LOCKED,
     AUTH_ACCOUNT_REQUIRED,
     AUTH_INVALID_CREDENTIALS,
+    AUTH_OAUTH_BIND_CONFLICT,
+    AUTH_OAUTH_PROVIDER_UNSUPPORTED,
     AUTH_OTP_INVALID,
     AUTH_RESET_CODE_INVALID,
     AUTH_SESSION_REVOKED,
@@ -54,7 +56,7 @@ from app.domain.restaurant.service import RestaurantService
 from app.infra.models.chat import ChatMessage, ChatSession
 from app.infra.models.fridge import FridgeItem, FridgePhoto, RecognitionJob
 from app.infra.models.game import BlindboxRoll, WheelConfig, WheelSpin
-from app.infra.models.auth import UserSession
+from app.infra.models.auth import OAuthAccount, UserSession
 from app.infra.models.grocery import GroceryList, GroceryListItem
 from app.infra.models.preference import UserPreference, UserProfile
 from app.infra.models.user import User
@@ -616,6 +618,170 @@ class AppBffService:
         await redis_client.delete(attempts_key)
         await db.commit()
         return {"updated": True}
+
+    @staticmethod
+    async def oauth_start(provider: str, redis_client: redis.Redis) -> dict[str, Any]:
+        if provider != "github":
+            raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth provider unsupported", http_status=400)
+        if not settings.GITHUB_OAUTH_CLIENT_ID or not settings.GITHUB_OAUTH_REDIRECT_URI:
+            raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth provider not configured", http_status=400)
+
+        state = str(uuid4())
+        await redis_client.setex(f"oauth:state:github:{state}", 10 * 60, "1")
+        auth_url = (
+            "https://github.com/login/oauth/authorize"
+            f"?client_id={settings.GITHUB_OAUTH_CLIENT_ID}"
+            f"&redirect_uri={settings.GITHUB_OAUTH_REDIRECT_URI}"
+            "&scope=read:user user:email"
+            f"&state={state}"
+        )
+        return {"provider": "github", "state": state, "auth_url": auth_url}
+
+    @staticmethod
+    async def _oauth_fetch_github_user(code: str) -> dict[str, Any]:
+        if not settings.GITHUB_OAUTH_CLIENT_ID or not settings.GITHUB_OAUTH_CLIENT_SECRET:
+            raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth provider not configured", http_status=400)
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            token_resp = await client.post(
+                "https://github.com/login/oauth/access_token",
+                data={
+                    "client_id": settings.GITHUB_OAUTH_CLIENT_ID,
+                    "client_secret": settings.GITHUB_OAUTH_CLIENT_SECRET,
+                    "code": code,
+                    "redirect_uri": settings.GITHUB_OAUTH_REDIRECT_URI,
+                },
+                headers={"Accept": "application/json"},
+            )
+            token_resp.raise_for_status()
+            token_data = token_resp.json()
+            access_token = token_data.get("access_token")
+            if not access_token:
+                raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth exchange failed", http_status=400)
+
+            user_resp = await client.get(
+                "https://api.github.com/user",
+                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            )
+            user_resp.raise_for_status()
+            user_data = user_resp.json()
+
+        provider_uid = str(user_data.get("id") or "")
+        if not provider_uid:
+            raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth user invalid", http_status=400)
+        return {
+            "provider": "github",
+            "provider_uid": provider_uid,
+            "nickname": user_data.get("name") or user_data.get("login") or f"github_{provider_uid}",
+            "email": user_data.get("email"),
+            "access_token": access_token,
+        }
+
+    @staticmethod
+    async def oauth_callback(
+        provider: str,
+        code: str,
+        state: str,
+        redis_client: redis.Redis,
+        db: AsyncSession,
+        client_ip: str,
+    ) -> dict[str, Any]:
+        if provider != "github":
+            raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth provider unsupported", http_status=400)
+
+        ok = await redis_client.get(f"oauth:state:github:{state}")
+        if not ok:
+            raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth state invalid", http_status=400)
+        await redis_client.delete(f"oauth:state:github:{state}")
+
+        profile = await AppBffService._oauth_fetch_github_user(code)
+        provider_uid = profile["provider_uid"]
+
+        oauth = (
+            await db.execute(
+                select(OAuthAccount).where(OAuthAccount.provider == provider, OAuthAccount.provider_uid == provider_uid)
+            )
+        ).scalar_one_or_none()
+
+        if oauth is None:
+            user = None
+            email = profile.get("email")
+            if email:
+                user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    id=str(uuid4()),
+                    email=email,
+                    phone=None,
+                    nickname=str(profile.get("nickname") or "github_user")[:64],
+                    password_hash=hash_password(str(uuid4())),
+                )
+                db.add(user)
+                await db.flush()
+
+            oauth = OAuthAccount(
+                id=str(uuid4()),
+                user_id=user.id,
+                provider=provider,
+                provider_uid=provider_uid,
+                access_token_enc=str(profile.get("access_token") or "")[:512] or None,
+            )
+            db.add(oauth)
+            await db.commit()
+            user_id = user.id
+        else:
+            user_id = oauth.user_id
+
+        return await AppBffService.issue_tokens(user_id, redis_client, db, ip=client_ip)
+
+    @staticmethod
+    async def oauth_bind(
+        user_id: str,
+        provider: str,
+        code: str,
+        state: str,
+        redis_client: redis.Redis,
+        db: AsyncSession,
+    ) -> dict[str, Any]:
+        if provider != "github":
+            raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth provider unsupported", http_status=400)
+        ok = await redis_client.get(f"oauth:state:github:{state}")
+        if not ok:
+            raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="oauth state invalid", http_status=400)
+        await redis_client.delete(f"oauth:state:github:{state}")
+
+        profile = await AppBffService._oauth_fetch_github_user(code)
+        provider_uid = profile["provider_uid"]
+        existing = (
+            await db.execute(
+                select(OAuthAccount).where(OAuthAccount.provider == provider, OAuthAccount.provider_uid == provider_uid)
+            )
+        ).scalar_one_or_none()
+        if existing and existing.user_id != user_id:
+            raise AppError(code=AUTH_OAUTH_BIND_CONFLICT, message="oauth account already bound", http_status=409)
+        if existing is None:
+            db.add(
+                OAuthAccount(
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    provider=provider,
+                    provider_uid=provider_uid,
+                    access_token_enc=str(profile.get("access_token") or "")[:512] or None,
+                )
+            )
+            await db.commit()
+        return {"bound": True, "provider": provider}
+
+    @staticmethod
+    async def oauth_unbind(user_id: str, provider: str, db: AsyncSession) -> dict[str, Any]:
+        oauth = (
+            await db.execute(select(OAuthAccount).where(OAuthAccount.user_id == user_id, OAuthAccount.provider == provider))
+        ).scalar_one_or_none()
+        if oauth is None:
+            return {"removed": False, "provider": provider}
+        await db.delete(oauth)
+        await db.commit()
+        return {"removed": True, "provider": provider}
 
     @staticmethod
     async def _get_user(user_id: str, db: AsyncSession) -> User:
