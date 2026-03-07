@@ -615,10 +615,12 @@ export const appApi = {
             item_id: string;
             voter_name: string;
             voter_key: string;
+            token: string;
             note?: string;
         }) {
-            return request<{ ok: boolean; session_id: string; item_id: string }>(
-                `/group-decisions/${payload.session_id}/vote`,
+            const query = new URLSearchParams({ token: payload.token }).toString();
+            return request<{ ok: boolean; session_id: string; item_id: string; changed: boolean }>(
+                `/group-decisions/${payload.session_id}/vote?${query}`,
                 {
                     method: 'POST',
                     body: {
@@ -630,8 +632,9 @@ export const appApi = {
                 }
             );
         },
-        async result(sessionId: string) {
-            return request<AppGroupDecisionResult>(`/group-decisions/${sessionId}/result`);
+        async result(sessionId: string, token: string) {
+            const query = new URLSearchParams({ token }).toString();
+            return request<AppGroupDecisionResult>(`/group-decisions/${sessionId}/result?${query}`);
         }
     },
 

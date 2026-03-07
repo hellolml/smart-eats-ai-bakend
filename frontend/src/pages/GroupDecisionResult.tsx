@@ -37,18 +37,20 @@ const GroupDecisionResult: React.FC = () => {
     return `guest_${Date.now()}`;
   }, [searchParams]);
 
+  const token = searchParams.get('token') || '';
+
   const load = React.useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId || !token) return;
     setLoading(true);
     try {
-      const res = await appApi.groupDecisions.result(sessionId);
+      const res = await appApi.groupDecisions.result(sessionId, token);
       setData(res);
     } catch (e) {
       toast.error('加载群组决策结果失败');
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, token]);
 
   React.useEffect(() => {
     load();
@@ -56,6 +58,10 @@ const GroupDecisionResult: React.FC = () => {
 
   const vote = async (itemId: string) => {
     if (!sessionId) return;
+    if (!token) {
+      toast.error('分享链接无效，请重新获取');
+      return;
+    }
     if (!voterName.trim()) {
       toast.error('先填一下你的昵称');
       return;
@@ -65,7 +71,8 @@ const GroupDecisionResult: React.FC = () => {
         session_id: sessionId,
         item_id: itemId,
         voter_name: voterName.trim(),
-        voter_key: `${voterKey}_${voterName.trim()}`.slice(0, 64)
+        voter_key: `${voterKey}_${voterName.trim()}`.slice(0, 64),
+        token
       });
       toast.success('投票成功');
       await load();
@@ -99,6 +106,7 @@ const GroupDecisionResult: React.FC = () => {
     }
   };
 
+  if (!token) return <div className="p-4 text-sm text-gray-500">分享链接缺少 token，请让发起人重新分享</div>;
   if (loading) return <div className="p-4 text-sm text-gray-500">加载中...</div>;
   if (!data) return <div className="p-4 text-sm text-gray-500">没有找到该群组决策</div>;
 

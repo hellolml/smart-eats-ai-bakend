@@ -27,9 +27,10 @@ async def test_app_group_decision_vote_idempotent_and_close(client):
     data = create_resp.json()["data"]
     session_id = data["id"]
     first_item_id = data["items"][0]["id"]
+    token = data["share_token"]
 
     vote_resp = await client.post(
-        f"/api/v1/app/group-decisions/{session_id}/vote",
+        f"/api/v1/app/group-decisions/{session_id}/vote?token={token}",
         json={
             "item_id": first_item_id,
             "voter_name": "Alice",
@@ -40,7 +41,7 @@ async def test_app_group_decision_vote_idempotent_and_close(client):
     assert vote_resp.json()["data"]["changed"] is True
 
     vote_again_resp = await client.post(
-        f"/api/v1/app/group-decisions/{session_id}/vote",
+        f"/api/v1/app/group-decisions/{session_id}/vote?token={token}",
         json={
             "item_id": first_item_id,
             "voter_name": "Alice",
@@ -58,7 +59,7 @@ async def test_app_group_decision_vote_idempotent_and_close(client):
     assert close_data["total_votes"] == 1
 
     post_close_vote = await client.post(
-        f"/api/v1/app/group-decisions/{session_id}/vote",
+        f"/api/v1/app/group-decisions/{session_id}/vote?token={token}",
         json={
             "item_id": first_item_id,
             "voter_name": "Bob",
@@ -102,3 +103,50 @@ async def test_only_creator_can_close_group_decision(client):
 
     forbidden_close = await client.post(f"/api/v1/app/group-decisions/{session_id}/close", headers=other_headers)
     assert forbidden_close.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_group_decision_requires_valid_share_token(client):
+    resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "group_owner3@example.com", "password": "secret123", "name": "Owner3"},
+    )
+    assert resp.status_code == 200
+    token = resp.json()["data"]["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_resp = await client.post(
+        "/api/v1/app/group-decisions",
+        headers=headers,
+        json={
+            "title": "午饭投票",
+            "options": [
+                {"title": "米线", "item_type": "restaurant", "meta": {}},
+                {"title": "饺子", "item_type": "restaurant", "meta": {}},
+            ],
+        },
+    )
+    assert create_resp.status_code == 200
+    data = create_resp.json()["data"]
+    session_id = data["id"]
+    item_id = data["items"][0]["id"]
+    share_token = data["share_token"]
+
+    no_token_result = await client.get(f"/api/v1/app/group-decisions/{session_id}/result")
+    assert no_token_result.status_code == 403
+
+    bad_token_result = await client.get(f"/api/v1/app/group-decisions/{session_id}/result?token=badtoken")
+    assert bad_token_result.status_code == 403
+
+    ok_result = await client.get(f"/api/v1/app/group-decisions/{session_id}/result?token={share_token}")
+    assert ok_result.status_code == 200
+
+    no_token_vote = await client.post(
+        f"/api/v1/app/group-decisions/{session_id}/vote",
+        json={
+            "item_id": item_id,
+            "voter_name": "Guest",
+            "voter_key": "guest-1",
+        },
+    )
+    assert no_token_vote.status_code == 403

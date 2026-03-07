@@ -548,6 +548,7 @@ async def app_vote_group_decision(
     payload: GroupDecisionVoteRequest,
     request: Request,
     db: db_dep,
+    token: str | None = Query(default=None),
 ):
     data = await GroupDecisionService.submit_vote(
         db,
@@ -555,6 +556,7 @@ async def app_vote_group_decision(
         item_id=payload.item_id,
         voter_name=payload.voter_name,
         voter_key=payload.voter_key,
+        share_token=token,
         note=payload.note,
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
@@ -581,11 +583,13 @@ async def app_group_decision_result(
     session_id: str,
     request: Request,
     db: db_dep,
+    token: str | None = Query(default=None),
 ):
     data = await GroupDecisionService.get_result(
         db,
         session_id=session_id,
         base_url=str(request.base_url),
+        share_token=token,
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
 

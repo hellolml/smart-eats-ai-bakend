@@ -28,6 +28,25 @@ async def _load_session(db: AsyncSession, session_id: str) -> GroupDecisionSessi
     return session
 
 
+def _normalize_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _ensure_share_access(session: GroupDecisionSession, share_token: str | None) -> None:
+    safe_token = (share_token or "").strip()
+    if not safe_token or safe_token != session.share_token:
+        raise HTTPException(status_code=403, detail="invalid share token")
+
+    now = datetime.now(timezone.utc)
+    expires_at = _normalize_utc(session.expires_at)
+    if expires_at and expires_at <= now:
+        raise HTTPException(status_code=410, detail="group decision link expired")
+
+
 async def _calc_ranked_items(db: AsyncSession, session_id: str) -> tuple[list[dict[str, Any]], int]:
     items = (await db.execute(select(GroupVoteItem).where(GroupVoteItem.session_id == session_id))).scalars().all()
     counts = (
@@ -132,13 +151,14 @@ class GroupDecisionService:
         item_id: str,
         voter_name: str,
         voter_key: str,
+        share_token: str | None,
         note: str | None = None,
     ) -> dict[str, Any]:
         session = await _load_session(db, session_id)
+        _ensure_share_access(session, share_token)
+
         now = datetime.now(timezone.utc)
-        expires_at = session.expires_at
-        if expires_at and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = _normalize_utc(session.expires_at)
         if expires_at and expires_at <= now and session.status != STATUS_CLOSED:
             session.status = STATUS_CLOSED
         if session.status != STATUS_OPEN:
@@ -239,8 +259,10 @@ class GroupDecisionService:
         *,
         session_id: str,
         base_url: str,
+        share_token: str | None,
     ) -> dict[str, Any]:
         session = await _load_session(db, session_id)
+        _ensure_share_access(session, share_token)
 
         if session.status == STATUS_CLOSED and isinstance(session.result_snapshot, dict) and session.result_snapshot:
             snapshot = session.result_snapshot

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import db_dep, get_current_user_id
@@ -57,6 +57,7 @@ async def vote_group_decision(
     payload: GroupDecisionVoteRequest,
     request: Request,
     db: db_dep,
+    token: str | None = Query(default=None),
 ):
     data = await GroupDecisionService.submit_vote(
         db,
@@ -64,6 +65,7 @@ async def vote_group_decision(
         item_id=item_id,
         voter_name=payload.voter_name,
         voter_key=payload.voter_key,
+        share_token=token,
         note=payload.note,
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
@@ -90,10 +92,12 @@ async def get_group_decision_result(
     session_id: str,
     request: Request,
     db: db_dep,
+    token: str | None = Query(default=None),
 ):
     data = await GroupDecisionService.get_result(
         db,
         session_id=session_id,
         base_url=str(request.base_url),
+        share_token=token,
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
