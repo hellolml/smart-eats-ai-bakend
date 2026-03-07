@@ -807,6 +807,31 @@ class AppBffService:
         }
 
     @staticmethod
+    async def list_auth_events(user_id: str, db: AsyncSession, *, limit: int = 50) -> dict[str, Any]:
+        safe_limit = max(1, min(limit, 100))
+        rows = (
+            await db.execute(
+                select(AuthEvent)
+                .where(AuthEvent.user_id == user_id)
+                .order_by(desc(AuthEvent.created_at))
+                .limit(safe_limit)
+            )
+        ).scalars().all()
+        return {
+            "items": [
+                {
+                    "id": row.id,
+                    "event_type": row.event_type,
+                    "ip": row.ip,
+                    "user_agent": row.user_agent,
+                    "payload": row.payload_json or {},
+                    "created_at": row.created_at,
+                }
+                for row in rows
+            ]
+        }
+
+    @staticmethod
     async def revoke_session(user_id: str, session_id: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
         session = (
             await db.execute(select(UserSession).where(UserSession.id == session_id, UserSession.user_id == user_id))

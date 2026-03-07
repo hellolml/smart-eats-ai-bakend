@@ -375,6 +375,29 @@ async def test_app_phone_one_click_login_mock(client):
 
 
 @pytest.mark.asyncio
+async def test_app_auth_events_endpoint(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_events@example.com", "password": "secret123", "name": "events"},
+    )
+    assert register_resp.status_code == 200
+    tokens = register_resp.json()["data"]
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # trigger one auth event
+    login_fail = await client.post(
+        "/api/v1/app/auth/login",
+        json={"account": "app_events@example.com", "password": "wrong"},
+    )
+    assert login_fail.status_code == 401
+
+    events_resp = await client.get("/api/v1/app/auth/events?limit=10", headers=headers)
+    assert events_resp.status_code == 200
+    data = events_resp.json()["data"]
+    assert isinstance(data["items"], list)
+
+
+@pytest.mark.asyncio
 async def test_app_auth_config_check_endpoint(client):
     register_resp = await client.post(
         "/api/v1/app/auth/register",

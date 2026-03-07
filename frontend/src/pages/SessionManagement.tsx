@@ -16,18 +16,32 @@ type SessionItem = {
   revoke_reason?: string;
 };
 
+type AuthEventItem = {
+  id: string;
+  event_type: string;
+  ip?: string;
+  created_at?: string;
+  payload?: Record<string, unknown>;
+};
+
 const SessionManagement: React.FC = () => {
   const navigate = useNavigate();
   const [items, setItems] = React.useState<SessionItem[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [methods, setMethods] = React.useState<{ email_bound: boolean; phone_bound: boolean; github_bound: boolean } | null>(null);
+  const [events, setEvents] = React.useState<AuthEventItem[]>([]);
 
   const load = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [res, authMethods] = await Promise.all([appApi.auth.listSessions(), appApi.auth.methods()]);
+      const [res, authMethods, authEvents] = await Promise.all([
+        appApi.auth.listSessions(),
+        appApi.auth.methods(),
+        appApi.auth.events(20)
+      ]);
       setItems((res.items || []) as SessionItem[]);
       setMethods(authMethods);
+      setEvents((authEvents.items || []) as AuthEventItem[]);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : '加载会话失败');
     } finally {
@@ -137,6 +151,25 @@ const SessionManagement: React.FC = () => {
                 >
                   <Trash2 size={12} /> 下线该设备
                 </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border p-4 space-y-3">
+        <div className="text-sm font-medium">最近安全事件</div>
+        {loading ? (
+          <div className="text-sm text-gray-500">加载中...</div>
+        ) : events.length === 0 ? (
+          <div className="text-sm text-gray-500">暂无安全事件</div>
+        ) : (
+          <div className="space-y-2">
+            {events.map((e) => (
+              <div key={e.id} className="rounded-xl bg-gray-50 p-2 text-xs text-gray-700">
+                <div className="font-medium">{e.event_type}</div>
+                <div className="text-gray-500">IP: {e.ip || '-'}</div>
+                <div className="text-gray-500">时间: {e.created_at || '-'}</div>
               </div>
             ))}
           </div>

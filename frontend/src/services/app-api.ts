@@ -603,6 +603,12 @@ export const appApi = {
             return request<{ items: Array<Record<string, unknown>> }>('/auth/sessions', { auth: true });
         },
 
+        async events(limit = 50) {
+            return request<{ items: Array<Record<string, unknown>> }>(`/auth/events?limit=${limit}`, {
+                auth: true
+            });
+        },
+
         async revokeSession(sessionId: string) {
             return request<{ revoked: boolean; session_id: string }>(`/auth/sessions/${sessionId}`, {
                 method: 'DELETE',

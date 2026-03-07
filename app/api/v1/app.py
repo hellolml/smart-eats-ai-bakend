@@ -338,6 +338,17 @@ async def list_sessions(
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
+@router.get("/auth/events")
+async def list_auth_events(
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    data = await AppBffService.list_auth_events(user_id, db, limit=limit)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
 @router.delete("/auth/sessions/{session_id}")
 async def revoke_session(
     session_id: str,
