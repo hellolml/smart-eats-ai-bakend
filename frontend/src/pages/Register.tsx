@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
     User, Mail, Lock, ArrowRight, ChevronLeft,
-    ShieldCheck, Phone, Sparkles, MessageSquare, CircleQuestionMark
+    ShieldCheck, Phone, Sparkles, MessageSquare, AlertCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { ApiError, appApi } from '@/services/app-api';
@@ -197,7 +197,7 @@ const Register = () => {
                                     className="absolute inset-y-0 right-3 flex items-center text-gray-400"
                                     aria-label="密码规则"
                                 >
-                                    <CircleQuestionMark size={16} />
+                                    <AlertCircle size={16} />
                                 </button>
                                 {showPasswordRule && (
                                     <div className="absolute z-20 right-0 top-[110%] w-56 rounded-xl border bg-white p-2 text-[11px] text-gray-600 shadow">
