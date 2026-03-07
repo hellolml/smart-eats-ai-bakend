@@ -359,6 +359,23 @@ async def test_app_phone_one_click_login_mock(client):
 
 
 @pytest.mark.asyncio
+async def test_app_auth_config_check_endpoint(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_config_check@example.com", "password": "secret123", "name": "cfg"},
+    )
+    assert register_resp.status_code == 200
+    tokens = register_resp.json()["data"]
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    cfg_resp = await client.get("/api/v1/app/auth/config-check", headers=headers)
+    assert cfg_resp.status_code == 200
+    data = cfg_resp.json()["data"]
+    assert "ready" in data
+    assert "checks" in data
+
+
+@pytest.mark.asyncio
 async def test_app_auth_methods_endpoint(client):
     register_resp = await client.post(
         "/api/v1/app/auth/register",

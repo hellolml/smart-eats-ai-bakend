@@ -584,6 +584,12 @@ export const appApi = {
             });
         },
 
+        async configCheck() {
+            return request<{ ready: boolean; checks: Record<string, unknown> }>('/auth/config-check', {
+                auth: true
+            });
+        },
+
         async listSessions() {
             return request<{ items: Array<Record<string, unknown>> }>('/auth/sessions', { auth: true });
         },

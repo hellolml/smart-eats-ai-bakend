@@ -319,6 +319,15 @@ async def auth_methods(
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
+@router.get("/auth/config-check")
+async def auth_config_check(
+    request: Request,
+    _user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.auth_config_check()
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
 @router.get("/auth/sessions")
 async def list_sessions(
     request: Request,

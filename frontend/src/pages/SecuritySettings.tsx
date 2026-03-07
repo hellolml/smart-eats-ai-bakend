@@ -14,11 +14,17 @@ const SecuritySettings = () => {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPass, setShowPass] = useState(false);
     const [methods, setMethods] = useState<{ email_bound: boolean; phone_bound: boolean; github_bound: boolean } | null>(null);
+    const [configReady, setConfigReady] = useState<boolean | null>(null);
 
     React.useEffect(() => {
-        appApi.auth.methods().then(setMethods).catch(() => {
-            // ignore methods fetch error in settings page
-        });
+        Promise.all([appApi.auth.methods(), appApi.auth.configCheck()])
+            .then(([m, cfg]) => {
+                setMethods(m);
+                setConfigReady(Boolean(cfg.ready));
+            })
+            .catch(() => {
+                // ignore methods/config fetch error in settings page
+            });
     }, []);
     const handleSave = async () => {
         if (!oldPassword || !newPassword || !confirmPassword) {
@@ -87,6 +93,9 @@ const SecuritySettings = () => {
                     <div className={`rounded-xl p-2 ${methods?.github_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
                         GitHub：{methods?.github_bound ? '已绑定' : '未绑定'}
                     </div>
+                </div>
+                <div className={`rounded-xl p-2 text-xs ${configReady ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                    认证通道配置：{configReady === null ? '检查中' : configReady ? '就绪' : '未完全就绪'}
                 </div>
             </section>
 

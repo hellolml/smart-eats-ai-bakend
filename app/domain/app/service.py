@@ -997,6 +997,73 @@ class AppBffService:
         }
 
     @staticmethod
+    async def auth_config_check() -> dict[str, Any]:
+        sms_provider = (settings.SMS_PROVIDER or "mock").lower().strip()
+        email_provider = (settings.EMAIL_PROVIDER or "mock").lower().strip()
+        oneclick_provider = (settings.ONECLICK_PROVIDER or "mock").lower().strip()
+
+        checks = {
+            "sms": {
+                "provider": sms_provider,
+                "ready": sms_provider == "mock" or (sms_provider == "webhook" and bool(settings.SMS_WEBHOOK_URL)),
+                "missing": [] if sms_provider == "mock" else [k for k, ok in {
+                    "SMS_WEBHOOK_URL": bool(settings.SMS_WEBHOOK_URL),
+                }.items() if not ok],
+            },
+            "email": {
+                "provider": email_provider,
+                "ready": (
+                    email_provider == "mock"
+                    or (email_provider == "webhook" and bool(settings.EMAIL_WEBHOOK_URL))
+                    or (email_provider == "smtp" and bool(settings.SMTP_HOST and settings.SMTP_FROM))
+                ),
+                "missing": (
+                    []
+                    if email_provider == "mock"
+                    else [k for k, ok in (
+                        {
+                            "EMAIL_WEBHOOK_URL": bool(settings.EMAIL_WEBHOOK_URL),
+                        }.items()
+                        if email_provider == "webhook"
+                        else {
+                            "SMTP_HOST": bool(settings.SMTP_HOST),
+                            "SMTP_FROM": bool(settings.SMTP_FROM),
+                        }.items()
+                    ) if not ok]
+                ),
+            },
+            "oauth": {
+                "github": {
+                    "ready": bool(
+                        settings.GITHUB_OAUTH_CLIENT_ID
+                        and settings.GITHUB_OAUTH_CLIENT_SECRET
+                        and settings.GITHUB_OAUTH_REDIRECT_URI
+                    ),
+                    "missing": [k for k, ok in {
+                        "GITHUB_OAUTH_CLIENT_ID": bool(settings.GITHUB_OAUTH_CLIENT_ID),
+                        "GITHUB_OAUTH_CLIENT_SECRET": bool(settings.GITHUB_OAUTH_CLIENT_SECRET),
+                        "GITHUB_OAUTH_REDIRECT_URI": bool(settings.GITHUB_OAUTH_REDIRECT_URI),
+                    }.items() if not ok],
+                }
+            },
+            "one_click": {
+                "provider": oneclick_provider,
+                "ready": oneclick_provider == "mock" or (oneclick_provider == "webhook" and bool(settings.ONECLICK_WEBHOOK_URL)),
+                "missing": [] if oneclick_provider == "mock" else [k for k, ok in {
+                    "ONECLICK_WEBHOOK_URL": bool(settings.ONECLICK_WEBHOOK_URL),
+                }.items() if not ok],
+            },
+        }
+
+        all_ready = (
+            checks["sms"]["ready"]
+            and checks["email"]["ready"]
+            and checks["oauth"]["github"]["ready"]
+            and checks["one_click"]["ready"]
+        )
+        return {"ready": bool(all_ready), "checks": checks}
+
+    @staticmethod
     async def _get_user(user_id: str, db: AsyncSession) -> User:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
