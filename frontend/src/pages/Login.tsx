@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { motion } from 'framer-motion';
-import { Mail, Phone, Lock, ArrowRight, Github, Chrome, Sparkles, MessageSquare, Zap, CircleHelp } from "lucide-react";
+import { Mail, Phone, Lock, ArrowRight, Github, Chrome, Sparkles, MessageSquare, Zap, CircleQuestionMark } from "lucide-react";
 import toast from "react-hot-toast";
 import { ApiError, appApi } from "@/services/app-api";
 
@@ -275,7 +275,7 @@ const Login = () => {
                                             className="absolute inset-y-0 right-3 flex items-center text-gray-400"
                                             aria-label="密码规则"
                                         >
-                                            <CircleHelp size={16} />
+                                            <CircleQuestionMark size={16} />
                                         </button>
                                         {showPasswordRule && (
                                             <div className="absolute z-20 right-0 top-[110%] w-56 rounded-xl border bg-white p-2 text-[11px] text-gray-600 shadow">
@@ -477,7 +477,7 @@ const Login = () => {
                                 className="absolute inset-y-0 right-2 flex items-center text-gray-400"
                                 aria-label="密码规则"
                             >
-                                <CircleHelp size={15} />
+                                <CircleQuestionMark size={15} />
                             </button>
                             {showResetPasswordRule && (
                                 <div className="absolute z-20 right-0 top-[110%] w-56 rounded-xl border bg-white p-2 text-[11px] text-gray-600 shadow">
