@@ -83,7 +83,7 @@ const Register = () => {
     };
 
     return (
-        <div className="h-full flex flex-col justify-center px-4 py-4 overflow-hidden">
+        <div className="h-full flex flex-col justify-center items-center px-4 py-4 overflow-hidden">
             <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
