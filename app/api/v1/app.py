@@ -28,6 +28,7 @@ from app.domain.app.schemas import (
     MePreferencesUpdateRequest,
     GoalStateUpdateRequest,
     OAuthCallbackRequest,
+    OneClickLoginRequest,
     PasswordResetConfirmRequest,
     PasswordResetRequestRequest,
     RefreshRequest,
@@ -35,6 +36,8 @@ from app.domain.app.schemas import (
     RegisterOtpRequest,
     RegisterRequest,
     RestaurantsQuery,
+    SmsLoginConfirmRequest,
+    SmsLoginRequest,
     ScanApplyRequest,
     UpdateMeRequest,
     WheelCurrentUpdateRequest,
@@ -230,6 +233,30 @@ async def oauth_unbind(
 async def login(payload: LoginRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.login(payload.model_dump(), db, redis, client_ip)
+    if data.get("refresh_token"):
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/login/sms/request")
+async def login_sms_request(payload: SmsLoginRequest, request: Request, db: db_dep, redis: redis_dep):
+    data = await AppBffService.login_sms_request(payload.phone, redis, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/login/sms/confirm")
+async def login_sms_confirm(payload: SmsLoginConfirmRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+    client_ip = request.client.host if request.client else "unknown"
+    data = await AppBffService.login_sms_confirm(payload.phone, payload.code, redis, db, client_ip)
+    if data.get("refresh_token"):
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/login/one-click")
+async def login_one_click(payload: OneClickLoginRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+    client_ip = request.client.host if request.client else "unknown"
+    data = await AppBffService.login_one_click(payload.token, redis, db, client_ip)
     if data.get("refresh_token"):
         data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))

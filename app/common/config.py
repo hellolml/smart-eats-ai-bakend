@@ -37,6 +37,26 @@ class Settings(BaseSettings):
     GITHUB_OAUTH_CLIENT_SECRET: str | None = None
     GITHUB_OAUTH_REDIRECT_URI: str | None = None
 
+    SMS_PROVIDER: str = "mock"  # mock | webhook
+    SMS_WEBHOOK_URL: str | None = None
+    SMS_WEBHOOK_TOKEN: str | None = None
+    SMS_SIGN_NAME: str | None = None
+    SMS_TEMPLATE_CODE: str | None = None
+
+    EMAIL_PROVIDER: str = "mock"  # mock | smtp | webhook
+    EMAIL_WEBHOOK_URL: str | None = None
+    EMAIL_WEBHOOK_TOKEN: str | None = None
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USER: str | None = None
+    SMTP_PASS: str | None = None
+    SMTP_FROM: str | None = None
+    SMTP_USE_TLS: bool = True
+
+    ONECLICK_PROVIDER: str = "mock"  # mock | webhook
+    ONECLICK_WEBHOOK_URL: str | None = None
+    ONECLICK_WEBHOOK_TOKEN: str | None = None
+
     CHAT_CANCEL_TTL: int = 600
     CHAT_HISTORY_LIMIT: int = 30
     CHAT_HISTORY_CACHE_LIMIT: int = 120

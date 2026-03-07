@@ -4,7 +4,9 @@ import hashlib
 import json
 import logging
 import random
+import smtplib
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from typing import Any
 from uuid import uuid4
 
@@ -190,6 +192,116 @@ class AppBffService:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     @staticmethod
+    async def _send_sms_code(phone: str, code: str, purpose: str) -> dict[str, Any]:
+        provider = (settings.SMS_PROVIDER or "mock").lower().strip()
+        if provider == "mock":
+            resp: dict[str, Any] = {"sent": True, "provider": "mock"}
+            if settings.DEBUG:
+                resp["debug_code"] = code
+            return resp
+
+        if provider == "webhook":
+            if not settings.SMS_WEBHOOK_URL:
+                raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="sms webhook not configured", http_status=400)
+            headers = {"Content-Type": "application/json"}
+            if settings.SMS_WEBHOOK_TOKEN:
+                headers["Authorization"] = f"Bearer {settings.SMS_WEBHOOK_TOKEN}"
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    settings.SMS_WEBHOOK_URL,
+                    headers=headers,
+                    json={
+                        "phone": phone,
+                        "code": code,
+                        "purpose": purpose,
+                        "sign_name": settings.SMS_SIGN_NAME,
+                        "template_code": settings.SMS_TEMPLATE_CODE,
+                    },
+                )
+                r.raise_for_status()
+            return {"sent": True, "provider": "webhook"}
+
+        raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="sms provider unsupported", http_status=400)
+
+    @staticmethod
+    async def _send_email_code(email: str, code: str, purpose: str) -> dict[str, Any]:
+        provider = (settings.EMAIL_PROVIDER or "mock").lower().strip()
+        if provider == "mock":
+            resp: dict[str, Any] = {"sent": True, "provider": "mock"}
+            if settings.DEBUG:
+                resp["debug_code"] = code
+            return resp
+
+        subject = "Smart-Eats 验证码"
+        body = f"您的验证码是：{code}，用途：{purpose}，10分钟内有效。"
+
+        if provider == "webhook":
+            if not settings.EMAIL_WEBHOOK_URL:
+                raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="email webhook not configured", http_status=400)
+            headers = {"Content-Type": "application/json"}
+            if settings.EMAIL_WEBHOOK_TOKEN:
+                headers["Authorization"] = f"Bearer {settings.EMAIL_WEBHOOK_TOKEN}"
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    settings.EMAIL_WEBHOOK_URL,
+                    headers=headers,
+                    json={"email": email, "subject": subject, "content": body, "purpose": purpose},
+                )
+                r.raise_for_status()
+            return {"sent": True, "provider": "webhook"}
+
+        if provider == "smtp":
+            if not settings.SMTP_HOST or not settings.SMTP_FROM:
+                raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="smtp not configured", http_status=400)
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = settings.SMTP_FROM
+            msg["To"] = email
+            msg.set_content(body)
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                if settings.SMTP_USE_TLS:
+                    server.starttls()
+                if settings.SMTP_USER and settings.SMTP_PASS:
+                    server.login(settings.SMTP_USER, settings.SMTP_PASS)
+                server.send_message(msg)
+            return {"sent": True, "provider": "smtp"}
+
+        raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="email provider unsupported", http_status=400)
+
+    @staticmethod
+    async def _send_code_by_account(account: str, code: str, purpose: str) -> dict[str, Any]:
+        if "@" in account:
+            return await AppBffService._send_email_code(account, code, purpose)
+        return await AppBffService._send_sms_code(account, code, purpose)
+
+    @staticmethod
+    async def _verify_one_click_token(token: str) -> str:
+        provider = (settings.ONECLICK_PROVIDER or "mock").lower().strip()
+        if provider == "mock":
+            if settings.DEBUG and token.startswith("mock:"):
+                phone = token.split(":", 1)[1].strip()
+                if phone:
+                    return phone
+            raise AppError(code=AUTH_INVALID_CREDENTIALS, message="one-click token invalid", http_status=401)
+
+        if provider == "webhook":
+            if not settings.ONECLICK_WEBHOOK_URL:
+                raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="one-click webhook not configured", http_status=400)
+            headers = {"Content-Type": "application/json"}
+            if settings.ONECLICK_WEBHOOK_TOKEN:
+                headers["Authorization"] = f"Bearer {settings.ONECLICK_WEBHOOK_TOKEN}"
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(settings.ONECLICK_WEBHOOK_URL, headers=headers, json={"token": token})
+                r.raise_for_status()
+                data = r.json() if r.content else {}
+            phone = str(data.get("phone") or "").strip()
+            if not phone:
+                raise AppError(code=AUTH_INVALID_CREDENTIALS, message="one-click token invalid", http_status=401)
+            return phone
+
+        raise AppError(code=AUTH_OAUTH_PROVIDER_UNSUPPORTED, message="one-click provider unsupported", http_status=400)
+
+    @staticmethod
     async def issue_tokens(
         user_id: str,
         redis_client: redis.Redis,
@@ -314,10 +426,8 @@ class AppBffService:
         code = f"{random.randint(0, 999999):06d}"
         await redis_client.setex(f"otp:register:{account}", 10 * 60, AppBffService._sha256(code))
         await redis_client.setex(f"otp:register:attempts:{account}", 10 * 60, "0")
-        resp: dict[str, Any] = {"sent": True}
-        if settings.DEBUG:
-            resp["debug_code"] = code
-        return resp
+        send_resp = await AppBffService._send_code_by_account(account, code, "register")
+        return {"sent": True, **send_resp}
 
     @staticmethod
     async def register_confirm(
@@ -403,6 +513,87 @@ class AppBffService:
             raise AppError(code=AUTH_INVALID_CREDENTIALS, message="invalid credentials", http_status=401)
 
         await redis_client.delete(fail_key)
+        return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
+
+    @staticmethod
+    async def login_sms_request(phone: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
+        clean_phone = (phone or "").strip()
+        if not clean_phone:
+            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="phone required", http_status=400)
+
+        user = (await db.execute(select(User).where(User.phone == clean_phone))).scalar_one_or_none()
+        if user is None:
+            user = User(
+                id=str(uuid4()),
+                email=None,
+                phone=clean_phone,
+                nickname=f"用户{clean_phone[-4:]}" if len(clean_phone) >= 4 else "用户",
+                password_hash=hash_password(str(uuid4())),
+            )
+            db.add(user)
+            await db.commit()
+
+        code = f"{random.randint(0, 999999):06d}"
+        await redis_client.setex(f"otp:login_sms:{clean_phone}", 10 * 60, AppBffService._sha256(code))
+        await redis_client.setex(f"otp:login_sms:attempts:{clean_phone}", 10 * 60, "0")
+        send_resp = await AppBffService._send_sms_code(clean_phone, code, "login")
+        return {"sent": True, **send_resp}
+
+    @staticmethod
+    async def login_sms_confirm(
+        phone: str,
+        code: str,
+        redis_client: redis.Redis,
+        db: AsyncSession,
+        client_ip: str,
+    ) -> dict[str, Any]:
+        clean_phone = (phone or "").strip()
+        if not clean_phone:
+            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="phone required", http_status=400)
+
+        code_hash = await redis_client.get(f"otp:login_sms:{clean_phone}")
+        if not code_hash:
+            raise AppError(code=AUTH_OTP_INVALID, message="login code invalid or expired", http_status=400)
+
+        attempts_key = f"otp:login_sms:attempts:{clean_phone}"
+        attempts = await redis_client.incr(attempts_key)
+        if attempts > 5:
+            await redis_client.delete(f"otp:login_sms:{clean_phone}")
+            raise AppError(code=AUTH_OTP_INVALID, message="login code invalid or expired", http_status=400)
+
+        if AppBffService._sha256(code) != code_hash:
+            raise AppError(code=AUTH_OTP_INVALID, message="login code invalid or expired", http_status=400)
+
+        user = (await db.execute(select(User).where(User.phone == clean_phone))).scalar_one_or_none()
+        if user is None:
+            user = User(
+                id=str(uuid4()),
+                email=None,
+                phone=clean_phone,
+                nickname=f"用户{clean_phone[-4:]}" if len(clean_phone) >= 4 else "用户",
+                password_hash=hash_password(str(uuid4())),
+            )
+            db.add(user)
+            await db.commit()
+
+        await redis_client.delete(f"otp:login_sms:{clean_phone}")
+        await redis_client.delete(attempts_key)
+        return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
+
+    @staticmethod
+    async def login_one_click(token: str, redis_client: redis.Redis, db: AsyncSession, client_ip: str) -> dict[str, Any]:
+        phone = await AppBffService._verify_one_click_token(token)
+        user = (await db.execute(select(User).where(User.phone == phone))).scalar_one_or_none()
+        if user is None:
+            user = User(
+                id=str(uuid4()),
+                email=None,
+                phone=phone,
+                nickname=f"用户{phone[-4:]}" if len(phone) >= 4 else "用户",
+                password_hash=hash_password(str(uuid4())),
+            )
+            db.add(user)
+            await db.commit()
         return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 
     @staticmethod
@@ -571,10 +762,8 @@ class AppBffService:
             AppBffService._sha256(code),
         )
         await redis_client.setex(f"otp:pwdreset:attempts:{account}", 10 * 60, "0")
-        resp: dict[str, Any] = {"sent": True}
-        if settings.DEBUG:
-            resp["debug_code"] = code
-        return resp
+        send_resp = await AppBffService._send_code_by_account(account, code, "password_reset")
+        return {"sent": True, **send_resp}
 
     @staticmethod
     async def password_reset_confirm(

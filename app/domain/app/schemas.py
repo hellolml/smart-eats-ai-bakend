@@ -104,6 +104,19 @@ class OAuthCallbackRequest(BaseModel):
     state: str
 
 
+class SmsLoginRequest(BaseModel):
+    phone: str
+
+
+class SmsLoginConfirmRequest(BaseModel):
+    phone: str
+    code: str
+
+
+class OneClickLoginRequest(BaseModel):
+    token: str
+
+
 class UpdateMeRequest(BaseModel):
     name: str | None = None
     avatar: str | None = None

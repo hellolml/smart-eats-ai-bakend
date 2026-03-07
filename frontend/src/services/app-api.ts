@@ -487,6 +487,34 @@ export const appApi = {
             return data;
         },
 
+        async loginSmsRequest(payload: { phone: string }) {
+            return request<{ sent: boolean; debug_code?: string }>('/auth/login/sms/request', {
+                method: 'POST',
+                auth: false,
+                body: payload
+            });
+        },
+
+        async loginSmsConfirm(payload: { phone: string; code: string }) {
+            const data = await request<AuthPayload>('/auth/login/sms/confirm', {
+                method: 'POST',
+                auth: false,
+                body: payload
+            });
+            setTokens(data);
+            return data;
+        },
+
+        async loginOneClick(payload: { token: string }) {
+            const data = await request<AuthPayload>('/auth/login/one-click', {
+                method: 'POST',
+                auth: false,
+                body: payload
+            });
+            setTokens(data);
+            return data;
+        },
+
         async logout() {
             try {
                 const refreshToken = getRefreshToken();

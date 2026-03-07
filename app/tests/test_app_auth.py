@@ -328,6 +328,37 @@ async def test_app_oauth_github_start_and_callback(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_app_sms_login_flow(client):
+    request_resp = await client.post(
+        "/api/v1/app/auth/login/sms/request",
+        json={"phone": "15500001111"},
+    )
+    assert request_resp.status_code == 200
+    code = request_resp.json()["data"]["debug_code"]
+
+    confirm_resp = await client.post(
+        "/api/v1/app/auth/login/sms/confirm",
+        json={"phone": "15500001111", "code": code},
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()["data"]
+    assert data["access_token"]
+    assert data["refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_app_phone_one_click_login_mock(client):
+    resp = await client.post(
+        "/api/v1/app/auth/login/one-click",
+        json={"token": "mock:15500002222"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["access_token"]
+    assert data["refresh_token"]
+
+
+@pytest.mark.asyncio
 async def test_app_oauth_bind_unbind(client, monkeypatch):
     async def fake_fetch(_code: str):
         return {
