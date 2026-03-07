@@ -99,7 +99,7 @@ const Login = () => {
                 account: otpAccount.trim(),
                 code: smsCode.trim()
             });
-            toast.success(otpType === 'phone' ? '短信登录成功' : '邮箱验证码登录成功', { id: 'sms-confirm' });
+            toast.success(otpType === 'phone' ? '手机号验证码登录成功' : '邮箱验证码登录成功', { id: 'sms-confirm' });
             navigate('/');
         } catch (error) {
             toast.error(error instanceof ApiError ? error.message : '验证码登录失败', { id: 'sms-confirm' });
@@ -210,7 +210,7 @@ const Login = () => {
                             onClick={() => setLoginMode('sms')}
                             className={`flex-1 py-2 text-[11px] md:text-sm font-bold rounded-lg md:rounded-xl transition-all ${loginMode === 'sms' ? 'bg-white text-[#7E57FF] shadow-sm' : 'text-gray-400'}`}
                         >
-                            短信登录
+                            验证码登录
                         </button>
                         {showOneClickLogin && (
                             <button
