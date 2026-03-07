@@ -4,10 +4,21 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.errors import (
+    AppError,
+    GROUP_DECISION_ALREADY_CLOSED,
+    GROUP_DECISION_INVALID_SHARE_TOKEN,
+    GROUP_DECISION_INVALID_VOTER,
+    GROUP_DECISION_LINK_EXPIRED,
+    GROUP_DECISION_NOT_FOUND,
+    GROUP_DECISION_NO_VALID_OPTIONS,
+    GROUP_DECISION_ONLY_CREATOR_CAN_CLOSE,
+    GROUP_DECISION_OPTIONS_REQUIRED,
+    GROUP_DECISION_VOTE_ITEM_NOT_FOUND,
+)
 from app.infra.models.group_decision import GroupDecisionSession, GroupVote, GroupVoteItem
 
 STATUS_OPEN = "open"
@@ -24,7 +35,7 @@ async def _load_session(db: AsyncSession, session_id: str) -> GroupDecisionSessi
         await db.execute(select(GroupDecisionSession).where(GroupDecisionSession.id == session_id))
     ).scalar_one_or_none()
     if session is None:
-        raise HTTPException(status_code=404, detail="group decision not found")
+        raise AppError(code=GROUP_DECISION_NOT_FOUND, message="group decision not found", http_status=404)
     return session
 
 
@@ -39,12 +50,12 @@ def _normalize_utc(dt: datetime | None) -> datetime | None:
 def _ensure_share_access(session: GroupDecisionSession, share_token: str | None) -> None:
     safe_token = (share_token or "").strip()
     if not safe_token or safe_token != session.share_token:
-        raise HTTPException(status_code=403, detail="invalid share token")
+        raise AppError(code=GROUP_DECISION_INVALID_SHARE_TOKEN, message="invalid share token", http_status=403)
 
     now = datetime.now(timezone.utc)
     expires_at = _normalize_utc(session.expires_at)
     if expires_at and expires_at <= now:
-        raise HTTPException(status_code=410, detail="group decision link expired")
+        raise AppError(code=GROUP_DECISION_LINK_EXPIRED, message="group decision link expired", http_status=410)
 
 
 async def _calc_ranked_items(db: AsyncSession, session_id: str) -> tuple[list[dict[str, Any]], int]:
@@ -88,7 +99,7 @@ class GroupDecisionService:
         expires_hours: int = 24,
     ) -> dict[str, Any]:
         if not options:
-            raise HTTPException(status_code=400, detail="options required")
+            raise AppError(code=GROUP_DECISION_OPTIONS_REQUIRED, message="options required", http_status=400)
 
         session_id = str(uuid4())
         share_token = uuid4().hex
@@ -120,7 +131,7 @@ class GroupDecisionService:
             created_items.append(item)
 
         if not created_items:
-            raise HTTPException(status_code=400, detail="no valid options")
+            raise AppError(code=GROUP_DECISION_NO_VALID_OPTIONS, message="no valid options", http_status=400)
 
         await db.commit()
         share_link = _share_url(base_url, session_id, share_token)
@@ -162,7 +173,7 @@ class GroupDecisionService:
         if expires_at and expires_at <= now and session.status != STATUS_CLOSED:
             session.status = STATUS_CLOSED
         if session.status != STATUS_OPEN:
-            raise HTTPException(status_code=400, detail="group decision already closed")
+            raise AppError(code=GROUP_DECISION_ALREADY_CLOSED, message="group decision already closed", http_status=400)
 
         item = (
             await db.execute(
@@ -173,13 +184,13 @@ class GroupDecisionService:
             )
         ).scalar_one_or_none()
         if item is None:
-            raise HTTPException(status_code=404, detail="vote item not found")
+            raise AppError(code=GROUP_DECISION_VOTE_ITEM_NOT_FOUND, message="vote item not found", http_status=404)
 
         safe_voter_name = voter_name.strip()[:64]
         safe_voter_key = voter_key.strip()[:64]
         safe_note = (note or "")[:300] or None
         if not safe_voter_name or not safe_voter_key:
-            raise HTTPException(status_code=400, detail="invalid voter")
+            raise AppError(code=GROUP_DECISION_INVALID_VOTER, message="invalid voter", http_status=400)
 
         existing_vote = (
             await db.execute(
@@ -223,7 +234,7 @@ class GroupDecisionService:
     ) -> dict[str, Any]:
         session = await _load_session(db, session_id)
         if session.creator_user_id != actor_user_id:
-            raise HTTPException(status_code=403, detail="only creator can close this group decision")
+            raise AppError(code=GROUP_DECISION_ONLY_CREATOR_CAN_CLOSE, message="only creator can close this group decision", http_status=403)
 
         ranked, total_votes = await _calc_ranked_items(db, session_id)
         winner = ranked[0] if ranked else None

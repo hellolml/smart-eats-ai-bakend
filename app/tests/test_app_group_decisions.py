@@ -67,6 +67,7 @@ async def test_app_group_decision_vote_idempotent_and_close(client):
         },
     )
     assert post_close_vote.status_code == 400
+    assert post_close_vote.json()["code"] == 44002
 
 
 @pytest.mark.asyncio
@@ -103,6 +104,7 @@ async def test_only_creator_can_close_group_decision(client):
 
     forbidden_close = await client.post(f"/api/v1/app/group-decisions/{session_id}/close", headers=other_headers)
     assert forbidden_close.status_code == 403
+    assert forbidden_close.json()["code"] == 44004
 
 
 @pytest.mark.asyncio
@@ -134,9 +136,11 @@ async def test_group_decision_requires_valid_share_token(client):
 
     no_token_result = await client.get(f"/api/v1/app/group-decisions/{session_id}/result")
     assert no_token_result.status_code == 403
+    assert no_token_result.json()["code"] == 44005
 
     bad_token_result = await client.get(f"/api/v1/app/group-decisions/{session_id}/result?token=badtoken")
     assert bad_token_result.status_code == 403
+    assert bad_token_result.json()["code"] == 44005
 
     ok_result = await client.get(f"/api/v1/app/group-decisions/{session_id}/result?token={share_token}")
     assert ok_result.status_code == 200
