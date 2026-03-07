@@ -1,5 +1,6 @@
 const ACCESS_TOKEN_KEY = 'app_access_token';
 const REFRESH_TOKEN_KEY = 'app_refresh_token';
+const CSRF_TOKEN_KEY = 'app_csrf_token';
 const LOGIN_FLAG_KEY = 'isLoggedIn';
 const ME_CACHE_TTL_MS = 30 * 1000;
 
@@ -198,8 +199,10 @@ export interface AppGroupDecisionResult {
 export interface AuthPayload {
     access_token?: string;
     refresh_token?: string;
+    csrf_token?: string;
     accessToken?: string;
     refreshToken?: string;
+    csrfToken?: string;
     token?: string;
 }
 
@@ -236,6 +239,10 @@ function getRefreshToken(): string | null {
     return localStorage.getItem(REFRESH_TOKEN_KEY);
 }
 
+function getCsrfToken(): string | null {
+    return localStorage.getItem(CSRF_TOKEN_KEY);
+}
+
 let meCache: { data: AppProfile; expiresAt: number } | null = null;
 let meInFlight: Promise<AppProfile> | null = null;
 
@@ -248,6 +255,7 @@ function setTokens(payload: AuthPayload | null | undefined): void {
     if (!payload) return;
     const accessToken = payload.access_token || payload.accessToken || payload.token;
     const refreshToken = payload.refresh_token || payload.refreshToken;
+    const csrfToken = payload.csrf_token || payload.csrfToken;
 
     if (accessToken) {
         if (localStorage.getItem(ACCESS_TOKEN_KEY) !== accessToken) {
@@ -259,11 +267,15 @@ function setTokens(payload: AuthPayload | null | undefined): void {
     if (refreshToken) {
         localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
     }
+    if (csrfToken) {
+        localStorage.setItem(CSRF_TOKEN_KEY, csrfToken);
+    }
 }
 
 function clearTokens(): void {
     localStorage.removeItem(ACCESS_TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(CSRF_TOKEN_KEY);
     localStorage.removeItem(LOGIN_FLAG_KEY);
     clearMeCache();
 }
@@ -307,17 +319,27 @@ async function parseResponseBody(response: Response): Promise<unknown> {
 
 async function tryRefreshAccessToken(): Promise<boolean> {
     const refreshToken = getRefreshToken();
-    if (!refreshToken) return false;
+    const csrfToken = getCsrfToken();
+
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+    };
+    if (csrfToken) {
+        headers['x-csrf-token'] = csrfToken;
+    }
 
     const response = await fetch(buildUrl('/auth/refresh'), {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            refresh_token: refreshToken,
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(
             refreshToken
-        })
+                ? {
+                      refresh_token: refreshToken,
+                      refreshToken
+                  }
+                : {}
+        )
     });
 
     if (!response.ok) return false;
@@ -354,9 +376,17 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         }
     }
 
+    if (method !== 'GET') {
+        const csrfToken = getCsrfToken();
+        if (csrfToken) {
+            headers['x-csrf-token'] = csrfToken;
+        }
+    }
+
     const response = await fetch(buildUrl(path), {
         method,
         headers,
+        credentials: 'include',
         body: body ? JSON.stringify(body) : undefined
     });
 
@@ -407,11 +437,39 @@ export const appApi = {
             phone?: string;
             email?: string;
         }) {
-            return request('/auth/register', {
+            const data = await request<AuthPayload | { tokens?: AuthPayload }>('/auth/register', {
                 method: 'POST',
                 auth: false,
                 body: payload
             });
+            const tokenPayload = (data as { tokens?: AuthPayload }).tokens || (data as AuthPayload);
+            setTokens(tokenPayload);
+            return data;
+        },
+
+        async registerRequestOtp(payload: { phone?: string; email?: string }) {
+            return request<{ sent: boolean; debug_code?: string }>('/auth/register/request-otp', {
+                method: 'POST',
+                auth: false,
+                body: payload
+            });
+        },
+
+        async registerConfirm(payload: {
+            password: string;
+            code: string;
+            name?: string;
+            phone?: string;
+            email?: string;
+        }) {
+            const data = await request<AuthPayload | { tokens?: AuthPayload }>('/auth/register/confirm', {
+                method: 'POST',
+                auth: false,
+                body: payload
+            });
+            const tokenPayload = (data as { tokens?: AuthPayload }).tokens || (data as AuthPayload);
+            setTokens(tokenPayload);
+            return data;
         },
 
         async login(payload: {
@@ -458,6 +516,60 @@ export const appApi = {
                     oldPassword: payload.oldPassword,
                     newPassword: payload.newPassword
                 }
+            });
+        },
+
+        async logoutAll() {
+            try {
+                return await request<{ revoked: number }>('/auth/logout-all', {
+                    method: 'POST',
+                    auth: true
+                });
+            } finally {
+                clearTokens();
+            }
+        },
+
+        async listSessions() {
+            return request<{ items: Array<Record<string, unknown>> }>('/auth/sessions', { auth: true });
+        },
+
+        async revokeSession(sessionId: string) {
+            return request<{ revoked: boolean; session_id: string }>(`/auth/sessions/${sessionId}`, {
+                method: 'DELETE',
+                auth: true
+            });
+        },
+
+        async oauthStart(provider: 'github') {
+            return request<{ provider: string; state: string; auth_url: string }>(`/auth/oauth/${provider}/start`, {
+                method: 'GET',
+                auth: false
+            });
+        },
+
+        async oauthCallback(provider: 'github', payload: { code: string; state: string }) {
+            const data = await request<AuthPayload & { oauth?: Record<string, unknown> }>(`/auth/oauth/${provider}/callback`, {
+                method: 'POST',
+                auth: false,
+                body: payload
+            });
+            setTokens(data);
+            return data;
+        },
+
+        async oauthBind(provider: 'github', payload: { code: string; state: string }) {
+            return request<{ bound: boolean; provider: string }>(`/auth/oauth/${provider}/bind`, {
+                method: 'POST',
+                auth: true,
+                body: payload
+            });
+        },
+
+        async oauthUnbind(provider: 'github') {
+            return request<{ removed: boolean; provider: string }>(`/auth/oauth/${provider}`, {
+                method: 'DELETE',
+                auth: true
             });
         }
     },
