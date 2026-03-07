@@ -15,12 +15,19 @@ const SecuritySettings = () => {
     const [showPass, setShowPass] = useState(false);
     const [methods, setMethods] = useState<{ email_bound: boolean; phone_bound: boolean; github_bound: boolean } | null>(null);
     const [configReady, setConfigReady] = useState<boolean | null>(null);
+    const [missingItems, setMissingItems] = useState<string[]>([]);
 
     React.useEffect(() => {
         Promise.all([appApi.auth.methods(), appApi.auth.configCheck()])
             .then(([m, cfg]) => {
                 setMethods(m);
                 setConfigReady(Boolean(cfg.ready));
+                const checks = (cfg as any).checks || {};
+                const smsMissing = (checks.sms?.missing || []).map((x: string) => `SMS: ${x}`);
+                const emailMissing = (checks.email?.missing || []).map((x: string) => `EMAIL: ${x}`);
+                const githubMissing = (checks.oauth?.github?.missing || []).map((x: string) => `GITHUB: ${x}`);
+                const oneClickMissing = (checks.one_click?.missing || []).map((x: string) => `ONE_CLICK: ${x}`);
+                setMissingItems([...smsMissing, ...emailMissing, ...githubMissing, ...oneClickMissing]);
             })
             .catch(() => {
                 // ignore methods/config fetch error in settings page
@@ -97,6 +104,16 @@ const SecuritySettings = () => {
                 <div className={`rounded-xl p-2 text-xs ${configReady ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
                     认证通道配置：{configReady === null ? '检查中' : configReady ? '就绪' : '未完全就绪'}
                 </div>
+                {!configReady && missingItems.length > 0 && (
+                    <div className="rounded-xl p-2 text-xs bg-amber-50 text-amber-700 space-y-1">
+                        <div className="font-medium">缺失配置项：</div>
+                        <ul className="list-disc pl-4">
+                            {missingItems.map((item) => (
+                                <li key={item}>{item}</li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
             </section>
 
             <section className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-purple-50 space-y-6">

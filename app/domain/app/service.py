@@ -58,7 +58,7 @@ from app.domain.restaurant.service import RestaurantService
 from app.infra.models.chat import ChatMessage, ChatSession
 from app.infra.models.fridge import FridgeItem, FridgePhoto, RecognitionJob
 from app.infra.models.game import BlindboxRoll, WheelConfig, WheelSpin
-from app.infra.models.auth import OAuthAccount, UserSession
+from app.infra.models.auth import AuthEvent, OAuthAccount, UserSession
 from app.infra.models.grocery import GroceryList, GroceryListItem
 from app.infra.models.preference import UserPreference, UserProfile
 from app.infra.models.user import User
@@ -190,6 +190,31 @@ class AppBffService:
     @staticmethod
     def _sha256(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    async def _log_auth_event(
+        db: AsyncSession,
+        *,
+        event_type: str,
+        user_id: str | None = None,
+        ip: str | None = None,
+        user_agent: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            db.add(
+                AuthEvent(
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    event_type=event_type[:64],
+                    ip=(ip or "")[:64] or None,
+                    user_agent=(user_agent or "")[:255] or None,
+                    payload_json=payload or {},
+                )
+            )
+            await db.flush()
+        except Exception:
+            logger.exception("failed to log auth event: %s", event_type)
 
     @staticmethod
     async def _send_sms_code(phone: str, code: str, purpose: str) -> dict[str, Any]:
@@ -403,6 +428,13 @@ class AppBffService:
             password_hash=hash_password(payload["password"]),
         )
         db.add(user)
+        await AppBffService._log_auth_event(
+            db,
+            event_type="register_success",
+            user_id=user.id,
+            ip=client_ip,
+            payload={"source": "direct_register"},
+        )
         await db.commit()
         return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 
@@ -510,9 +542,25 @@ class AppBffService:
                 await redis_client.expire(fail_key, 3600)
             if failures >= 5:
                 await redis_client.setex(lock_key, 15 * 60, "1")
+            await AppBffService._log_auth_event(
+                db,
+                event_type="login_failed",
+                user_id=getattr(user, "id", None),
+                ip=client_ip,
+                payload={"account": account, "failures": int(failures)},
+            )
+            await db.commit()
             raise AppError(code=AUTH_INVALID_CREDENTIALS, message="invalid credentials", http_status=401)
 
         await redis_client.delete(fail_key)
+        await AppBffService._log_auth_event(
+            db,
+            event_type="login_success",
+            user_id=user.id,
+            ip=client_ip,
+            payload={"account": account},
+        )
+        await db.commit()
         return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 
     @staticmethod
@@ -604,6 +652,14 @@ class AppBffService:
 
         await redis_client.delete(f"otp:login:{target}")
         await redis_client.delete(attempts_key)
+        await AppBffService._log_auth_event(
+            db,
+            event_type="otp_login_success",
+            user_id=user.id,
+            ip=client_ip,
+            payload={"account": target},
+        )
+        await db.commit()
         return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 
     @staticmethod
@@ -656,6 +712,13 @@ class AppBffService:
             raise AppError(code=AUTH_SESSION_REVOKED, message="refresh token revoked", http_status=401)
 
         if session.current_refresh_jti != jti:
+            await AppBffService._log_auth_event(
+                db,
+                event_type="refresh_replay_detected",
+                user_id=user_id,
+                ip=client_ip,
+                payload={"session_id": session_id, "jti": jti},
+            )
             await AppBffService._revoke_family(db, redis_client, user_id, family_id or (session.session_family_id or ""), "replay")
             raise AppError(code=AUTH_TOKEN_REPLAY_DETECTED, message="refresh token replay detected", http_status=401)
 
@@ -710,6 +773,12 @@ class AppBffService:
             s.revoke_reason = "logout_all"
             if s.current_refresh_jti:
                 await redis_client.delete(f"rt:{s.current_refresh_jti}")
+        await AppBffService._log_auth_event(
+            db,
+            event_type="logout_all",
+            user_id=user_id,
+            payload={"revoked": len(sessions)},
+        )
         await db.commit()
         return {"revoked": len(sessions)}
 
@@ -749,6 +818,12 @@ class AppBffService:
         session.revoke_reason = "manual"
         if session.current_refresh_jti:
             await redis_client.delete(f"rt:{session.current_refresh_jti}")
+        await AppBffService._log_auth_event(
+            db,
+            event_type="session_revoke_manual",
+            user_id=user_id,
+            payload={"session_id": session_id},
+        )
         await db.commit()
         return {"revoked": True, "session_id": session_id}
 
@@ -831,6 +906,12 @@ class AppBffService:
 
         await redis_client.delete(f"otp:pwdreset:{account}")
         await redis_client.delete(attempts_key)
+        await AppBffService._log_auth_event(
+            db,
+            event_type="password_reset_success",
+            user_id=user.id,
+            payload={"account": account},
+        )
         await db.commit()
         return {"updated": True}
 
