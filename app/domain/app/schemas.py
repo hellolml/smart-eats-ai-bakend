@@ -13,6 +13,19 @@ class RegisterRequest(BaseModel):
     name: str | None = None
 
 
+class RegisterOtpRequest(BaseModel):
+    email: EmailStr | None = None
+    phone: str | None = None
+
+
+class RegisterConfirmRequest(BaseModel):
+    email: EmailStr | None = None
+    phone: str | None = None
+    code: str
+    password: str
+    name: str | None = None
+
+
 class LoginRequest(BaseModel):
     account: str
     password: str

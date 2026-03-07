@@ -254,6 +254,7 @@ class AppBffService:
 
     @staticmethod
     async def register(payload: dict[str, Any], db: AsyncSession, redis_client: redis.Redis, client_ip: str) -> dict[str, Any]:
+        # Backward-compatible direct registration
         email = payload.get("email")
         phone = payload.get("phone")
         if not email and not phone:
@@ -278,6 +279,80 @@ class AppBffService:
         )
         db.add(user)
         await db.commit()
+        return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
+
+    @staticmethod
+    async def register_request_otp(payload: dict[str, Any], db: AsyncSession, redis_client: redis.Redis) -> dict[str, Any]:
+        email = payload.get("email")
+        phone = payload.get("phone")
+        if not email and not phone:
+            raise HTTPException(status_code=400, detail="email or phone required")
+
+        account = str(email or phone)
+        conditions = []
+        if email:
+            conditions.append(User.email == email)
+        if phone:
+            conditions.append(User.phone == phone)
+        existing = (await db.execute(select(User).where(or_(*conditions)))).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(status_code=400, detail="email or phone already exists")
+
+        code = f"{random.randint(0, 999999):06d}"
+        await redis_client.setex(f"otp:register:{account}", 10 * 60, AppBffService._sha256(code))
+        await redis_client.setex(f"otp:register:attempts:{account}", 10 * 60, "0")
+        resp: dict[str, Any] = {"sent": True}
+        if settings.DEBUG:
+            resp["debug_code"] = code
+        return resp
+
+    @staticmethod
+    async def register_confirm(
+        payload: dict[str, Any],
+        db: AsyncSession,
+        redis_client: redis.Redis,
+        client_ip: str,
+    ) -> dict[str, Any]:
+        email = payload.get("email")
+        phone = payload.get("phone")
+        code = str(payload.get("code") or "")
+        if not email and not phone:
+            raise HTTPException(status_code=400, detail="email or phone required")
+        if not code:
+            raise HTTPException(status_code=400, detail="code required")
+        account = str(email or phone)
+
+        code_hash = await redis_client.get(f"otp:register:{account}")
+        if not code_hash:
+            raise HTTPException(status_code=400, detail="register code invalid or expired")
+        attempts_key = f"otp:register:attempts:{account}"
+        attempts = await redis_client.incr(attempts_key)
+        if attempts > 5:
+            await redis_client.delete(f"otp:register:{account}")
+            raise HTTPException(status_code=400, detail="register code invalid or expired")
+        if AppBffService._sha256(code) != code_hash:
+            raise HTTPException(status_code=400, detail="register code invalid or expired")
+
+        conditions = []
+        if email:
+            conditions.append(User.email == email)
+        if phone:
+            conditions.append(User.phone == phone)
+        existing = (await db.execute(select(User).where(or_(*conditions)))).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(status_code=400, detail="email or phone already exists")
+
+        user = User(
+            id=str(uuid4()),
+            email=email,
+            phone=phone,
+            nickname=payload.get("name") or email or phone or "user",
+            password_hash=hash_password(payload["password"]),
+        )
+        db.add(user)
+        await db.commit()
+        await redis_client.delete(f"otp:register:{account}")
+        await redis_client.delete(attempts_key)
         return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
 
     @staticmethod
@@ -394,6 +469,58 @@ class AppBffService:
         except AuthError:
             pass
         return {"logged_out": True}
+
+    @staticmethod
+    async def logout_all(user_id: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
+        sessions = (await db.execute(select(UserSession).where(UserSession.user_id == user_id))).scalars().all()
+        now = datetime.now(timezone.utc)
+        for s in sessions:
+            s.status = "revoked"
+            s.revoked_at = now
+            s.revoke_reason = "logout_all"
+            if s.current_refresh_jti:
+                await redis_client.delete(f"rt:{s.current_refresh_jti}")
+        await db.commit()
+        return {"revoked": len(sessions)}
+
+    @staticmethod
+    async def list_sessions(user_id: str, db: AsyncSession) -> dict[str, Any]:
+        sessions = (
+            await db.execute(
+                select(UserSession).where(UserSession.user_id == user_id).order_by(desc(UserSession.created_at))
+            )
+        ).scalars().all()
+        return {
+            "items": [
+                {
+                    "id": s.id,
+                    "status": s.status,
+                    "device_info": s.device_info,
+                    "ip": s.ip,
+                    "last_ip": s.last_ip,
+                    "last_seen_at": s.last_seen_at,
+                    "created_at": s.created_at,
+                    "revoked_at": s.revoked_at,
+                    "revoke_reason": s.revoke_reason,
+                }
+                for s in sessions
+            ]
+        }
+
+    @staticmethod
+    async def revoke_session(user_id: str, session_id: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
+        session = (
+            await db.execute(select(UserSession).where(UserSession.id == session_id, UserSession.user_id == user_id))
+        ).scalar_one_or_none()
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        session.status = "revoked"
+        session.revoked_at = datetime.now(timezone.utc)
+        session.revoke_reason = "manual"
+        if session.current_refresh_jti:
+            await redis_client.delete(f"rt:{session.current_refresh_jti}")
+        await db.commit()
+        return {"revoked": True, "session_id": session_id}
 
     @staticmethod
     async def change_password(

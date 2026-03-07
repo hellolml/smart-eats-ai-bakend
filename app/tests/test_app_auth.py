@@ -175,3 +175,64 @@ async def test_app_refresh_token_replay_detected(client):
         json={"refresh_token": latest_refresh},
     )
     assert blocked_refresh.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_app_register_otp_confirm_flow(client):
+    otp_resp = await client.post(
+        "/api/v1/app/auth/register/request-otp",
+        json={"email": "app_otp_register@example.com"},
+    )
+    assert otp_resp.status_code == 200
+    code = otp_resp.json()["data"]["debug_code"]
+
+    confirm_resp = await client.post(
+        "/api/v1/app/auth/register/confirm",
+        json={
+            "email": "app_otp_register@example.com",
+            "code": code,
+            "password": "secret123",
+            "name": "otp-user",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()["data"]
+    assert data["access_token"]
+    assert data["refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_app_sessions_and_logout_all(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_sessions@example.com", "password": "secret123", "name": "sessions"},
+    )
+    assert register_resp.status_code == 200
+    tokens = register_resp.json()["data"]
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    sessions_resp = await client.get("/api/v1/app/auth/sessions", headers=headers)
+    assert sessions_resp.status_code == 200
+    items = sessions_resp.json()["data"]["items"]
+    assert len(items) >= 1
+    sid = items[0]["id"]
+
+    revoke_resp = await client.delete(f"/api/v1/app/auth/sessions/{sid}", headers=headers)
+    assert revoke_resp.status_code == 200
+
+    login_resp = await client.post(
+        "/api/v1/app/auth/login",
+        json={"account": "app_sessions@example.com", "password": "secret123"},
+    )
+    assert login_resp.status_code == 200
+    tokens2 = login_resp.json()["data"]
+    headers2 = {"Authorization": f"Bearer {tokens2['access_token']}"}
+
+    logout_all_resp = await client.post("/api/v1/app/auth/logout-all", headers=headers2)
+    assert logout_all_resp.status_code == 200
+
+    refresh_after_logout_all = await client.post(
+        "/api/v1/app/auth/refresh",
+        json={"refresh_token": tokens2["refresh_token"]},
+    )
+    assert refresh_after_logout_all.status_code == 401

@@ -29,6 +29,8 @@ from app.domain.app.schemas import (
     PasswordResetConfirmRequest,
     PasswordResetRequestRequest,
     RefreshRequest,
+    RegisterConfirmRequest,
+    RegisterOtpRequest,
     RegisterRequest,
     RestaurantsQuery,
     ScanApplyRequest,
@@ -116,6 +118,19 @@ async def register(payload: RegisterRequest, request: Request, db: db_dep, redis
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
+@router.post("/auth/register/request-otp")
+async def register_request_otp(payload: RegisterOtpRequest, request: Request, db: db_dep, redis: redis_dep):
+    data = await AppBffService.register_request_otp(payload.model_dump(), db, redis)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/register/confirm")
+async def register_confirm(payload: RegisterConfirmRequest, request: Request, db: db_dep, redis: redis_dep):
+    client_ip = request.client.host if request.client else "unknown"
+    data = await AppBffService.register_confirm(payload.model_dump(), db, redis, client_ip)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
 @router.post("/auth/login")
 async def login(payload: LoginRequest, request: Request, db: db_dep, redis: redis_dep):
     client_ip = request.client.host if request.client else "unknown"
@@ -139,6 +154,39 @@ async def logout(
     _user_id: str = Depends(get_current_user_id),
 ):
     data = await AppBffService.logout(payload.refresh_token, redis, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/logout-all")
+async def logout_all(
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.logout_all(user_id, redis, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/auth/sessions")
+async def list_sessions(
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.list_sessions(user_id, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.delete("/auth/sessions/{session_id}")
+async def revoke_session(
+    session_id: str,
+    request: Request,
+    db: db_dep,
+    redis: redis_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.revoke_session(user_id, session_id, redis, db)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
