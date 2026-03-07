@@ -51,7 +51,7 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -68,7 +68,7 @@ class RefreshRequest(BaseModel):
 
 
 class LogoutRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
     @model_validator(mode="before")
     @classmethod

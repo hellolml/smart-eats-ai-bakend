@@ -27,6 +27,9 @@ class Settings(BaseSettings):
 
     ACCESS_TOKEN_TTL_SECONDS: int = 15 * 60
     REFRESH_TOKEN_TTL_SECONDS: int = 7 * 24 * 60 * 60
+    REFRESH_COOKIE_NAME: str = "se_refresh_token"
+    REFRESH_COOKIE_SECURE: bool = False
+    REFRESH_COOKIE_SAMESITE: str = "lax"
 
     CHAT_CANCEL_TTL: int = 600
     CHAT_HISTORY_LIMIT: int = 30

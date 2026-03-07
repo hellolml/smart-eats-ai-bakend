@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from typing import Annotated, Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, HTTPException
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -44,6 +44,25 @@ from app.domain.group_decision.service import GroupDecisionService
 from app.tasks import fridge_recognition
 
 router = APIRouter()
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        max_age=settings.REFRESH_TOKEN_TTL_SECONDS,
+        httponly=True,
+        secure=settings.REFRESH_COOKIE_SECURE,
+        samesite=settings.REFRESH_COOKIE_SAMESITE,
+        path="/api/v1/app/auth/refresh",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=settings.REFRESH_COOKIE_NAME,
+        path="/api/v1/app/auth/refresh",
+    )
 
 
 class DecisionBlindboxRequest(BaseModel):
@@ -112,9 +131,11 @@ async def list_chat_models(request: Request, _user_id: str = Depends(get_current
 
 
 @router.post("/auth/register")
-async def register(payload: RegisterRequest, request: Request, db: db_dep, redis: redis_dep):
+async def register(payload: RegisterRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.register(payload.model_dump(), db, redis, client_ip)
+    if data.get("refresh_token"):
+        _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -125,23 +146,32 @@ async def register_request_otp(payload: RegisterOtpRequest, request: Request, db
 
 
 @router.post("/auth/register/confirm")
-async def register_confirm(payload: RegisterConfirmRequest, request: Request, db: db_dep, redis: redis_dep):
+async def register_confirm(payload: RegisterConfirmRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.register_confirm(payload.model_dump(), db, redis, client_ip)
+    if data.get("refresh_token"):
+        _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
 @router.post("/auth/login")
-async def login(payload: LoginRequest, request: Request, db: db_dep, redis: redis_dep):
+async def login(payload: LoginRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.login(payload.model_dump(), db, redis, client_ip)
+    if data.get("refresh_token"):
+        _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
 @router.post("/auth/refresh")
-async def refresh(payload: RefreshRequest, request: Request, db: db_dep, redis: redis_dep):
+async def refresh(payload: RefreshRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
     client_ip = request.client.host if request.client else "unknown"
-    data = await AppBffService.refresh(payload.refresh_token, redis, db, client_ip)
+    refresh_token = payload.refresh_token or request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="refresh token required")
+    data = await AppBffService.refresh(refresh_token, redis, db, client_ip)
+    if data.get("refresh_token"):
+        _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -149,22 +179,30 @@ async def refresh(payload: RefreshRequest, request: Request, db: db_dep, redis: 
 async def logout(
     payload: LogoutRequest,
     request: Request,
+    response: Response,
     db: db_dep,
     redis: redis_dep,
     _user_id: str = Depends(get_current_user_id),
 ):
-    data = await AppBffService.logout(payload.refresh_token, redis, db)
+    refresh_token = payload.refresh_token or request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    if refresh_token:
+        data = await AppBffService.logout(refresh_token, redis, db)
+    else:
+        data = {"logged_out": True}
+    _clear_refresh_cookie(response)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
 @router.post("/auth/logout-all")
 async def logout_all(
     request: Request,
+    response: Response,
     db: db_dep,
     redis: redis_dep,
     user_id: str = Depends(get_current_user_id),
 ):
     data = await AppBffService.logout_all(user_id, redis, db)
+    _clear_refresh_cookie(response)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -221,6 +259,7 @@ async def password_reset_request(
 async def password_reset_confirm(
     payload: PasswordResetConfirmRequest,
     request: Request,
+    response: Response,
     db: db_dep,
     redis: redis_dep,
 ):
@@ -231,6 +270,7 @@ async def password_reset_confirm(
         redis_client=redis,
         db=db,
     )
+    _clear_refresh_cookie(response)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 

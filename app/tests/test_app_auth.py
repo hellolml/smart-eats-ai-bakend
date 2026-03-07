@@ -228,6 +228,20 @@ async def test_app_login_lock_after_multiple_failures(client):
 
 
 @pytest.mark.asyncio
+async def test_app_refresh_supports_http_only_cookie(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_cookie_refresh@example.com", "password": "secret123", "name": "cookie"},
+    )
+    assert register_resp.status_code == 200
+
+    # use cookie fallback (no refresh_token in body)
+    refresh_resp = await client.post("/api/v1/app/auth/refresh", json={})
+    assert refresh_resp.status_code == 200
+    assert refresh_resp.json()["data"]["access_token"]
+
+
+@pytest.mark.asyncio
 async def test_app_sessions_and_logout_all(client):
     register_resp = await client.post(
         "/api/v1/app/auth/register",
