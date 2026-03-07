@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     REFRESH_COOKIE_NAME: str = "se_refresh_token"
     REFRESH_COOKIE_SECURE: bool = False
     REFRESH_COOKIE_SAMESITE: str = "lax"
+    CSRF_COOKIE_NAME: str = "se_csrf_token"
+    CSRF_HEADER_NAME: str = "x-csrf-token"
 
     GITHUB_OAUTH_CLIENT_ID: str | None = None
     GITHUB_OAUTH_CLIENT_SECRET: str | None = None

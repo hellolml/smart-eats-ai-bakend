@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
+from uuid import uuid4
 from typing import Annotated, Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, HTTPException
@@ -47,7 +48,8 @@ from app.tasks import fridge_recognition
 router = APIRouter()
 
 
-def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+def _set_refresh_cookie(response: Response, refresh_token: str) -> str:
+    csrf_token = uuid4().hex
     response.set_cookie(
         key=settings.REFRESH_COOKIE_NAME,
         value=refresh_token,
@@ -57,6 +59,16 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
         samesite=settings.REFRESH_COOKIE_SAMESITE,
         path="/api/v1/app/auth/refresh",
     )
+    response.set_cookie(
+        key=settings.CSRF_COOKIE_NAME,
+        value=csrf_token,
+        max_age=settings.REFRESH_TOKEN_TTL_SECONDS,
+        httponly=False,
+        secure=settings.REFRESH_COOKIE_SECURE,
+        samesite=settings.REFRESH_COOKIE_SAMESITE,
+        path="/",
+    )
+    return csrf_token
 
 
 def _clear_refresh_cookie(response: Response) -> None:
@@ -64,6 +76,19 @@ def _clear_refresh_cookie(response: Response) -> None:
         key=settings.REFRESH_COOKIE_NAME,
         path="/api/v1/app/auth/refresh",
     )
+    response.delete_cookie(
+        key=settings.CSRF_COOKIE_NAME,
+        path="/",
+    )
+
+
+def _assert_csrf_if_cookie_mode(request: Request, using_cookie_refresh: bool) -> None:
+    if not using_cookie_refresh:
+        return
+    cookie_csrf = request.cookies.get(settings.CSRF_COOKIE_NAME) or ""
+    header_csrf = request.headers.get(settings.CSRF_HEADER_NAME) or ""
+    if not cookie_csrf or cookie_csrf != header_csrf:
+        raise HTTPException(status_code=403, detail="csrf token invalid")
 
 
 class DecisionBlindboxRequest(BaseModel):
@@ -136,7 +161,7 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.register(payload.model_dump(), db, redis, client_ip)
     if data.get("refresh_token"):
-        _set_refresh_cookie(response, data["refresh_token"])
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -151,7 +176,7 @@ async def register_confirm(payload: RegisterConfirmRequest, request: Request, re
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.register_confirm(payload.model_dump(), db, redis, client_ip)
     if data.get("refresh_token"):
-        _set_refresh_cookie(response, data["refresh_token"])
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -173,7 +198,7 @@ async def oauth_callback(
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.oauth_callback(provider, payload.code, payload.state, redis, db, client_ip)
     if data.get("refresh_token"):
-        _set_refresh_cookie(response, data["refresh_token"])
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -206,19 +231,21 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.login(payload.model_dump(), db, redis, client_ip)
     if data.get("refresh_token"):
-        _set_refresh_cookie(response, data["refresh_token"])
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
 @router.post("/auth/refresh")
 async def refresh(payload: RefreshRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
     client_ip = request.client.host if request.client else "unknown"
-    refresh_token = payload.refresh_token or request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    cookie_refresh = request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    refresh_token = payload.refresh_token or cookie_refresh
     if not refresh_token:
         raise HTTPException(status_code=401, detail="refresh token required")
+    _assert_csrf_if_cookie_mode(request, using_cookie_refresh=bool(cookie_refresh and not payload.refresh_token))
     data = await AppBffService.refresh(refresh_token, redis, db, client_ip)
     if data.get("refresh_token"):
-        _set_refresh_cookie(response, data["refresh_token"])
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -231,7 +258,9 @@ async def logout(
     redis: redis_dep,
     _user_id: str = Depends(get_current_user_id),
 ):
-    refresh_token = payload.refresh_token or request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    cookie_refresh = request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    refresh_token = payload.refresh_token or cookie_refresh
+    _assert_csrf_if_cookie_mode(request, using_cookie_refresh=bool(cookie_refresh and not payload.refresh_token))
     if refresh_token:
         data = await AppBffService.logout(refresh_token, redis, db)
     else:

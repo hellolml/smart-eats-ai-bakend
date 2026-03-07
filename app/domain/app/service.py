@@ -703,6 +703,7 @@ class AppBffService:
             )
         ).scalar_one_or_none()
 
+        is_new_user = False
         if oauth is None:
             user = None
             email = profile.get("email")
@@ -718,6 +719,7 @@ class AppBffService:
                 )
                 db.add(user)
                 await db.flush()
+                is_new_user = True
 
             oauth = OAuthAccount(
                 id=str(uuid4()),
@@ -732,7 +734,15 @@ class AppBffService:
         else:
             user_id = oauth.user_id
 
-        return await AppBffService.issue_tokens(user_id, redis_client, db, ip=client_ip)
+        tokens = await AppBffService.issue_tokens(user_id, redis_client, db, ip=client_ip)
+        tokens["oauth"] = {
+            "provider": provider,
+            "provider_uid": provider_uid,
+            "email": profile.get("email"),
+            "nickname": profile.get("nickname"),
+            "is_new_user": is_new_user,
+        }
+        return tokens
 
     @staticmethod
     async def oauth_bind(

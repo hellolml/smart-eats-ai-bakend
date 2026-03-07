@@ -234,11 +234,28 @@ async def test_app_refresh_supports_http_only_cookie(client):
         json={"email": "app_cookie_refresh@example.com", "password": "secret123", "name": "cookie"},
     )
     assert register_resp.status_code == 200
+    csrf_token = register_resp.json()["data"]["csrf_token"]
 
-    # use cookie fallback (no refresh_token in body)
-    refresh_resp = await client.post("/api/v1/app/auth/refresh", json={})
+    # use cookie fallback (no refresh_token in body) with csrf header
+    refresh_resp = await client.post(
+        "/api/v1/app/auth/refresh",
+        json={},
+        headers={"x-csrf-token": csrf_token},
+    )
     assert refresh_resp.status_code == 200
     assert refresh_resp.json()["data"]["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_app_refresh_cookie_requires_csrf_header(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_cookie_csrf@example.com", "password": "secret123", "name": "cookie-csrf"},
+    )
+    assert register_resp.status_code == 200
+
+    refresh_resp = await client.post("/api/v1/app/auth/refresh", json={})
+    assert refresh_resp.status_code == 403
 
 
 @pytest.mark.asyncio
