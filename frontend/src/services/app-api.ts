@@ -280,6 +280,39 @@ function clearTokens(): void {
     clearMeCache();
 }
 
+const ERROR_MESSAGE_ZH_MAP: Array<{ match: RegExp; zh: string }> = [
+    { match: /invalid credentials/i, zh: '账号或密码错误' },
+    { match: /account temporarily locked/i, zh: '账号已被临时锁定，请稍后再试' },
+    { match: /refresh token replay detected/i, zh: '检测到登录状态异常，请重新登录' },
+    { match: /refresh token revoked|refresh token invalid/i, zh: '登录状态已失效，请重新登录' },
+    { match: /refresh token required/i, zh: '缺少登录凭证，请重新登录' },
+    { match: /csrf token invalid/i, zh: '安全校验失败，请刷新后重试' },
+    { match: /email or phone already exists/i, zh: '手机号或邮箱已注册' },
+    { match: /email or phone required|account required/i, zh: '请填写手机号或邮箱' },
+    { match: /phone required/i, zh: '请输入手机号' },
+    { match: /code required/i, zh: '请输入验证码' },
+    { match: /login code invalid or expired|register code invalid or expired|reset code invalid or expired|otp/i, zh: '验证码无效或已过期' },
+    { match: /account must be a valid phone or email/i, zh: '账号格式不正确，请输入手机号或邮箱' },
+    { match: /phone must match/i, zh: '手机号格式不正确' },
+    { match: /password length must be between 8 and 64/i, zh: '密码长度需在 8 到 64 位之间' },
+    { match: /password must contain at least one letter/i, zh: '密码需至少包含一个字母' },
+    { match: /password must contain at least one number/i, zh: '密码需至少包含一个数字' },
+    { match: /oauth provider unsupported|oauth provider not configured/i, zh: '第三方登录暂不可用，请联系管理员配置' },
+    { match: /oauth state invalid/i, zh: '第三方登录状态已失效，请重新发起' },
+    { match: /group decision link expired/i, zh: '分享链接已过期' },
+    { match: /invalid share token/i, zh: '分享链接无效' },
+    { match: /group decision already closed/i, zh: '该投票已结束' },
+];
+
+function toZhErrorMessage(message: string): string {
+    const text = (message || '').trim();
+    if (!text) return '请求失败，请稍后重试';
+    for (const item of ERROR_MESSAGE_ZH_MAP) {
+        if (item.match.test(text)) return item.zh;
+    }
+    return text;
+}
+
 function parseEnvelope<T>(raw: unknown, status?: number): T {
     if (!raw || typeof raw !== 'object') {
         if (raw === null || raw === undefined) {
@@ -297,7 +330,7 @@ function parseEnvelope<T>(raw: unknown, status?: number): T {
     const isSuccessCode = Number.isNaN(normalizedCode) || normalizedCode === 0 || normalizedCode === 200;
 
     if (!isSuccessCode) {
-        throw new ApiError(payload.message || 'Request failed', {
+        throw new ApiError(toZhErrorMessage(payload.message || 'Request failed'), {
             status,
             code: payload.code,
             traceId: payload.trace_id
@@ -413,7 +446,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
                 throw error;
             }
         }
-        throw new ApiError(errorMessage, { status: response.status });
+        throw new ApiError(toZhErrorMessage(errorMessage), { status: response.status });
     }
 
     return parseEnvelope<T>(payload, response.status);
