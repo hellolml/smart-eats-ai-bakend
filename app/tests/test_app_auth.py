@@ -359,6 +359,24 @@ async def test_app_phone_one_click_login_mock(client):
 
 
 @pytest.mark.asyncio
+async def test_app_auth_methods_endpoint(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_methods@example.com", "phone": "15500003333", "password": "secret123", "name": "methods"},
+    )
+    assert register_resp.status_code == 200
+    tokens = register_resp.json()["data"]
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    methods_resp = await client.get("/api/v1/app/auth/methods", headers=headers)
+    assert methods_resp.status_code == 200
+    data = methods_resp.json()["data"]
+    assert data["email_bound"] is True
+    assert data["phone_bound"] is True
+    assert isinstance(data["oauth_providers"], list)
+
+
+@pytest.mark.asyncio
 async def test_app_oauth_bind_unbind(client, monkeypatch):
     async def fake_fetch(_code: str):
         return {

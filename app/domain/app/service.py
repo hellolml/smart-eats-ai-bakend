@@ -983,6 +983,20 @@ class AppBffService:
         return {"removed": True, "provider": provider}
 
     @staticmethod
+    async def auth_methods(user_id: str, db: AsyncSession) -> dict[str, Any]:
+        user = await AppBffService._get_user(user_id, db)
+        oauth_rows = (
+            await db.execute(select(OAuthAccount).where(OAuthAccount.user_id == user_id))
+        ).scalars().all()
+        providers = sorted({row.provider for row in oauth_rows if row.provider})
+        return {
+            "email_bound": bool(user.email),
+            "phone_bound": bool(user.phone),
+            "oauth_providers": providers,
+            "github_bound": "github" in providers,
+        }
+
+    @staticmethod
     async def _get_user(user_id: str, db: AsyncSession) -> User:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()

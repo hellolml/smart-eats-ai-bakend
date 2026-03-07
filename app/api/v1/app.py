@@ -309,6 +309,16 @@ async def logout_all(
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
+@router.get("/auth/methods")
+async def auth_methods(
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.auth_methods(user_id, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
 @router.get("/auth/sessions")
 async def list_sessions(
     request: Request,

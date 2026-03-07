@@ -13,6 +13,13 @@ const SecuritySettings = () => {
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPass, setShowPass] = useState(false);
+    const [methods, setMethods] = useState<{ email_bound: boolean; phone_bound: boolean; github_bound: boolean } | null>(null);
+
+    React.useEffect(() => {
+        appApi.auth.methods().then(setMethods).catch(() => {
+            // ignore methods fetch error in settings page
+        });
+    }, []);
     const handleSave = async () => {
         if (!oldPassword || !newPassword || !confirmPassword) {
             toast.error('请填写完整信息');
@@ -67,6 +74,21 @@ const SecuritySettings = () => {
                     </p>
                 </div>
             </div>
+
+            <section className="bg-white rounded-[2.5rem] p-6 shadow-sm border border-purple-50 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-800">登录方式状态</h3>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div className={`rounded-xl p-2 ${methods?.phone_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+                        手机号：{methods?.phone_bound ? '已绑定' : '未绑定'}
+                    </div>
+                    <div className={`rounded-xl p-2 ${methods?.email_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+                        邮箱：{methods?.email_bound ? '已绑定' : '未绑定'}
+                    </div>
+                    <div className={`rounded-xl p-2 ${methods?.github_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+                        GitHub：{methods?.github_bound ? '已绑定' : '未绑定'}
+                    </div>
+                </div>
+            </section>
 
             <section className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-purple-50 space-y-6">
                 <div className="space-y-1.5">

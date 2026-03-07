@@ -20,12 +20,14 @@ const SessionManagement: React.FC = () => {
   const navigate = useNavigate();
   const [items, setItems] = React.useState<SessionItem[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [methods, setMethods] = React.useState<{ email_bound: boolean; phone_bound: boolean; github_bound: boolean } | null>(null);
 
   const load = React.useCallback(async () => {
     setLoading(true);
     try {
-      const res = await appApi.auth.listSessions();
+      const [res, authMethods] = await Promise.all([appApi.auth.listSessions(), appApi.auth.methods()]);
       setItems((res.items || []) as SessionItem[]);
+      setMethods(authMethods);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : '加载会话失败');
     } finally {
@@ -86,15 +88,27 @@ const SessionManagement: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-2xl border p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-medium">第三方登录</div>
+        <div className="text-sm font-medium">登录方式总览</div>
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <div className={`rounded-xl p-2 ${methods?.phone_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+            手机号：{methods?.phone_bound ? '已绑定' : '未绑定'}
+          </div>
+          <div className={`rounded-xl p-2 ${methods?.email_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+            邮箱：{methods?.email_bound ? '已绑定' : '未绑定'}
+          </div>
+          <div className={`rounded-xl p-2 ${methods?.github_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+            GitHub：{methods?.github_bound ? '已绑定' : '未绑定'}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
           <button onClick={bindGithub} className="text-xs px-3 py-1 rounded-lg bg-black text-white flex items-center gap-1">
             <Link2 size={12} /> 绑定 GitHub
           </button>
+          <button onClick={unbindGithub} className="text-xs px-3 py-1 rounded-lg bg-gray-100 text-gray-700 flex items-center gap-1">
+            <Link2Off size={12} /> 解绑 GitHub
+          </button>
         </div>
-        <button onClick={unbindGithub} className="text-xs px-3 py-1 rounded-lg bg-gray-100 text-gray-700 flex items-center gap-1">
-          <Link2Off size={12} /> 解绑 GitHub
-        </button>
       </div>
 
       <div className="bg-white rounded-2xl border p-4 space-y-3">

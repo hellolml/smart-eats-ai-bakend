@@ -578,6 +578,12 @@ export const appApi = {
             }
         },
 
+        async methods() {
+            return request<{ email_bound: boolean; phone_bound: boolean; oauth_providers: string[]; github_bound: boolean }>('/auth/methods', {
+                auth: true
+            });
+        },
+
         async listSessions() {
             return request<{ items: Array<Record<string, unknown>> }>('/auth/sessions', { auth: true });
         },
