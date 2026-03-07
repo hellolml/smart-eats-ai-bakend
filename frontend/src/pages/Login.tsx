@@ -47,6 +47,15 @@ const Login = () => {
         }
     };
 
+    const handleGithubLogin = async () => {
+        try {
+            const data = await appApi.auth.oauthStart('github');
+            window.location.href = data.auth_url;
+        } catch (error) {
+            toast.error(error instanceof ApiError ? error.message : '获取 GitHub 授权链接失败');
+        }
+    };
+
     return (
         <div className="h-full flex flex-col justify-center items-center px-4 py-4 overflow-hidden">
             <motion.div
@@ -157,8 +166,10 @@ const Login = () => {
 transition-colors shadow-sm">
                             <Chrome size={20} />
                         </button>
-                        <button className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-xl md:rounded-2xl border border-gray-50 flex items-center justify-center text-gray-600 hover:bg-gray-50
-transition-colors shadow-sm">
+                        <button
+                            onClick={handleGithubLogin}
+                            className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-xl md:rounded-2xl border border-gray-50 flex items-center justify-center text-gray-600 hover:bg-gray-50 transition-colors shadow-sm"
+                        >
                             <Github size={20} />
                         </button>
                         <button className="w-10 h-10 md:w-12 md:h-12 bg-white rounded-xl md:rounded-2xl border border-gray-50 flex items-center justify-center text-[#00A1E9] hover:bg-gray-50

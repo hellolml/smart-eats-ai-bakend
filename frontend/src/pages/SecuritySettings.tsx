@@ -2,7 +2,7 @@ import React,{ useState } from "react";
 import { useNavigate } from 'react-router-dom';
 import {
     ChevronLeft, Save, Lock, ShieldCheck,
-    Eye, EyeOff
+    Eye, EyeOff, Smartphone
 } from 'lucide-react';
 import toast from "react-hot-toast";
 import { ApiError, appApi } from "@/services/app-api";
@@ -126,6 +126,14 @@ const SecuritySettings = () => {
                     </div>
                 </div>
             </section>
+
+            <button
+                onClick={() => navigate('/security/sessions')}
+                className="w-full bg-white text-gray-700 py-3.5 rounded-2xl border flex items-center justify-center gap-2"
+            >
+                <Smartphone size={18} />
+                会话管理（设备下线）
+            </button>
             <button
                 onClick={handleSave}
                 className="w-full bg-[#7E57FF] text-white py-3.5 rounded-2xl shadow-lg shadow-purple-200 flex items-center justify-center gap-2 hover:bg-[#6b46e6] transition-all active:scale-95 flex-shrink-0"

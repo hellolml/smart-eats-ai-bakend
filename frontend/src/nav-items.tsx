@@ -10,6 +10,8 @@ import Wheel from '@/pages/Wheel';
 import AiChat from '@/pages/AiChat';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
+import OAuthGithubCallback from '@/pages/OAuthGithubCallback';
+import SessionManagement from '@/pages/SessionManagement';
 import GroupDecisionResult from '@/pages/GroupDecisionResult';
 import GroupDecisionCreate from '@/pages/GroupDecisionCreate';
 import router from '@/config/router.json';
@@ -41,6 +43,8 @@ const routeMap: Record<string, React.ReactNode> = {
     AiChat: <AiChat />,
     Login: <Login />,
     Register: <Register />,
+    OAuthGithubCallback: <OAuthGithubCallback />,
+    SessionManagement: <SessionManagement />,
     GroupDecisionResult: <GroupDecisionResult />,
     GroupDecisionCreate: <GroupDecisionCreate />
 };
@@ -56,7 +60,8 @@ const routerIconMap: Record<string, any> = {
     Wheel: RotateCw,
     AiChat: MessageSquare,
     Login: LogIn,
-    Register: UserPlus
+    Register: UserPlus,
+    SessionManagement: Shield
 };
 
 const allRoutes = Object.entries(router).map(([key, value]) => ({
