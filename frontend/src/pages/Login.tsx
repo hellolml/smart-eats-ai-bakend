@@ -9,6 +9,7 @@ type LoginMode = 'password' | 'sms' | 'oneclick';
 
 const Login = () => {
     const navigate = useNavigate();
+    const showOneClickLogin = String(process.env.APP_SHOW_ONECLICK_LOGIN || 'false').toLowerCase() === 'true';
     const [loginType, setLoginType] = useState<'phone' | 'email'>('phone');
     const [loginMode, setLoginMode] = useState<LoginMode>('password');
     const [loading, setLoading] = useState(false);
@@ -210,12 +211,14 @@ const Login = () => {
                         >
                             短信登录
                         </button>
-                        <button
-                            onClick={() => setLoginMode('oneclick')}
-                            className={`flex-1 py-2 text-[11px] md:text-sm font-bold rounded-lg md:rounded-xl transition-all ${loginMode === 'oneclick' ? 'bg-white text-[#7E57FF] shadow-sm' : 'text-gray-400'}`}
-                        >
-                            一键登录
-                        </button>
+                        {showOneClickLogin && (
+                            <button
+                                onClick={() => setLoginMode('oneclick')}
+                                className={`flex-1 py-2 text-[11px] md:text-sm font-bold rounded-lg md:rounded-xl transition-all ${loginMode === 'oneclick' ? 'bg-white text-[#7E57FF] shadow-sm' : 'text-gray-400'}`}
+                            >
+                                一键登录
+                            </button>
+                        )}
                     </div>
 
                     {loginMode === 'password' && (
@@ -339,7 +342,7 @@ const Login = () => {
                         </form>
                     )}
 
-                    {loginMode === 'oneclick' && (
+                    {showOneClickLogin && loginMode === 'oneclick' && (
                         <form onSubmit={handleOneClickLogin} className="flex flex-col gap-3 md:gap-4">
                             <div className="relative">
                                 <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-gray-400">

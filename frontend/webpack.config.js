@@ -59,7 +59,8 @@ module.exports = {
             hash: true
         }),
         new webpack.DefinePlugin({
-            'process.env.APP_API_BASE_URL': JSON.stringify(process.env.APP_API_BASE_URL || '')
+            'process.env.APP_API_BASE_URL': JSON.stringify(process.env.APP_API_BASE_URL || ''),
+            'process.env.APP_SHOW_ONECLICK_LOGIN': JSON.stringify(process.env.APP_SHOW_ONECLICK_LOGIN || 'false')
         }),
        // new ComponentTaggerPlugin(process.env)
     ]
