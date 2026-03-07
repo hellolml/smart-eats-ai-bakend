@@ -20,7 +20,18 @@ from app.agent.state import ChatState
 from app.agent import history
 from app.agent.llm_adapters import ProviderRegistry
 from app.common.config import settings
-from app.common.errors import AppError, REDIS_UNAVAILABLE
+from app.common.errors import (
+    AUTH_ACCOUNT_EXISTS,
+    AUTH_ACCOUNT_LOCKED,
+    AUTH_ACCOUNT_REQUIRED,
+    AUTH_INVALID_CREDENTIALS,
+    AUTH_OTP_INVALID,
+    AUTH_RESET_CODE_INVALID,
+    AUTH_SESSION_REVOKED,
+    AUTH_TOKEN_REPLAY_DETECTED,
+    AppError,
+    REDIS_UNAVAILABLE,
+)
 from app.common.rate_limit import ensure_rate_limit
 from app.common.security import (
     AuthError,
@@ -258,7 +269,7 @@ class AppBffService:
         email = payload.get("email")
         phone = payload.get("phone")
         if not email and not phone:
-            raise HTTPException(status_code=400, detail="email or phone required")
+            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="email or phone required", http_status=400)
 
         conditions = []
         if email:
@@ -268,7 +279,7 @@ class AppBffService:
 
         result = await db.execute(select(User).where(or_(*conditions)))
         if result.scalar_one_or_none() is not None:
-            raise HTTPException(status_code=400, detail="email or phone already exists")
+            raise AppError(code=AUTH_ACCOUNT_EXISTS, message="email or phone already exists", http_status=400)
 
         user = User(
             id=str(uuid4()),
@@ -286,7 +297,7 @@ class AppBffService:
         email = payload.get("email")
         phone = payload.get("phone")
         if not email and not phone:
-            raise HTTPException(status_code=400, detail="email or phone required")
+            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="email or phone required", http_status=400)
 
         account = str(email or phone)
         conditions = []
@@ -296,7 +307,7 @@ class AppBffService:
             conditions.append(User.phone == phone)
         existing = (await db.execute(select(User).where(or_(*conditions)))).scalar_one_or_none()
         if existing is not None:
-            raise HTTPException(status_code=400, detail="email or phone already exists")
+            raise AppError(code=AUTH_ACCOUNT_EXISTS, message="email or phone already exists", http_status=400)
 
         code = f"{random.randint(0, 999999):06d}"
         await redis_client.setex(f"otp:register:{account}", 10 * 60, AppBffService._sha256(code))
@@ -317,21 +328,21 @@ class AppBffService:
         phone = payload.get("phone")
         code = str(payload.get("code") or "")
         if not email and not phone:
-            raise HTTPException(status_code=400, detail="email or phone required")
+            raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="email or phone required", http_status=400)
         if not code:
-            raise HTTPException(status_code=400, detail="code required")
+            raise AppError(code=AUTH_OTP_INVALID, message="code required", http_status=400)
         account = str(email or phone)
 
         code_hash = await redis_client.get(f"otp:register:{account}")
         if not code_hash:
-            raise HTTPException(status_code=400, detail="register code invalid or expired")
+            raise AppError(code=AUTH_OTP_INVALID, message="register code invalid or expired", http_status=400)
         attempts_key = f"otp:register:attempts:{account}"
         attempts = await redis_client.incr(attempts_key)
         if attempts > 5:
             await redis_client.delete(f"otp:register:{account}")
-            raise HTTPException(status_code=400, detail="register code invalid or expired")
+            raise AppError(code=AUTH_OTP_INVALID, message="register code invalid or expired", http_status=400)
         if AppBffService._sha256(code) != code_hash:
-            raise HTTPException(status_code=400, detail="register code invalid or expired")
+            raise AppError(code=AUTH_OTP_INVALID, message="register code invalid or expired", http_status=400)
 
         conditions = []
         if email:
@@ -340,7 +351,7 @@ class AppBffService:
             conditions.append(User.phone == phone)
         existing = (await db.execute(select(User).where(or_(*conditions)))).scalar_one_or_none()
         if existing is not None:
-            raise HTTPException(status_code=400, detail="email or phone already exists")
+            raise AppError(code=AUTH_ACCOUNT_EXISTS, message="email or phone already exists", http_status=400)
 
         user = User(
             id=str(uuid4()),
@@ -373,7 +384,7 @@ class AppBffService:
         lock_key = f"auth:lock:{account}"
         fail_key = f"auth:fail:{account}"
         if await redis_client.exists(lock_key):
-            raise HTTPException(status_code=423, detail="account temporarily locked")
+            raise AppError(code=AUTH_ACCOUNT_LOCKED, message="account temporarily locked", http_status=423)
 
         if "@" in account:
             result = await db.execute(select(User).where(User.email == account))
@@ -387,7 +398,7 @@ class AppBffService:
                 await redis_client.expire(fail_key, 3600)
             if failures >= 5:
                 await redis_client.setex(lock_key, 15 * 60, "1")
-            raise HTTPException(status_code=401, detail="invalid credentials")
+            raise AppError(code=AUTH_INVALID_CREDENTIALS, message="invalid credentials", http_status=401)
 
         await redis_client.delete(fail_key)
         return await AppBffService.issue_tokens(user.id, redis_client, db, ip=client_ip)
@@ -419,20 +430,20 @@ class AppBffService:
         session_id = str(claims.get("sid") or "")
         family_id = str(claims.get("fid") or "")
         if not jti or not user_id or not session_id:
-            raise HTTPException(status_code=401, detail="refresh token invalid")
+            raise AppError(code=AUTH_SESSION_REVOKED, message="refresh token invalid", http_status=401)
 
         session = (await db.execute(select(UserSession).where(UserSession.id == session_id))).scalar_one_or_none()
         if session is None or session.user_id != user_id or session.status != "active":
-            raise HTTPException(status_code=401, detail="refresh token revoked")
+            raise AppError(code=AUTH_SESSION_REVOKED, message="refresh token revoked", http_status=401)
 
         if session.current_refresh_jti != jti:
             await AppBffService._revoke_family(db, redis_client, user_id, family_id or (session.session_family_id or ""), "replay")
-            raise HTTPException(status_code=401, detail="refresh token replay detected")
+            raise AppError(code=AUTH_TOKEN_REPLAY_DETECTED, message="refresh token replay detected", http_status=401)
 
         try:
             stored_user = await redis_client.get(f"rt:{jti}")
             if stored_user != user_id:
-                raise HTTPException(status_code=401, detail="refresh token revoked")
+                raise AppError(code=AUTH_SESSION_REVOKED, message="refresh token revoked", http_status=401)
             await redis_client.delete(f"rt:{jti}")
             await redis_client.setex(f"rtu:{jti}", settings.REFRESH_TOKEN_TTL_SECONDS, session_id)
         except RedisError as exc:
@@ -534,7 +545,7 @@ class AppBffService:
         if user is None:
             raise HTTPException(status_code=404, detail="user not found")
         if not verify_password(old_password, user.password_hash):
-            raise HTTPException(status_code=401, detail="invalid credentials")
+            raise AppError(code=AUTH_INVALID_CREDENTIALS, message="invalid credentials", http_status=401)
 
         user.password_hash = hash_password(new_password)
         await db.commit()
@@ -573,16 +584,16 @@ class AppBffService:
     ) -> dict[str, Any]:
         code_hash = await redis_client.get(f"otp:pwdreset:{account}")
         if not code_hash:
-            raise HTTPException(status_code=400, detail="reset code invalid or expired")
+            raise AppError(code=AUTH_RESET_CODE_INVALID, message="reset code invalid or expired", http_status=400)
 
         attempts_key = f"otp:pwdreset:attempts:{account}"
         attempts = await redis_client.incr(attempts_key)
         if attempts > 5:
             await redis_client.delete(f"otp:pwdreset:{account}")
-            raise HTTPException(status_code=400, detail="reset code invalid or expired")
+            raise AppError(code=AUTH_RESET_CODE_INVALID, message="reset code invalid or expired", http_status=400)
 
         if AppBffService._sha256(code) != code_hash:
-            raise HTTPException(status_code=400, detail="reset code invalid or expired")
+            raise AppError(code=AUTH_RESET_CODE_INVALID, message="reset code invalid or expired", http_status=400)
 
         if "@" in account:
             user = (await db.execute(select(User).where(User.email == account))).scalar_one_or_none()

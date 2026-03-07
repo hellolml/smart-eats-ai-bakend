@@ -69,6 +69,7 @@ async def test_app_change_password(client):
         json={"account": "app_changepw@example.com", "password": "old123"},
     )
     assert resp.status_code == 401
+    assert resp.json()["code"] == 41009
 
     resp = await client.post(
         "/api/v1/app/auth/login",
@@ -168,6 +169,7 @@ async def test_app_refresh_token_replay_detected(client):
         json={"refresh_token": tokens["refresh_token"]},
     )
     assert replay_refresh.status_code == 401
+    assert replay_refresh.json()["code"] == 41004
 
     latest_refresh = first_refresh.json()["data"]["refresh_token"]
     blocked_refresh = await client.post(
@@ -175,6 +177,7 @@ async def test_app_refresh_token_replay_detected(client):
         json={"refresh_token": latest_refresh},
     )
     assert blocked_refresh.status_code == 401
+    assert blocked_refresh.json()["code"] == 41005
 
 
 @pytest.mark.asyncio
@@ -199,6 +202,29 @@ async def test_app_register_otp_confirm_flow(client):
     data = confirm_resp.json()["data"]
     assert data["access_token"]
     assert data["refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_app_login_lock_after_multiple_failures(client):
+    register_resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_lock@example.com", "password": "secret123", "name": "lock"},
+    )
+    assert register_resp.status_code == 200
+
+    for _ in range(5):
+        bad = await client.post(
+            "/api/v1/app/auth/login",
+            json={"account": "app_lock@example.com", "password": "wrong"},
+        )
+        assert bad.status_code == 401
+
+    locked = await client.post(
+        "/api/v1/app/auth/login",
+        json={"account": "app_lock@example.com", "password": "secret123"},
+    )
+    assert locked.status_code == 423
+    assert locked.json()["code"] == 41003
 
 
 @pytest.mark.asyncio
