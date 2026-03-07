@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { motion } from 'framer-motion';
-import { Mail, Phone, Lock, ArrowRight, Github, Chrome, Sparkles, MessageSquare, Zap } from "lucide-react";
+import { Mail, Phone, Lock, ArrowRight, Github, Chrome, Sparkles, MessageSquare, Zap, CircleHelp } from "lucide-react";
 import toast from "react-hot-toast";
 import { ApiError, appApi } from "@/services/app-api";
 
@@ -27,6 +27,9 @@ const Login = () => {
     const [resetAccount, setResetAccount] = useState('');
     const [resetCode, setResetCode] = useState('');
     const [resetNewPassword, setResetNewPassword] = useState('');
+
+    const [showPasswordRule, setShowPasswordRule] = useState(false);
+    const [showResetPasswordRule, setShowResetPasswordRule] = useState(false);
 
     const handlePasswordLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -264,8 +267,21 @@ const Login = () => {
                                             required
                                             value={password}
                                             onChange={(e) => setPassword(e.target.value)}
-                                            className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all"
+                                            className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 pr-10 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all"
                                         />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPasswordRule((v) => !v)}
+                                            className="absolute inset-y-0 right-3 flex items-center text-gray-400"
+                                            aria-label="密码规则"
+                                        >
+                                            <CircleHelp size={16} />
+                                        </button>
+                                        {showPasswordRule && (
+                                            <div className="absolute z-20 right-0 top-[110%] w-56 rounded-xl border bg-white p-2 text-[11px] text-gray-600 shadow">
+                                                密码需满足：8-64位，且至少包含1个字母和1个数字。
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -447,13 +463,28 @@ const Login = () => {
                                 发验证码
                             </button>
                         </div>
-                        <input
-                            type="password"
-                            placeholder="新密码"
-                            value={resetNewPassword}
-                            onChange={(e) => setResetNewPassword(e.target.value)}
-                            className="w-full bg-gray-50 rounded-xl px-3 py-2 text-sm outline-none"
-                        />
+                        <div className="relative">
+                            <input
+                                type="password"
+                                placeholder="新密码"
+                                value={resetNewPassword}
+                                onChange={(e) => setResetNewPassword(e.target.value)}
+                                className="w-full bg-gray-50 rounded-xl px-3 py-2 pr-9 text-sm outline-none"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowResetPasswordRule((v) => !v)}
+                                className="absolute inset-y-0 right-2 flex items-center text-gray-400"
+                                aria-label="密码规则"
+                            >
+                                <CircleHelp size={15} />
+                            </button>
+                            {showResetPasswordRule && (
+                                <div className="absolute z-20 right-0 top-[110%] w-56 rounded-xl border bg-white p-2 text-[11px] text-gray-600 shadow">
+                                    密码需满足：8-64位，且至少包含1个字母和1个数字。
+                                </div>
+                            )}
+                        </div>
                         <div className="flex justify-end gap-2">
                             <button
                                 onClick={() => setShowResetModal(false)}

@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
     User, Mail, Lock, ArrowRight, ChevronLeft,
-    ShieldCheck, Phone, Sparkles, MessageSquare
+    ShieldCheck, Phone, Sparkles, MessageSquare, CircleHelp
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { ApiError, appApi } from '@/services/app-api';
@@ -16,6 +16,7 @@ const Register = () => {
     const [identifier, setIdentifier] = useState('');
     const [password, setPassword] = useState('');
     const [code, setCode] = useState('');
+    const [showPasswordRule, setShowPasswordRule] = useState(false);
 
     const requestOtp = async () => {
         if (!identifier.trim()) {
@@ -189,7 +190,20 @@ const Register = () => {
                                     required
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
-                                    className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all" />
+                                    className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 pr-10 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all" />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPasswordRule((v) => !v)}
+                                    className="absolute inset-y-0 right-3 flex items-center text-gray-400"
+                                    aria-label="密码规则"
+                                >
+                                    <CircleHelp size={16} />
+                                </button>
+                                {showPasswordRule && (
+                                    <div className="absolute z-20 right-0 top-[110%] w-56 rounded-xl border bg-white p-2 text-[11px] text-gray-600 shadow">
+                                        密码需满足：8-64位，且至少包含1个字母和1个数字。
+                                    </div>
+                                )}
                             </div>
                         </div>
                         <div className="flex items-start gap-2 px-1">
