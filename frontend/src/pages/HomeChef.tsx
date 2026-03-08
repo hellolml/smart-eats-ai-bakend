@@ -58,6 +58,28 @@ const parseRequiredItem = (raw: string): { name: string; quantity?: number; unit
   };
 };
 
+
+const COOKING_LIST_STORAGE_KEY = 'today_cooking_list';
+const GROCERY_CHECKED_MAP_STORAGE_KEY = 'homechef_grocery_checked_map';
+
+const recipeStorageKey = (recipe: Pick<AppHomeChefRecipe, 'title'>) => (recipe.title || '').trim().toLowerCase();
+const groceryItemStorageKey = (item: { name: string; quantity?: number; unit?: string }) => `${item.name}__${item.quantity ?? ''}__${item.unit ?? ''}`;
+
+type GroceryCheckedMap = Record<string, string[]>;
+
+const loadGroceryCheckedMap = (): GroceryCheckedMap => {
+  try {
+    const raw = localStorage.getItem(GROCERY_CHECKED_MAP_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+};
+
+const saveGroceryCheckedMap = (map: GroceryCheckedMap) => {
+  localStorage.setItem(GROCERY_CHECKED_MAP_STORAGE_KEY, JSON.stringify(map));
+};
+
 const HomeChef = () => {
   const [ingredients, setIngredients] = useState<AppIngredient[]>([]);
   const [isScanning, setIsScanning] = useState(false);
@@ -70,6 +92,7 @@ const HomeChef = () => {
   const [nameValue, setNameValue] = useState('');
   const [quantityValue, setQuantityValue] = useState('');
   const [groceryList, setGroceryList] = useState<AppGroceryList | null>(null);
+  const [activeGroceryRecipeKey, setActiveGroceryRecipeKey] = useState<string>('');
 
   useEffect(() => {
     const fetchIngredients = async () => {
@@ -83,14 +106,14 @@ const HomeChef = () => {
     };
     fetchIngredients();
 
-    const savedList = localStorage.getItem('today_cooking_list');
+    const savedList = localStorage.getItem(COOKING_LIST_STORAGE_KEY);
     if (savedList) {
       try { setCookingList(JSON.parse(savedList)); } catch {}
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem('today_cooking_list', JSON.stringify(cookingList));
+    localStorage.setItem(COOKING_LIST_STORAGE_KEY, JSON.stringify(cookingList));
   }, [cookingList]);
 
   const handleScan = () => {
@@ -163,7 +186,15 @@ const HomeChef = () => {
         .map((raw) => parseRequiredItem(raw))
         .filter((x): x is { name: string; quantity?: number; unit?: string; category: string } => Boolean(x?.name));
       const list = await appApi.grocery.createFromRecipe({ recipe_name: recipe.title, required_items: required });
-      setGroceryList(list);
+      const key = recipeStorageKey(recipe);
+      const checkedMap = loadGroceryCheckedMap();
+      const checkedKeys = new Set(checkedMap[key] || []);
+      const mergedList = {
+        ...list,
+        items: (list.items || []).map((it) => ({ ...it, checked: checkedKeys.has(groceryItemStorageKey(it)) || it.checked })),
+      };
+      setActiveGroceryRecipeKey(key);
+      setGroceryList(mergedList);
       toast.success('食材准备清单已生成');
     } catch (e) {
       console.error(e);
@@ -175,13 +206,44 @@ const HomeChef = () => {
     if (!groceryList) return;
     try {
       const item = await appApi.grocery.toggleItem(groceryList.id, itemId, checked);
-      setGroceryList({
+      const nextList = {
         ...groceryList,
         items: groceryList.items.map((it) => it.id === item.id ? { ...it, checked: item.checked } : it),
-      });
+      };
+      setGroceryList(nextList);
+
+      if (activeGroceryRecipeKey) {
+        const checkedKeys = nextList.items.filter((it) => it.checked).map((it) => groceryItemStorageKey(it));
+        const map = loadGroceryCheckedMap();
+        map[activeGroceryRecipeKey] = checkedKeys;
+        saveGroceryCheckedMap(map);
+      }
     } catch {
       toast.error('更新失败');
     }
+  };
+
+
+  const deleteRecipe = (recipe: AppHomeChefRecipe) => {
+    const ok = window.confirm(`确认删除菜谱「${recipe.title}」吗？`);
+    if (!ok) return;
+
+    setAiRecipes((prev) => prev.filter((x) => x.title !== recipe.title));
+    setCookingList((prev) => prev.filter((x) => x.title !== recipe.title));
+    setSelectedRecipe((prev) => prev?.title === recipe.title ? null : prev);
+
+    const key = recipeStorageKey(recipe);
+    const map = loadGroceryCheckedMap();
+    if (map[key]) {
+      delete map[key];
+      saveGroceryCheckedMap(map);
+    }
+    if (activeGroceryRecipeKey === key) {
+      setGroceryList(null);
+      setActiveGroceryRecipeKey('');
+    }
+
+    toast.success('菜谱已删除，对应清单勾选记录已清理');
   };
 
   const hasMore = ingredients.length > 0;
@@ -259,6 +321,9 @@ const HomeChef = () => {
                         <button onClick={(e) => { e.stopPropagation(); void createGroceryList(recipe); }} className="p-2 rounded-xl bg-indigo-50 text-indigo-500">
                           <ShoppingCart size={14} />
                         </button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteRecipe(recipe); }} className="p-2 rounded-xl bg-red-50 text-red-500">
+                          <Trash2 size={14} />
+                        </button>
                         <div className="p-2 bg-gray-50 text-gray-400 rounded-xl"><ChevronRight size={14} /></div>
                       </div>
                     </div>
@@ -309,6 +374,7 @@ const HomeChef = () => {
               <div className="p-6 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row gap-3">
                 <button onClick={() => void createGroceryList(selectedRecipe)} className="flex-1 bg-white border border-purple-200 text-[#7E57FF] py-3 rounded-2xl font-bold flex items-center justify-center gap-2"><ShoppingCart size={16} />食材准备清单</button>
                 <button onClick={() => { handleStartCooking(selectedRecipe); setSelectedRecipe(null); }} className="flex-1 bg-[#7E57FF] text-white py-3 rounded-2xl font-bold">加入今日菜单</button>
+                <button onClick={() => deleteRecipe(selectedRecipe)} className="bg-red-50 text-red-500 px-4 py-3 rounded-2xl font-bold border border-red-100 flex items-center justify-center gap-2"><Trash2 size={16} />删除</button>
               </div>
             </motion.div>
           </div>
@@ -318,11 +384,11 @@ const HomeChef = () => {
       <AnimatePresence>
         {groceryList && (
           <div className="fixed inset-0 z-[130] flex items-center justify-center p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/40" onClick={() => setGroceryList(null)} />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/40" onClick={() => { setGroceryList(null); setActiveGroceryRecipeKey(''); }} />
             <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative w-full max-w-md bg-white rounded-[2.5rem] p-6 border border-purple-50 max-h-[80vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-black text-gray-800">{groceryList.title}</h3>
-                <button onClick={() => setGroceryList(null)} className="text-gray-400"><X size={20} /></button>
+                <button onClick={() => { setGroceryList(null); setActiveGroceryRecipeKey(''); }} className="text-gray-400"><X size={20} /></button>
               </div>
               <div className="space-y-2">
                 {groceryList.items.length === 0 ? <p className="text-sm text-gray-400">食材已齐全，无需采购 🎉</p> : groceryList.items.map((item) => (
