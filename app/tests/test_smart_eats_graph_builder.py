@@ -6,7 +6,12 @@ import pytest
 
 from app.agent import tools_registry
 from app.agent.agents import smart_eats as smart_eats_module
-from app.agent.agents.smart_eats import build_smart_eats_graph
+from app.agent.agents.smart_eats import (
+    _best_effort_final_from_observations,
+    _refresh_observation_context,
+    build_smart_eats_graph,
+    get_smart_eats_agent_config,
+)
 from app.agent.state import ChatState
 
 
@@ -64,14 +69,9 @@ async def test_build_smart_eats_graph_roundtrip_without_graph_helpers(monkeypatc
     async def _noop_refresh_observation_context(db, redis_client, state, agent_config, emit_context_event=True):
         state.context = {"system_prompt": "test system"}
 
-    async def _should_not_call_graph_helper(*_args, **_kwargs):
-        raise AssertionError("smart_eats dedicated graph should not call app.agent.graph helpers")
-
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
     monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _noop_refresh_observation_context)
-    monkeypatch.setattr("app.agent.legacy_builder_helpers._ensure_chat_session", _should_not_call_graph_helper)
-    monkeypatch.setattr("app.agent.legacy_builder_helpers._refresh_observation_context", _should_not_call_graph_helper)
 
     graph = build_smart_eats_graph(
         db=None,

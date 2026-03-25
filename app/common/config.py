@@ -91,7 +91,6 @@ class Settings(BaseSettings):
     QWEN_MODEL_WRITER: str = "qwen3.5-flash"
     LLM_REQUEST_LOG: str = "none"
     AGENT_MAX_STEPS: int = 6
-    AGENT_GRAPH_RUNTIME: str = "legacy"
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"
     LANGGRAPH_CHECKPOINT_BACKEND: str = "sqlite"

@@ -5,8 +5,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.agent.agent_registry import get_agent_config
-from app.agent.legacy_builder_helpers import _refresh_observation_context
+from app.agent.agents.smart_eats import _refresh_observation_context, get_smart_eats_agent_config
 from app.agent.state import ChatState
 from app.infra.db import AsyncSessionLocal
 from app.infra.models.chat import ChatMessage, ChatSession
@@ -52,7 +51,7 @@ async def test_refresh_observation_context_loads_prior_history_before_save(overr
             db=db,
             redis_client=override_redis,
             state=state,
-            agent_config=get_agent_config("smart_eats"),
+            agent_config=get_smart_eats_agent_config(),
             emit_context_event=False,
         )
 

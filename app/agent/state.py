@@ -45,8 +45,3 @@ class ChatState:
     user_message_logged: bool = False
     history: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
-
-
-@dataclass
-class LegacyChatState(ChatState):
-    action_type: str | None = None

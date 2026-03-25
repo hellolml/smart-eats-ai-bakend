@@ -1,16 +1,14 @@
 import pytest
 
-from app.agent.legacy_builder_helpers import _record_metric, reset_agent_metrics
-from app.agent.state import ChatState
+from app.agent.metrics import record_agent_metric, reset_agent_metrics
 
 
 @pytest.mark.asyncio
 async def test_internal_metrics_agent_endpoint(client):
     reset_agent_metrics()
-    state = ChatState(session_id="s-metrics")
-    _record_metric(state, "fallback_final")
-    _record_metric(state, "non_fallback_final")
-    _record_metric(state, "non_fallback_final")
+    record_agent_metric("s-metrics", "fallback_final")
+    record_agent_metric("s-metrics", "non_fallback_final")
+    record_agent_metric("s-metrics", "non_fallback_final")
 
     resp = await client.get("/api/v1/internal/metrics/agent")
     assert resp.status_code == 200
@@ -23,8 +21,7 @@ async def test_internal_metrics_agent_endpoint(client):
 @pytest.mark.asyncio
 async def test_internal_metrics_agent_endpoint_reset(client):
     reset_agent_metrics()
-    state = ChatState(session_id="s-metrics-2")
-    _record_metric(state, "fallback_final")
+    record_agent_metric("s-metrics-2", "fallback_final")
 
     resp = await client.get("/api/v1/internal/metrics/agent?reset=true")
     assert resp.status_code == 200

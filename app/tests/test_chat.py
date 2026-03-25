@@ -3,9 +3,8 @@ import json
 
 import pytest
 
-from app.agent.legacy_builder_helpers import _best_effort_final_from_observations
+from app.agent.agents.smart_eats import _best_effort_final_from_observations, get_smart_eats_agent_config
 from app.agent.graph import _render_final_text
-from app.agent.agent_registry import get_agent_config
 from app.agent.state import ChatState
 
 
@@ -88,7 +87,7 @@ def test_render_final_text_empty_returns_default():
 def test_best_effort_with_empty_fridge_avoids_fallback():
     state = ChatState(session_id="s1", context={"fridge_items": []})
 
-    final_json = _best_effort_final_from_observations(state, get_agent_config("smart_eats"))
+    final_json = _best_effort_final_from_observations(state, get_smart_eats_agent_config())
 
     assert final_json["recommendations"][0]["reason"] != "fallback"
     assert "冰箱" in final_json["recommendations"][0]["title"]
@@ -110,7 +109,7 @@ def test_best_effort_with_rag_recipe_results_avoids_fallback():
         ],
     )
 
-    final_json = _best_effort_final_from_observations(state, get_agent_config("smart_eats"))
+    final_json = _best_effort_final_from_observations(state, get_smart_eats_agent_config())
 
     assert final_json["recommendations"][0]["reason"] != "fallback"
     assert final_json["recommendations"][0]["type"] == "recipe"
