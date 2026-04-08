@@ -161,7 +161,7 @@ cd ~/code/smart-eats-ai-bakend
 
 - `deploy/deploy.sh` 当前默认执行的是 `docker compose build`，**不会每次强制拉取最新基础镜像**
 - 后端镜像构建已默认切换到腾讯云 Debian APT 源和腾讯云 PyPI 源，以减少国内服务器在 `apt-get update`、`pip install` 时的超时问题
-- 这样做是为了避免国内服务器访问官方源过慢，导致部署长时间卡在依赖下载阶段
+- 为避免 `sentence-transformers` 间接拉取整套 CUDA 依赖导致镜像构建磁盘占满，后端镜像会优先安装 CPU 版 `torch`
 - 即使不带 `--pull`，只要代码有变更，重新执行 `./deploy/deploy.sh` 仍然会构建并部署新代码
 
 此时（未启用 gateway 时）前端默认会暴露：
