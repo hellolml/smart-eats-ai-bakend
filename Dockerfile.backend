@@ -16,8 +16,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
-RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu "torch==2.5.1+cpu" \
-    && pip install -r /app/requirements.txt
+RUN pip install -r /app/requirements.txt
 
 COPY . /app
 

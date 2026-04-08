@@ -23,6 +23,5 @@ python-multipart>=0.0.18
 greenlet==3.0.3
 langchain-mcp-adapters==0.1.9
 faiss-cpu==1.8.0
-sentence-transformers==2.7.0
 numpy==1.26.4
 rank_bm25==0.2.2

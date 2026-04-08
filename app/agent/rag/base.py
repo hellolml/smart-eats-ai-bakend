@@ -141,17 +141,17 @@ def load_bm25_index(path: Path):
 def get_embedding_model(model_name: str | None = None):
     """
     获取 HuggingFace Embedding 模型（单例模式）
-    
+
     Args:
         model_name: 模型名称，默认使用多语言 MiniLM
-    
+
     Returns:
         HuggingFaceEmbeddings 实例
     """
     global _EMBEDDINGS
     if _EMBEDDINGS is not None:
         return _EMBEDDINGS
-    
+
     import warnings
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -163,14 +163,26 @@ def get_embedding_model(model_name: str | None = None):
     return _EMBEDDINGS
 
 
+def has_embedding_support() -> bool:
+    """检查当前环境是否具备 embedding 依赖。"""
+    try:
+        import sentence_transformers  # type: ignore  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def warmup(model_name: str | None = None) -> None:
     """
     预加载 Embedding 模型，避免首次请求延迟
-    
+
     应在应用启动时调用
     """
     import warnings
     logger.info("🚀 RAG warmup started...")
+    if not has_embedding_support():
+        logger.info("RAG warmup skipped: sentence-transformers not installed")
+        return
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=DeprecationWarning)

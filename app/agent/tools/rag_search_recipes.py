@@ -162,7 +162,9 @@ async def rag_search_recipes(args: dict[str, Any]) -> dict[str, Any]:
     expanded_query = _expand_query(query)
     
     # Hybrid search using generic RAG functions
-    vector_hits = rag.vector_search(expanded_query, _INDEX, _META, top_k=top_k)
+    vector_hits: list[dict[str, Any]] = []
+    if rag.has_embedding_support():
+        vector_hits = rag.vector_search(expanded_query, _INDEX, _META, top_k=top_k)
     keyword_hits = _keyword_search(expanded_query, top_k=top_k)
     merged = _merge_hits(vector_hits, keyword_hits, top_k=top_k)
     
