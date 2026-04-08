@@ -33,6 +33,29 @@ from app.domain.preferences.service import apply_extracted_preferences, extract_
 logger = logging.getLogger("agent")
 
 
+def _normalize_llm_upstream_error_message(exc: Exception) -> str:
+    body = getattr(exc, "body", None)
+    error_type = ""
+    error_message = ""
+
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            error_type = str(error.get("type") or error.get("code") or "").strip()
+            error_message = str(error.get("message") or "").strip()
+
+    raw_message = str(exc).strip()
+    combined = " ".join(part for part in (error_type, error_message, raw_message) if part)
+    combined_lower = combined.lower()
+
+    if error_type == "AllocationQuota.FreeTierOnly" or "free tier" in combined_lower:
+        return "当前模型免费额度已用尽，请在模型管理控制台关闭“仅使用免费额度”模式，或切换到可用模型后重试。"
+
+    if error_message:
+        return error_message
+    return raw_message or "LLM 上游服务暂时不可用，请稍后重试。"
+
+
 def _is_fallback_payload(final_json: dict[str, Any]) -> bool:
     recs = final_json.get("recommendations") if isinstance(final_json, dict) else None
     if not isinstance(recs, list) or not recs:
@@ -293,9 +316,10 @@ async def run_chat_stream(
             trace_id,
             str(exc),
         )
+        message = _normalize_llm_upstream_error_message(exc)
         yield {
             "event": "error",
-            "data": envelope(None, trace_id, code=LLM_UPSTREAM_ERROR, message=str(exc)),
+            "data": envelope(None, trace_id, code=LLM_UPSTREAM_ERROR, message=message),
         }
         return
     finally:

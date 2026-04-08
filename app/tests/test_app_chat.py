@@ -1,7 +1,11 @@
 import asyncio
 import json
+from unittest.mock import MagicMock
 
 import pytest
+from openai import PermissionDeniedError
+
+from app.agent.graph import _normalize_llm_upstream_error_message
 
 
 @pytest.mark.asyncio
@@ -151,3 +155,27 @@ async def test_app_chat_models_endpoint_returns_model_options(client):
     ]
     assert isinstance(payload.get("default"), str)
     assert payload["default"] == "qwen:qwen3.5-flash"
+
+
+def test_normalize_llm_upstream_error_message_maps_free_tier_quota():
+    response = MagicMock()
+    response.request = MagicMock()
+    response.status_code = 403
+    response.headers = {}
+
+    exc = PermissionDeniedError(
+        "Error code: 403",
+        response=response,
+        body={
+            "error": {
+                "message": "The free tier of the model has been exhausted.",
+                "type": "AllocationQuota.FreeTierOnly",
+                "code": "AllocationQuota.FreeTierOnly",
+            }
+        },
+    )
+
+    message = _normalize_llm_upstream_error_message(exc)
+
+    assert "免费额度已用尽" in message
+    assert "仅使用免费额度" in message

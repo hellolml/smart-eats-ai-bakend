@@ -114,3 +114,12 @@ def test_best_effort_with_rag_recipe_results_avoids_fallback():
     assert final_json["recommendations"][0]["reason"] != "fallback"
     assert final_json["recommendations"][0]["type"] == "recipe"
     assert final_json["recommendations"][0]["title"] == "番茄炒蛋"
+
+
+def test_best_effort_without_business_signal_falls_back():
+    state = ChatState(session_id="s1")
+
+    final_json = _best_effort_final_from_observations(state, get_smart_eats_agent_config())
+
+    assert final_json["recommendations"][0]["reason"] == "fallback"
+    assert "抱歉" in final_json["recommendations"][0]["title"]

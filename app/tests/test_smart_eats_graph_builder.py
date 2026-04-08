@@ -1,17 +1,13 @@
 import inspect
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.agent import tools_registry
 from app.agent.agents import smart_eats as smart_eats_module
-from app.agent.agents.smart_eats import (
-    _best_effort_final_from_observations,
-    _refresh_observation_context,
-    build_smart_eats_graph,
-    get_smart_eats_agent_config,
-)
+from app.agent.agents.smart_eats import build_smart_eats_graph, get_smart_eats_agent_config
 from app.agent.state import ChatState
 
 
@@ -40,6 +36,121 @@ def test_build_smart_eats_graph_contains_dedicated_nodes(override_redis):
 def test_build_smart_eats_graph_source_does_not_import_graph_helpers():
     source = inspect.getsource(build_smart_eats_graph)
     assert "from app.agent.graph import" not in source
+
+
+def test_build_smart_eats_graph_tools_node_keeps_toolnode_bridge_shape():
+    source = inspect.getsource(build_smart_eats_graph)
+    assert "async def tools_node" in source
+    assert "_invoke_tool_node_with_runtime(" in source
+    assert "_build_tools_node_output(" in source
+
+
+@pytest.mark.asyncio
+async def test_build_smart_eats_graph_think_node_short_circuits_intent_clarify(monkeypatch, override_redis):
+    planner_mock = AsyncMock()
+
+    async def _noop_ensure_chat_session(db, state):
+        return None
+
+    async def _clarify_refresh(db, redis_client, state, agent_config, emit_context_event=True):
+        state.context = {"system_prompt": "test system"}
+        state.intent_need_clarify = True
+        state.intent_confidence = 0.1
+        state.intent_clarify_question = "你是想出去吃，还是在家做饭？"
+
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", planner_mock)
+    monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
+    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _clarify_refresh)
+
+    graph = build_smart_eats_graph(
+        db=None,
+        redis_client=override_redis,
+        provider=None,
+    ).compile()
+
+    result = await graph.ainvoke(ChatState(session_id="s-smart-clarify", message="想吃点东西").__dict__)
+
+    assert result["final_json"]["recommendations"][0]["title"] == "你是想出去吃，还是在家做饭？"
+    assert result["next_action"] == "final"
+    planner_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_build_smart_eats_graph_think_node_skips_clarify_when_confident(monkeypatch, override_redis):
+    async def _fake_plan_tool_calls(self, system, user, available_tools):
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "name": "submit_final_answer",
+                    "args": {
+                        "recommendations": [
+                            {"type": "note", "title": "按已识别意图继续执行", "reason": "confident_intent"}
+                        ],
+                        "followups": [],
+                        "warnings": [],
+                    },
+                    "id": "call_confident_intent",
+                    "type": "tool_call",
+                }
+            ],
+        }
+
+    async def _noop_ensure_chat_session(db, state):
+        return None
+
+    async def _confident_refresh(db, redis_client, state, agent_config, emit_context_event=True):
+        state.context = {"system_prompt": "test system"}
+        state.intent_need_clarify = True
+        state.intent_confidence = 0.95
+        state.intent_clarify_question = "你是想出去吃，还是在家做饭？"
+
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
+    monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
+    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _confident_refresh)
+
+    graph = build_smart_eats_graph(
+        db=None,
+        redis_client=override_redis,
+        provider=None,
+    ).compile()
+
+    result = await graph.ainvoke(ChatState(session_id="s-smart-confident", message="想吃点东西").__dict__)
+
+    assert result["final_json"]["recommendations"][0]["reason"] == "confident_intent"
+
+
+@pytest.mark.asyncio
+async def test_build_smart_eats_graph_tools_node_without_messages_returns_think(monkeypatch, override_redis):
+    async def _noop_ensure_chat_session(db, state):
+        return None
+
+    async def _refresh_without_messages(db, redis_client, state, agent_config, emit_context_event=True):
+        state.context = {"system_prompt": "test system"}
+
+    async def _fake_plan_tool_calls(self, system, user, available_tools):
+        return {
+            "content": "直接回答",
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
+    monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
+    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _refresh_without_messages)
+
+    graph = build_smart_eats_graph(
+        db=None,
+        redis_client=override_redis,
+        provider=None,
+    ).compile()
+
+    result = await graph.ainvoke({
+        **ChatState(session_id="s-tools-empty", message="你好").__dict__,
+        "messages": [],
+    })
+
+    assert result["next_action"] == "final"
+    assert result["final_json"] is not None
 
 
 @pytest.mark.asyncio
@@ -218,7 +329,7 @@ async def test_build_smart_eats_graph_route_result_is_used_in_submit_final_answe
 
 
 @pytest.mark.asyncio
-async def test_build_smart_eats_graph_restaurant_confirm_injects_route_context_and_directive(monkeypatch, override_redis):
+async def test_build_smart_eats_graph_restaurant_confirm_injects_route_context_without_directive(monkeypatch, override_redis):
     async def _noop_ensure_chat_session(db, state):
         return None
 
@@ -300,10 +411,13 @@ async def test_build_smart_eats_graph_restaurant_confirm_injects_route_context_a
     assert runtime_context.get("cached_location", {}).get("lng") == 112.933349
     assert isinstance(runtime_context.get("last_restaurants"), list)
     assert runtime_context.get("last_restaurants")[0].get("name") == "新疆阿布烤羊肉店"
-
-    system_directive = runtime_context.get("system_directive")
-    assert isinstance(system_directive, str) and system_directive
-    assert "优先为该门店规划路线" in system_directive
+    route_target = runtime_context.get("route_target_candidate")
+    assert isinstance(route_target, dict)
+    assert route_target.get("name") == "新疆阿布烤羊肉店"
+    assert isinstance(route_target.get("geo"), dict)
+    assert route_target.get("geo", {}).get("lat") == 28.145665
+    assert route_target.get("geo", {}).get("lng") == 112.935793
+    assert runtime_context.get("system_directive") is None
 
 
 @pytest.mark.asyncio
@@ -456,7 +570,6 @@ async def test_build_smart_eats_graph_confirm_restaurant_routes_before_final(mon
                 cached_location = runtime_context.get("cached_location")
                 last_restaurants = runtime_context.get("last_restaurants")
                 route_target = runtime_context.get("route_target_candidate")
-                directive = runtime_context.get("system_directive")
 
                 has_route_inputs = (
                     isinstance(cached_location, dict)
@@ -466,8 +579,6 @@ async def test_build_smart_eats_graph_confirm_restaurant_routes_before_final(mon
                     and bool(last_restaurants)
                     and isinstance(route_target, dict)
                     and isinstance(route_target.get("geo"), dict)
-                    and isinstance(directive, str)
-                    and "优先为该门店规划路线" in directive
                 )
 
                 if has_route_inputs:
@@ -703,14 +814,12 @@ async def test_build_smart_eats_graph_confirm_restaurant_without_origin_guides_u
 
         if user == "就去新疆阿布烤羊肉店":
             if current_call == 1:
-                directive = runtime_context.get("system_directive")
                 route_target = runtime_context.get("route_target_candidate")
                 cached_location = runtime_context.get("cached_location")
 
                 assert isinstance(route_target, dict)
                 assert route_target.get("name") == "新疆阿布烤羊肉店"
                 assert cached_location is None
-                assert isinstance(directive, str) and "缺少可用起点坐标" in directive
 
                 planner_trace.append(("turn2", current_call, "submit_final_answer"))
                 return {

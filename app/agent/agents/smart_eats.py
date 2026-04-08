@@ -102,37 +102,6 @@ TOOL_ERROR_CODES: dict[str, str] = {
 
 
 TOOL_RESULT_SYSTEM_DIRECTIVES: dict[str, str] = {
-    "fridge_empty": (
-        "冰箱为空。请结合用户当前诉求与上下文（如生病、口味、时间）生成有温度的可执行建议，"
-        "并调用 submit_final_answer。不要机械模板化回复。"
-    ),
-    "restaurant_search_empty": (
-        "你已至少一次检索餐厅但结果为空。不要继续调用 search_restaurants。"
-        "请立即调用 submit_final_answer，明确告知当前区域暂未找到合适餐厅，"
-        "并给出下一步选择：1) 换商圈/地标再搜；2) 改为推荐在家快手菜。"
-    ),
-    "restaurant_confirm_route": (
-        "用户刚刚在已检索的餐厅里确认了具体门店，且当前上下文包含用户位置与候选门店信息。"
-        "请不要停留在泛泛确认，优先为该门店规划路线："
-        "先从 context.cached_location / context.location 中确定起点，再从 context.last_restaurants 中匹配用户提及门店作为终点，"
-        "随后调用 plan_route；拿到路线后立即调用 submit_final_answer。"
-        "若门店仍无法唯一匹配或坐标缺失，可先简短澄清再收敛。"
-    ),
-    "restaurant_confirm_route_missing_origin": (
-        "用户已确认要去某家餐厅，但当前上下文缺少可用起点坐标。"
-        "请不要输出笼统确认，也不要调用 plan_route。"
-        "请立即调用 submit_final_answer，明确说明需要用户提供出发位置（城市/地标/当前位置），"
-        "并给出可执行下一步。"
-    ),
-    "rag_recipe_not_found": (
-        "知识库中未找到相关做法，请立即调用 submit_final_answer，凭借你的常识直接生成这道菜的详细步骤（包含食材和分步做法）。"
-    ),
-    "rag_recipe_hits": (
-        "已从知识库获取到检索结果。请你仔细核对：检索到的菜谱与用户想吃的菜品是否完全一致（例如：用户要'番茄鸡蛋面'，但检索到'番茄炒蛋'，这属于不一致）。\n"
-        "1. 如果一致，请基于检索到的步骤给出详细做法。\n"
-        "2. 如果不一致，请彻底忽略检索结果，直接凭借你的常识，生成用户想吃的那道菜的详细步骤（包含所需食材和分步做法）。\n"
-        "无论哪种情况，都请调用 submit_final_answer 输出最终结果。"
-    ),
     "plan_route_ready": (
         "你已经拿到路线规划结果。请不要再调用其他工具，立即调用 submit_final_answer。"
         "请严格基于 context.latest_route 与最新的 plan_route 观察结果给出最终回复："
@@ -335,6 +304,58 @@ def _collect_tool_call_args(ai_messages: list[Any]) -> dict[str, dict[str, Any]]
             if isinstance(call_id, str) and isinstance(args, dict):
                 call_args_map[call_id] = args
     return call_args_map
+
+
+def _clear_system_directive_override(state: SmartEatsState) -> None:
+    if isinstance(state.context_overrides, dict):
+        state.context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["system_directive"], None)
+        _prune_empty_context_overrides(state)
+
+
+def _build_tool_runtime_payload(
+    chat_state: SmartEatsState,
+    *,
+    db: Any,
+    redis_client: Any,
+) -> dict[str, Any]:
+    return _build_official_runtime_context(
+        chat_state,
+        db=db,
+        redis_client=redis_client,
+        servers_path=settings.MCP_SERVERS_CONFIG_PATH,
+    )
+
+
+async def _invoke_tool_node_with_runtime(
+    tool_node: Any,
+    ai_messages: list[Any],
+    *,
+    chat_state: SmartEatsState,
+    db: Any,
+    redis_client: Any,
+) -> Any:
+    runtime_payload = _build_tool_runtime_payload(
+        chat_state,
+        db=db,
+        redis_client=redis_client,
+    )
+    token = _SMART_EATS_TOOL_RUNTIME_CONTEXT.set(runtime_payload)
+    try:
+        return await tool_node.ainvoke({"messages": ai_messages})
+    finally:
+        _SMART_EATS_TOOL_RUNTIME_CONTEXT.reset(token)
+
+
+def _build_tools_node_output(state: dict[str, Any], chat_state: SmartEatsState, tool_output: Any, ai_messages: list[Any]) -> dict[str, Any]:
+    tool_messages = _normalize_official_tool_messages(tool_output)
+    call_args_map = _collect_tool_call_args(ai_messages)
+
+    output = dict(state)
+    output.update(_state_to_dict(chat_state))
+    output["_tool_messages"] = tool_messages
+    output["_tool_call_args"] = call_args_map
+    output["next_action"] = "tool_postprocess"
+    return output
 
 
 def _observe_recovery(state: SmartEatsState, tool_name: str | None, result: Any) -> None:
@@ -560,22 +581,6 @@ async def _refresh_observation_context(
             route_target_candidate = _extract_route_target_from_cached_restaurants(state.message, cleaned_restaurants)
             if isinstance(route_target_candidate, dict):
                 context["route_target_candidate"] = route_target_candidate
-
-                origin = _extract_origin_from_context(context)
-                existing_directive = None
-                if isinstance(state.context_overrides, dict):
-                    existing_directive = state.context_overrides.get(STATE_CONTEXT_OVERRIDE_KEYS["system_directive"])
-
-                if not (isinstance(existing_directive, str) and existing_directive.strip()):
-                    context_overrides = _ensure_context_overrides(state)
-                    if origin:
-                        context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["system_directive"]] = TOOL_RESULT_SYSTEM_DIRECTIVES[
-                            "restaurant_confirm_route"
-                        ]
-                    else:
-                        context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["system_directive"]] = TOOL_RESULT_SYSTEM_DIRECTIVES[
-                            "restaurant_confirm_route_missing_origin"
-                        ]
     context["checkpoint"] = {
         "resume_from_checkpoint": state.resume_from_checkpoint,
         "checkpoint_ref": state.checkpoint_ref,
@@ -1187,6 +1192,7 @@ def _handle_search_restaurants_result(
     if isinstance(result, dict) and result.get("error"):
         context[STATE_CONTEXT_KEYS["last_search_error"]] = result.get("error")
         context.pop(STATE_CONTEXT_KEYS["suggested_radius_km"], None)
+        _clear_system_directive_override(state)
         _record_agent_metric(state, AGENT_METRIC_NAMES["restaurant_search_error"], code=result.get("error"))
         return None
 
@@ -1197,10 +1203,10 @@ def _handle_search_restaurants_result(
         context.pop(STATE_CONTEXT_KEYS["suggested_radius_km"], None)
         _record_agent_metric(state, AGENT_METRIC_NAMES["restaurant_search_empty"], retries=retries)
 
-        if retries >= 1:
-            context_overrides = _ensure_context_overrides(state)
-            context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["restaurant_search_retries"]] = retries
-            context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["system_directive"]] = TOOL_RESULT_SYSTEM_DIRECTIVES["restaurant_search_empty"]
+        context_overrides = _ensure_context_overrides(state)
+        context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["restaurant_search_retries"]] = retries
+        context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["system_directive"], None)
+        _prune_empty_context_overrides(state)
         return None
 
     if isinstance(result, list) and result:
@@ -1209,6 +1215,7 @@ def _handle_search_restaurants_result(
         context.pop(STATE_CONTEXT_KEYS["suggested_radius_km"], None)
         if isinstance(state.context_overrides, dict):
             state.context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["restaurant_search_retries"], None)
+            state.context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["system_directive"], None)
             _prune_empty_context_overrides(state)
         _record_agent_metric(state, AGENT_METRIC_NAMES["restaurant_search_success"], size=len(result))
         return None
@@ -1234,7 +1241,14 @@ def _handle_get_fridge_items_result(
     if not items:
         context_overrides = _ensure_context_overrides(state)
         context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["fridge_empty"]] = True
-        context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["system_directive"]] = TOOL_RESULT_SYSTEM_DIRECTIVES["fridge_empty"]
+        context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["system_directive"], None)
+        _prune_empty_context_overrides(state)
+        return None
+
+    if isinstance(state.context_overrides, dict):
+        state.context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["fridge_empty"], None)
+        state.context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["system_directive"], None)
+        _prune_empty_context_overrides(state)
     return None
 
 
@@ -1257,12 +1271,12 @@ def _handle_rag_search_recipes_result(
     items = result.get("items") if isinstance(result.get("items"), list) else []
 
     context_overrides = _ensure_context_overrides(state)
-
-    if not items:
-        context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["system_directive"]] = TOOL_RESULT_SYSTEM_DIRECTIVES["rag_recipe_not_found"]
-    else:
+    if items:
         context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["rag_recipe_hits"]] = items[:3]
-        context_overrides[STATE_CONTEXT_OVERRIDE_KEYS["system_directive"]] = TOOL_RESULT_SYSTEM_DIRECTIVES["rag_recipe_hits"]
+    else:
+        context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["rag_recipe_hits"], None)
+    context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["system_directive"], None)
+    _prune_empty_context_overrides(state)
     return None
 
 
@@ -1375,10 +1389,7 @@ def _smart_eats_graph_config() -> SmartEatsGraphConfig:
 
 
 def get_smart_eats_agent_config() -> SmartEatsGraphConfig:
-    """Compatibility adapter for legacy registry callers.
-
-    Dedicated smart_eats runtime should call build_smart_eats_graph directly.
-    """
+    """返回 smart_eats dedicated graph 的配置。"""
     return _smart_eats_graph_config()
 
 
@@ -1520,27 +1531,14 @@ def build_smart_eats_graph(
             output["next_action"] = "think"
             return output
 
-        runtime_payload = _build_official_runtime_context(
-            chat_state,
+        tool_output = await _invoke_tool_node_with_runtime(
+            tool_node,
+            ai_messages,
+            chat_state=chat_state,
             db=db,
             redis_client=redis_client,
-            servers_path=settings.MCP_SERVERS_CONFIG_PATH,
         )
-        token = _SMART_EATS_TOOL_RUNTIME_CONTEXT.set(runtime_payload)
-        try:
-            tool_output = await tool_node.ainvoke({"messages": ai_messages})
-        finally:
-            _SMART_EATS_TOOL_RUNTIME_CONTEXT.reset(token)
-
-        tool_messages = _normalize_official_tool_messages(tool_output)
-        call_args_map = _collect_tool_call_args(ai_messages)
-
-        output = dict(state)
-        output.update(_state_to_dict(chat_state))
-        output["_tool_messages"] = tool_messages
-        output["_tool_call_args"] = call_args_map
-        output["next_action"] = "tool_postprocess"
-        return output
+        return _build_tools_node_output(state, chat_state, tool_output, ai_messages)
 
     async def tool_postprocess_node(state: dict[str, Any]) -> dict[str, Any]:
         chat_state = _state_from_dict(state)

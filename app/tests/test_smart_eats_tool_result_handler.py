@@ -31,7 +31,7 @@ def test_get_fridge_items_empty_in_cook_home_returns_directive_context():
     assert handled is None
     assert state.context_overrides is not None
     assert state.context_overrides.get("fridge_empty") is True
-    assert "system_directive" in state.context_overrides
+    assert state.context_overrides.get("system_directive") is None
 
 
 def test_search_restaurants_results_relaxed_to_llm():
@@ -58,7 +58,7 @@ def test_search_restaurants_empty_sets_recovery_context():
     assert state.context.get("suggested_radius_km") is None
     assert state.context_overrides is not None
     assert state.context_overrides.get("restaurant_search_retries") == 1
-    assert "system_directive" in state.context_overrides
+    assert state.context_overrides.get("system_directive") is None
 
 
 def test_search_restaurants_missing_location_sets_recovery_context():
@@ -134,7 +134,7 @@ def test_rag_search_recipes_with_steps_sets_directive_context():
     hits = state.context_overrides.get("rag_recipe_hits")
     assert isinstance(hits, list) and hits
     assert hits[0].get("title") == "土豆炖牛肉"
-    assert "system_directive" in state.context_overrides
+    assert state.context_overrides.get("system_directive") is None
 
 
 def test_plan_route_missing_origin_keeps_hard_guardrail():
@@ -186,6 +186,16 @@ def test_plan_route_success_relaxed_to_llm():
     assert latest_route.get("distance_m") == 1200
     assert latest_route.get("duration_s") == 900
     assert latest_route.get("steps") == ["向东步行", "右转到达"]
+
+
+def test_rag_search_recipes_empty_clears_recipe_hits_without_directive():
+    state = _build_state()
+    state.context_overrides = {"rag_recipe_hits": [{"title": "旧菜谱"}], "system_directive": "legacy"}
+
+    handled = _tool_result_handler(state, "rag_search_recipes", {"items": []})
+
+    assert handled is None
+    assert state.context_overrides is None
 
 
 def test_intent_resolver_delegates_to_llm_and_returns_unknown():
