@@ -32,7 +32,7 @@ dc() {
 }
 
 # Build and start
-dc build --pull
+dc build
 dc up -d
 
 # Wait for backend

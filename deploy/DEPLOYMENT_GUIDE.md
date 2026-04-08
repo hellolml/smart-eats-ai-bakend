@@ -157,6 +157,12 @@ cd ~/code/smart-eats-ai-bakend
 ./deploy/deploy.sh
 ```
 
+说明：
+
+- `deploy/deploy.sh` 当前默认执行的是 `docker compose build`，**不会每次强制拉取最新基础镜像**
+- 这样做是为了避免国内服务器在访问 `python:3.11-slim-bookworm` 对应 Debian 官方源时过慢，导致部署长时间卡在 `apt-get update`
+- 即使不带 `--pull`，只要代码有变更，重新执行 `./deploy/deploy.sh` 仍然会构建并部署新代码
+
 此时（未启用 gateway 时）前端默认会暴露：
 
 - `http://<SERVER_IP>:${FRONTEND_HOST_PORT}`（默认 80）
@@ -256,7 +262,15 @@ cd ~/code/smart-eats-ai-bakend
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep smart-eats
 
 # 重新部署（代码更新后）
+git pull
 ./deploy/deploy.sh
+
+# 如需主动更新基础镜像，再手动执行一次
+# HTTP 部署
+# docker compose --env-file .env.prod -f docker-compose.prod.yml build --pull
+#
+# HTTPS 部署
+# docker compose --env-file .env.prod -f docker-compose.prod.yml -f deploy/docker-compose.https.yml build --pull
 
 # 续期证书
 ./deploy/renew_https.sh
