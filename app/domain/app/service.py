@@ -403,12 +403,27 @@ class AppBffService:
         }
 
     @staticmethod
+    def _ensure_identity_channel_enabled(*, email: str | None = None, phone: str | None = None) -> None:
+        if email and not settings.APP_AUTH_EMAIL_ENABLED:
+            raise HTTPException(status_code=404, detail="not found")
+        if phone and not settings.APP_AUTH_PHONE_ENABLED:
+            raise HTTPException(status_code=404, detail="not found")
+
+    @staticmethod
+    def _ensure_account_channel_enabled(account: str) -> None:
+        if "@" in account:
+            AppBffService._ensure_identity_channel_enabled(email=account)
+            return
+        AppBffService._ensure_identity_channel_enabled(phone=account)
+
+    @staticmethod
     async def register(payload: dict[str, Any], db: AsyncSession, redis_client: redis.Redis, client_ip: str) -> dict[str, Any]:
         # Backward-compatible direct registration
         email = payload.get("email")
         phone = payload.get("phone")
         if not email and not phone:
             raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="email or phone required", http_status=400)
+        AppBffService._ensure_identity_channel_enabled(email=email, phone=phone)
 
         conditions = []
         if email:
@@ -445,6 +460,7 @@ class AppBffService:
         if not email and not phone:
             raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="email or phone required", http_status=400)
 
+        AppBffService._ensure_identity_channel_enabled(email=email, phone=phone)
         account = str(email or phone)
         conditions = []
         if email:
@@ -475,6 +491,7 @@ class AppBffService:
             raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="email or phone required", http_status=400)
         if not code:
             raise AppError(code=AUTH_OTP_INVALID, message="code required", http_status=400)
+        AppBffService._ensure_identity_channel_enabled(email=email, phone=phone)
         account = str(email or phone)
 
         code_hash = await redis_client.get(f"otp:register:{account}")
@@ -518,6 +535,7 @@ class AppBffService:
         client_ip: str,
     ) -> dict[str, Any]:
         account = payload["account"]
+        AppBffService._ensure_account_channel_enabled(account)
         await ensure_rate_limit(
             redis_client,
             key=f"rl:app_login:{client_ip}:{account}",
@@ -568,6 +586,7 @@ class AppBffService:
         target = (account or "").strip()
         if not target:
             raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="account required", http_status=400)
+        AppBffService._ensure_account_channel_enabled(target)
 
         if "@" in target:
             user = (await db.execute(select(User).where(User.email == target))).scalar_one_or_none()
@@ -611,6 +630,7 @@ class AppBffService:
         target = (account or "").strip()
         if not target:
             raise AppError(code=AUTH_ACCOUNT_REQUIRED, message="account required", http_status=400)
+        AppBffService._ensure_account_channel_enabled(target)
 
         code_hash = await redis_client.get(f"otp:login:{target}")
         if not code_hash:
@@ -665,6 +685,7 @@ class AppBffService:
     @staticmethod
     async def login_one_click(token: str, redis_client: redis.Redis, db: AsyncSession, client_ip: str) -> dict[str, Any]:
         phone = await AppBffService._verify_one_click_token(token)
+        AppBffService._ensure_identity_channel_enabled(phone=phone)
         user = (await db.execute(select(User).where(User.phone == phone))).scalar_one_or_none()
         if user is None:
             user = User(
@@ -872,6 +893,7 @@ class AppBffService:
 
     @staticmethod
     async def password_reset_request(account: str, redis_client: redis.Redis, db: AsyncSession) -> dict[str, Any]:
+        AppBffService._ensure_account_channel_enabled(account)
         if "@" in account:
             user = (await db.execute(select(User).where(User.email == account))).scalar_one_or_none()
         else:
@@ -899,6 +921,7 @@ class AppBffService:
         redis_client: redis.Redis,
         db: AsyncSession,
     ) -> dict[str, Any]:
+        AppBffService._ensure_account_channel_enabled(account)
         code_hash = await redis_client.get(f"otp:pwdreset:{account}")
         if not code_hash:
             raise AppError(code=AUTH_RESET_CODE_INVALID, message="reset code invalid or expired", http_status=400)
@@ -1115,85 +1138,123 @@ class AppBffService:
         return {"removed": True, "provider": provider}
 
     @staticmethod
+    def _auth_feature_config() -> dict[str, Any]:
+        password_enabled = bool(settings.APP_AUTH_PASSWORD_ENABLED)
+        register_enabled = bool(settings.APP_AUTH_REGISTER_ENABLED)
+        otp_enabled = bool(settings.APP_AUTH_OTP_ENABLED)
+        one_click_enabled = bool(settings.APP_AUTH_ONECLICK_ENABLED)
+        github_enabled = bool(settings.APP_AUTH_GITHUB_OAUTH_ENABLED)
+        password_reset_enabled = bool(settings.APP_AUTH_PASSWORD_RESET_ENABLED)
+        phone_enabled = bool(settings.APP_AUTH_PHONE_ENABLED)
+        email_enabled = bool(settings.APP_AUTH_EMAIL_ENABLED)
+
+        checks = {
+            "password_auth": {
+                "enabled": password_enabled,
+                "ready": password_enabled,
+                "missing": [],
+            },
+            "register": {
+                "enabled": register_enabled,
+                "ready": register_enabled and password_enabled and (phone_enabled or email_enabled),
+                "missing": ([] if (phone_enabled or email_enabled) else ["phone_or_email"]) if register_enabled else [],
+            },
+            "otp_auth": {
+                "enabled": otp_enabled,
+                "ready": otp_enabled and (phone_enabled or email_enabled),
+                "missing": ([] if (phone_enabled or email_enabled) else ["phone_or_email"]) if otp_enabled else [],
+            },
+            "one_click": {
+                "enabled": one_click_enabled,
+                "ready": one_click_enabled and bool((settings.ONECLICK_PROVIDER or "").strip()),
+                "missing": ([] if (settings.ONECLICK_PROVIDER or "").strip() else ["ONECLICK_PROVIDER"]) if one_click_enabled else [],
+            },
+            "password_reset": {
+                "enabled": password_reset_enabled,
+                "ready": password_reset_enabled and (phone_enabled or email_enabled),
+                "missing": ([] if (phone_enabled or email_enabled) else ["phone_or_email"]) if password_reset_enabled else [],
+            },
+            "oauth_github": {
+                "enabled": github_enabled,
+                "ready": github_enabled and bool(settings.GITHUB_OAUTH_CLIENT_ID and settings.GITHUB_OAUTH_REDIRECT_URI),
+                "missing": (
+                    [
+                        item
+                        for item, ok in {
+                            "GITHUB_OAUTH_CLIENT_ID": bool(settings.GITHUB_OAUTH_CLIENT_ID),
+                            "GITHUB_OAUTH_REDIRECT_URI": bool(settings.GITHUB_OAUTH_REDIRECT_URI),
+                        }.items()
+                        if not ok
+                    ]
+                ) if github_enabled else [],
+            },
+        }
+        ready = all((not item["enabled"]) or item["ready"] for item in checks.values())
+        return {
+            "ready": ready,
+            "checks": checks,
+            "public": {
+                "password_login": password_enabled,
+                "register": register_enabled,
+                "otp_login": otp_enabled,
+                "otp_register": otp_enabled and register_enabled,
+                "password_reset": password_reset_enabled,
+                "one_click": one_click_enabled,
+                "oauth": {
+                    "github": github_enabled,
+                },
+                "phone_enabled": phone_enabled,
+                "email_enabled": email_enabled,
+            },
+        }
+
+    @staticmethod
+    def ensure_auth_feature_enabled(feature: str) -> None:
+        checks = AppBffService._auth_feature_config()["checks"]
+        item = checks.get(feature)
+        if not item or not item.get("enabled"):
+            raise HTTPException(status_code=404, detail="not found")
+
+    @staticmethod
     async def auth_methods(user_id: str, db: AsyncSession) -> dict[str, Any]:
         user = await AppBffService._get_user(user_id, db)
-        oauth_rows = (
-            await db.execute(select(OAuthAccount).where(OAuthAccount.user_id == user_id))
-        ).scalars().all()
-        providers = sorted({row.provider for row in oauth_rows if row.provider})
+        github_enabled = AppBffService._auth_feature_config()["checks"]["oauth_github"]["enabled"]
+        github_bound = False
+        oauth_providers: list[str] = []
+        if github_enabled:
+            oauth = (
+                await db.execute(
+                    select(OAuthAccount).where(OAuthAccount.user_id == user_id, OAuthAccount.provider == "github")
+                )
+            ).scalar_one_or_none()
+            github_bound = oauth is not None
+            if github_bound:
+                oauth_providers.append("github")
         return {
             "email_bound": bool(user.email),
             "phone_bound": bool(user.phone),
-            "oauth_providers": providers,
-            "github_bound": "github" in providers,
+            "oauth_providers": oauth_providers,
+            "github_bound": github_bound,
+            "phone_enabled": bool(settings.APP_AUTH_PHONE_ENABLED),
+            "email_enabled": bool(settings.APP_AUTH_EMAIL_ENABLED),
+            "oauth_enabled": {
+                "github": bool(github_enabled),
+            },
         }
 
     @staticmethod
     async def auth_config_check() -> dict[str, Any]:
-        sms_provider = (settings.SMS_PROVIDER or "mock").lower().strip()
-        email_provider = (settings.EMAIL_PROVIDER or "mock").lower().strip()
-        oneclick_provider = (settings.ONECLICK_PROVIDER or "mock").lower().strip()
+        config = AppBffService._auth_feature_config()
+        return {"ready": config["ready"], "checks": config["checks"]}
 
-        checks = {
-            "sms": {
-                "provider": sms_provider,
-                "ready": sms_provider == "mock" or (sms_provider == "webhook" and bool(settings.SMS_WEBHOOK_URL)),
-                "missing": [] if sms_provider == "mock" else [k for k, ok in {
-                    "SMS_WEBHOOK_URL": bool(settings.SMS_WEBHOOK_URL),
-                }.items() if not ok],
-            },
-            "email": {
-                "provider": email_provider,
-                "ready": (
-                    email_provider == "mock"
-                    or (email_provider == "webhook" and bool(settings.EMAIL_WEBHOOK_URL))
-                    or (email_provider == "smtp" and bool(settings.SMTP_HOST and settings.SMTP_FROM))
-                ),
-                "missing": (
-                    []
-                    if email_provider == "mock"
-                    else [k for k, ok in (
-                        {
-                            "EMAIL_WEBHOOK_URL": bool(settings.EMAIL_WEBHOOK_URL),
-                        }.items()
-                        if email_provider == "webhook"
-                        else {
-                            "SMTP_HOST": bool(settings.SMTP_HOST),
-                            "SMTP_FROM": bool(settings.SMTP_FROM),
-                        }.items()
-                    ) if not ok]
-                ),
-            },
-            "oauth": {
-                "github": {
-                    "ready": bool(
-                        settings.GITHUB_OAUTH_CLIENT_ID
-                        and settings.GITHUB_OAUTH_CLIENT_SECRET
-                        and settings.GITHUB_OAUTH_REDIRECT_URI
-                    ),
-                    "missing": [k for k, ok in {
-                        "GITHUB_OAUTH_CLIENT_ID": bool(settings.GITHUB_OAUTH_CLIENT_ID),
-                        "GITHUB_OAUTH_CLIENT_SECRET": bool(settings.GITHUB_OAUTH_CLIENT_SECRET),
-                        "GITHUB_OAUTH_REDIRECT_URI": bool(settings.GITHUB_OAUTH_REDIRECT_URI),
-                    }.items() if not ok],
-                }
-            },
-            "one_click": {
-                "provider": oneclick_provider,
-                "ready": oneclick_provider == "mock" or (oneclick_provider == "webhook" and bool(settings.ONECLICK_WEBHOOK_URL)),
-                "missing": [] if oneclick_provider == "mock" else [k for k, ok in {
-                    "ONECLICK_WEBHOOK_URL": bool(settings.ONECLICK_WEBHOOK_URL),
-                }.items() if not ok],
-            },
+    @staticmethod
+    async def public_auth_config() -> dict[str, Any]:
+        config = AppBffService._auth_feature_config()
+        return {
+            "ready": config["ready"],
+            "auth": config["public"],
+            "checks": config["checks"],
         }
-
-        all_ready = (
-            checks["sms"]["ready"]
-            and checks["email"]["ready"]
-            and checks["oauth"]["github"]["ready"]
-            and checks["one_click"]["ready"]
-        )
-        return {"ready": bool(all_ready), "checks": checks}
 
     @staticmethod
     async def _get_user(user_id: str, db: AsyncSession) -> User:

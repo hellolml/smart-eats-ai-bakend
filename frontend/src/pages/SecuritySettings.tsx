@@ -2,18 +2,20 @@ import React,{ useState } from "react";
 import { useNavigate } from 'react-router-dom';
 import {
     ChevronLeft, Save, Lock, ShieldCheck,
-    Eye, EyeOff, Smartphone
+    Eye, EyeOff, Smartphone, Github
 } from 'lucide-react';
 import toast from "react-hot-toast";
-import { ApiError, appApi } from "@/services/app-api";
+import { ApiError, appApi, type AppAuthMethods } from "@/services/app-api";
+import { useAppConfig } from '@/app/app-config';
 
 const SecuritySettings = () => {
     const navigate = useNavigate();
+    const { config } = useAppConfig();
     const [oldPassword, setOldPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPass, setShowPass] = useState(false);
-    const [methods, setMethods] = useState<{ email_bound: boolean; phone_bound: boolean; github_bound: boolean } | null>(null);
+    const [methods, setMethods] = useState<AppAuthMethods | null>(null);
     const [configReady, setConfigReady] = useState<boolean | null>(null);
     const [missingItems, setMissingItems] = useState<string[]>([]);
 
@@ -22,12 +24,11 @@ const SecuritySettings = () => {
             .then(([m, cfg]) => {
                 setMethods(m);
                 setConfigReady(Boolean(cfg.ready));
-                const checks = (cfg as any).checks || {};
-                const smsMissing = (checks.sms?.missing || []).map((x: string) => `SMS: ${x}`);
-                const emailMissing = (checks.email?.missing || []).map((x: string) => `EMAIL: ${x}`);
-                const githubMissing = (checks.oauth?.github?.missing || []).map((x: string) => `GITHUB: ${x}`);
-                const oneClickMissing = (checks.one_click?.missing || []).map((x: string) => `ONE_CLICK: ${x}`);
-                setMissingItems([...smsMissing, ...emailMissing, ...githubMissing, ...oneClickMissing]);
+                const checks = cfg.checks || {};
+                const nextMissing = Object.entries(checks).flatMap(([key, value]) =>
+                    (value.missing || []).map((item) => `${key.toUpperCase()}: ${item}`)
+                );
+                setMissingItems(nextMissing);
             })
             .catch(() => {
                 // ignore methods/config fetch error in settings page
@@ -65,6 +66,36 @@ const SecuritySettings = () => {
         }
     };
 
+    const bindGithub = async () => {
+        toast.loading('正在跳转 GitHub...', { id: 'bind-github' });
+        try {
+            localStorage.setItem('app_oauth_action', 'bind');
+            const data = await appApi.auth.oauthStart('github');
+            window.location.href = data.auth_url;
+        } catch (error) {
+            if (error instanceof ApiError) {
+                toast.error(error.message || 'GitHub 绑定暂不可用', { id: 'bind-github' });
+                return;
+            }
+            toast.error('GitHub 绑定暂不可用', { id: 'bind-github' });
+        }
+    };
+
+    const unbindGithub = async () => {
+        toast.loading('正在解绑 GitHub...', { id: 'unbind-github' });
+        try {
+            await appApi.auth.oauthUnbind('github');
+            setMethods((prev) => prev ? { ...prev, github_bound: false, oauth_providers: prev.oauth_providers.filter((item) => item !== 'github') } : prev);
+            toast.success('GitHub 已解绑', { id: 'unbind-github' });
+        } catch (error) {
+            if (error instanceof ApiError) {
+                toast.error(error.message || 'GitHub 解绑失败', { id: 'unbind-github' });
+                return;
+            }
+            toast.error('GitHub 解绑失败，请稍后重试', { id: 'unbind-github' });
+        }
+    };
+
     return (
         <div className="space-y-6 pb-10 no-scrollbar">
             <div className="flex items-center gap-4">
@@ -90,16 +121,22 @@ const SecuritySettings = () => {
 
             <section className="bg-white rounded-[2.5rem] p-6 shadow-sm border border-purple-50 space-y-3">
                 <h3 className="text-sm font-semibold text-gray-800">登录方式状态</h3>
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div className={`rounded-xl p-2 ${methods?.phone_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
-                        手机号：{methods?.phone_bound ? '已绑定' : '未绑定'}
-                    </div>
-                    <div className={`rounded-xl p-2 ${methods?.email_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
-                        邮箱：{methods?.email_bound ? '已绑定' : '未绑定'}
-                    </div>
-                    <div className={`rounded-xl p-2 ${methods?.github_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
-                        GitHub：{methods?.github_bound ? '已绑定' : '未绑定'}
-                    </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                    {config.auth.phone_enabled && (
+                        <div className={`rounded-xl p-2 ${methods?.phone_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+                            手机号：{methods?.phone_bound ? '已绑定' : '未绑定'}
+                        </div>
+                    )}
+                    {config.auth.email_enabled && (
+                        <div className={`rounded-xl p-2 ${methods?.email_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+                            邮箱：{methods?.email_bound ? '已绑定' : '未绑定'}
+                        </div>
+                    )}
+                    {config.auth.oauth.github && (
+                        <div className={`rounded-xl p-2 ${methods?.github_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+                            GitHub：{methods?.github_bound ? '已绑定' : '未绑定'}
+                        </div>
+                    )}
                 </div>
                 <div className={`rounded-xl p-2 text-xs ${configReady ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
                     认证通道配置：{configReady === null ? '检查中' : configReady ? '就绪' : '未完全就绪'}
@@ -112,6 +149,23 @@ const SecuritySettings = () => {
                                 <li key={item}>{item}</li>
                             ))}
                         </ul>
+                    </div>
+                )}
+                {config.auth.oauth.github && (
+                    <div className="rounded-2xl border border-purple-100 p-3 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 text-sm text-gray-700">
+                            <Github size={16} />
+                            <span>GitHub 账号绑定</span>
+                        </div>
+                        {methods?.github_bound ? (
+                            <button onClick={unbindGithub} className="px-3 py-2 rounded-xl bg-red-50 text-red-600 text-xs font-bold">
+                                解绑
+                            </button>
+                        ) : (
+                            <button onClick={bindGithub} className="px-3 py-2 rounded-xl bg-purple-50 text-[#7E57FF] text-xs font-bold">
+                                去绑定
+                            </button>
+                        )}
                     </div>
                 )}
             </section>
@@ -140,7 +194,7 @@ const SecuritySettings = () => {
                     </div>
                 </div>
                 <div className="space-y-1.5">
-                    < label className="text-[9px] font-bold text-gray-400 uppercase ml-1">
+                    <label className="text-[9px] font-bold text-gray-400 uppercase ml-1">
                         新密码
                     </label>
                     <div className="relative">
@@ -157,7 +211,7 @@ const SecuritySettings = () => {
                     </div>
                 </div>
                 <div className="space-y-1.5">
-                    < label className="text-[9px] font-bold text-gray-400 uppercase ml-1">
+                    <label className="text-[9px] font-bold text-gray-400 uppercase ml-1">
                         确认新密码
                     </label>
                     <div className="relative">

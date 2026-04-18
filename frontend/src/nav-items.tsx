@@ -10,12 +10,13 @@ import Wheel from '@/pages/Wheel';
 import AiChat from '@/pages/AiChat';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
-import OAuthGithubCallback from '@/pages/OAuthGithubCallback';
 import SessionManagement from '@/pages/SessionManagement';
+import OAuthGithubCallback from '@/pages/OAuthGithubCallback';
 import GroupDecisionResult from '@/pages/GroupDecisionResult';
 import GroupDecisionCreate from '@/pages/GroupDecisionCreate';
 import router from '@/config/router.json';
 import { AUTH_NAV_PATHS, GUEST_NAV_PATHS } from '@/config/access-control';
+import type { AppAuthPublicConfig } from '@/services/app-api';
 
 import {
     Utensils,
@@ -43,8 +44,8 @@ const routeMap: Record<string, React.ReactNode> = {
     AiChat: <AiChat />,
     Login: <Login />,
     Register: <Register />,
-    OAuthGithubCallback: <OAuthGithubCallback />,
     SessionManagement: <SessionManagement />,
+    OAuthGithubCallback: <OAuthGithubCallback />,
     GroupDecisionResult: <GroupDecisionResult />,
     GroupDecisionCreate: <GroupDecisionCreate />
 };
@@ -74,9 +75,20 @@ const allRoutes = Object.entries(router).map(([key, value]) => ({
 }));
 
 /* 底部导航栏显示的项 */
-export function getNavItems(isLoggedIn: boolean) {
+export function getNavItems(isLoggedIn: boolean, config?: AppAuthPublicConfig) {
     const allowed = isLoggedIn ? AUTH_NAV_PATHS : GUEST_NAV_PATHS;
-    return allRoutes.filter((item) => (allowed as readonly string[]).includes(item.to));
+    return allRoutes.filter((item) => {
+        if (!(allowed as readonly string[]).includes(item.to)) {
+            return false;
+        }
+        if (item.to === '/register' && config && !config.auth.register) {
+            return false;
+        }
+        if (item.to === '/oauth/github/callback' && config && !config.auth.oauth.github) {
+            return false;
+        }
+        return true;
+    });
 }
 
 export const routes = allRoutes;

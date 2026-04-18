@@ -1,5 +1,7 @@
 import pytest
 
+from app.common.config import settings
+
 
 @pytest.mark.asyncio
 async def test_app_auth_flow(client):
@@ -116,40 +118,6 @@ async def test_app_logout_accepts_camel_refresh_token(client):
 
 
 @pytest.mark.asyncio
-async def test_app_password_reset_flow(client):
-    register_resp = await client.post(
-        "/api/v1/app/auth/register",
-        json={"email": "app_reset@example.com", "password": "oldPass123", "name": "reset"},
-    )
-    assert register_resp.status_code == 200
-
-    req_resp = await client.post(
-        "/api/v1/app/auth/password/reset-request",
-        json={"account": "app_reset@example.com"},
-    )
-    assert req_resp.status_code == 200
-    code = req_resp.json()["data"]["debug_code"]
-
-    confirm_resp = await client.post(
-        "/api/v1/app/auth/password/reset-confirm",
-        json={"account": "app_reset@example.com", "code": code, "new_password": "newPass456"},
-    )
-    assert confirm_resp.status_code == 200
-
-    old_login = await client.post(
-        "/api/v1/app/auth/login",
-        json={"account": "app_reset@example.com", "password": "oldPass123"},
-    )
-    assert old_login.status_code == 401
-
-    new_login = await client.post(
-        "/api/v1/app/auth/login",
-        json={"account": "app_reset@example.com", "password": "newPass456"},
-    )
-    assert new_login.status_code == 200
-
-
-@pytest.mark.asyncio
 async def test_app_refresh_token_replay_detected(client):
     register_resp = await client.post(
         "/api/v1/app/auth/register",
@@ -178,30 +146,6 @@ async def test_app_refresh_token_replay_detected(client):
     )
     assert blocked_refresh.status_code == 401
     assert blocked_refresh.json()["code"] == 41005
-
-
-@pytest.mark.asyncio
-async def test_app_register_otp_confirm_flow(client):
-    otp_resp = await client.post(
-        "/api/v1/app/auth/register/request-otp",
-        json={"email": "app_otp_register@example.com"},
-    )
-    assert otp_resp.status_code == 200
-    code = otp_resp.json()["data"]["debug_code"]
-
-    confirm_resp = await client.post(
-        "/api/v1/app/auth/register/confirm",
-        json={
-            "email": "app_otp_register@example.com",
-            "code": code,
-            "password": "secret123",
-            "name": "otp-user",
-        },
-    )
-    assert confirm_resp.status_code == 200
-    data = confirm_resp.json()["data"]
-    assert data["access_token"]
-    assert data["refresh_token"]
 
 
 @pytest.mark.asyncio
@@ -236,7 +180,6 @@ async def test_app_refresh_supports_http_only_cookie(client):
     assert register_resp.status_code == 200
     csrf_token = register_resp.json()["data"]["csrf_token"]
 
-    # use cookie fallback (no refresh_token in body) with csrf header
     refresh_resp = await client.post(
         "/api/v1/app/auth/refresh",
         json={},
@@ -296,82 +239,24 @@ async def test_app_sessions_and_logout_all(client):
 
 
 @pytest.mark.asyncio
-async def test_app_oauth_github_start_and_callback(client, monkeypatch):
-    async def fake_fetch(_code: str):
-        return {
-            "provider": "github",
-            "provider_uid": "gh_123",
-            "nickname": "GH User",
-            "email": "gh_user@example.com",
-            "access_token": "gh_access",
-        }
+async def test_app_disabled_auth_routes_return_404(client):
+    disabled_routes = [
+        ("post", "/api/v1/app/auth/register/request-otp", {"email": "disabled@example.com"}),
+        ("post", "/api/v1/app/auth/register/confirm", {"email": "disabled@example.com", "code": "123456", "password": "secret123"}),
+        ("post", "/api/v1/app/auth/login/otp/request", {"account": "15500001111"}),
+        ("post", "/api/v1/app/auth/login/otp/confirm", {"account": "15500001111", "code": "123456"}),
+        ("post", "/api/v1/app/auth/login/one-click", {"token": "mock:15500002222"}),
+        ("post", "/api/v1/app/auth/password/reset-request", {"account": "disabled@example.com"}),
+        ("post", "/api/v1/app/auth/password/reset-confirm", {"account": "disabled@example.com", "code": "123456", "new_password": "newPass456"}),
+        ("get", "/api/v1/app/auth/oauth/github/start", None),
+    ]
 
-    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_CLIENT_ID", "cid")
-    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_REDIRECT_URI", "http://localhost/callback")
-    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_CLIENT_SECRET", "secret")
-    monkeypatch.setattr("app.domain.app.service.AppBffService._oauth_fetch_github_user", staticmethod(fake_fetch))
-
-    start_resp = await client.get("/api/v1/app/auth/oauth/github/start")
-    assert start_resp.status_code == 200
-    start_data = start_resp.json()["data"]
-    assert start_data["auth_url"]
-    assert start_data["state"]
-
-    callback_resp = await client.post(
-        "/api/v1/app/auth/oauth/github/callback",
-        json={"code": "abc", "state": start_data["state"]},
-    )
-    assert callback_resp.status_code == 200
-    data = callback_resp.json()["data"]
-    assert data["access_token"]
-    assert data["refresh_token"]
-
-
-@pytest.mark.asyncio
-async def test_app_otp_login_flow_phone_and_email(client):
-    phone_request = await client.post(
-        "/api/v1/app/auth/login/otp/request",
-        json={"account": "15500001111"},
-    )
-    assert phone_request.status_code == 200
-    phone_code = phone_request.json()["data"]["debug_code"]
-
-    phone_confirm = await client.post(
-        "/api/v1/app/auth/login/otp/confirm",
-        json={"account": "15500001111", "code": phone_code},
-    )
-    assert phone_confirm.status_code == 200
-    phone_data = phone_confirm.json()["data"]
-    assert phone_data["access_token"]
-    assert phone_data["refresh_token"]
-
-    email_request = await client.post(
-        "/api/v1/app/auth/login/otp/request",
-        json={"account": "otp_login@example.com"},
-    )
-    assert email_request.status_code == 200
-    email_code = email_request.json()["data"]["debug_code"]
-
-    email_confirm = await client.post(
-        "/api/v1/app/auth/login/otp/confirm",
-        json={"account": "otp_login@example.com", "code": email_code},
-    )
-    assert email_confirm.status_code == 200
-    email_data = email_confirm.json()["data"]
-    assert email_data["access_token"]
-    assert email_data["refresh_token"]
-
-
-@pytest.mark.asyncio
-async def test_app_phone_one_click_login_mock(client):
-    resp = await client.post(
-        "/api/v1/app/auth/login/one-click",
-        json={"token": "mock:15500002222"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["access_token"]
-    assert data["refresh_token"]
+    for method, path, payload in disabled_routes:
+        if method == "get":
+            resp = await client.get(path)
+        else:
+            resp = await client.post(path, json=payload)
+        assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -384,7 +269,6 @@ async def test_app_auth_events_endpoint(client):
     tokens = register_resp.json()["data"]
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
 
-    # trigger one auth event
     login_fail = await client.post(
         "/api/v1/app/auth/login",
         json={"account": "app_events@example.com", "password": "wrong123"},
@@ -410,8 +294,10 @@ async def test_app_auth_config_check_endpoint(client):
     cfg_resp = await client.get("/api/v1/app/auth/config-check", headers=headers)
     assert cfg_resp.status_code == 200
     data = cfg_resp.json()["data"]
-    assert "ready" in data
-    assert "checks" in data
+    assert data["ready"] is True
+    assert data["checks"]["password_auth"] == {"enabled": True, "ready": True, "missing": []}
+    assert data["checks"]["otp_auth"] == {"enabled": False, "ready": False, "missing": []}
+    assert data["checks"]["oauth_github"] == {"enabled": False, "ready": False, "missing": []}
 
 
 @pytest.mark.asyncio
@@ -429,45 +315,74 @@ async def test_app_auth_methods_endpoint(client):
     data = methods_resp.json()["data"]
     assert data["email_bound"] is True
     assert data["phone_bound"] is True
-    assert isinstance(data["oauth_providers"], list)
+    assert data["oauth_providers"] == []
+    assert data["github_bound"] is False
+    assert data["phone_enabled"] is True
+    assert data["email_enabled"] is True
+    assert data["oauth_enabled"] == {"github": False}
 
 
 @pytest.mark.asyncio
-async def test_app_oauth_bind_unbind(client, monkeypatch):
-    async def fake_fetch(_code: str):
-        return {
-            "provider": "github",
-            "provider_uid": "gh_bind_1",
-            "nickname": "GH Bind",
-            "email": "gh_bind@example.com",
-            "access_token": "gh_access",
-        }
+async def test_app_public_config_endpoint(client):
+    resp = await client.get("/api/v1/app/auth/public-config")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["auth"]["password_login"] is True
+    assert data["auth"]["register"] is True
+    assert data["auth"]["otp_login"] is False
+    assert data["auth"]["otp_register"] is False
+    assert data["auth"]["oauth"] == {"github": False}
+    assert data["auth"]["phone_enabled"] is True
+    assert data["auth"]["email_enabled"] is True
 
-    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_CLIENT_ID", "cid")
-    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_REDIRECT_URI", "http://localhost/callback")
-    monkeypatch.setattr("app.domain.app.service.settings.GITHUB_OAUTH_CLIENT_SECRET", "secret")
-    monkeypatch.setattr("app.domain.app.service.AppBffService._oauth_fetch_github_user", staticmethod(fake_fetch))
+
+@pytest.mark.asyncio
+async def test_app_otp_routes_enabled_by_flag(client, monkeypatch):
+    monkeypatch.setattr(settings, "APP_AUTH_OTP_ENABLED", True)
+
+    request_resp = await client.post(
+        "/api/v1/app/auth/register/request-otp",
+        json={"email": "otp_enabled@example.com"},
+    )
+    assert request_resp.status_code == 200
+    payload = request_resp.json()["data"]
+    assert payload["sent"] is True
+    code = payload["debug_code"]
+
+    confirm_resp = await client.post(
+        "/api/v1/app/auth/register/confirm",
+        json={
+            "email": "otp_enabled@example.com",
+            "code": code,
+            "password": "secret123",
+            "name": "otp",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    tokens = confirm_resp.json()["data"]
+    assert tokens["access_token"]
+
+    login_request = await client.post(
+        "/api/v1/app/auth/login/otp/request",
+        json={"account": "otp_enabled@example.com"},
+    )
+    assert login_request.status_code == 200
+    login_code = login_request.json()["data"]["debug_code"]
+
+    login_confirm = await client.post(
+        "/api/v1/app/auth/login/otp/confirm",
+        json={"account": "otp_enabled@example.com", "code": login_code},
+    )
+    assert login_confirm.status_code == 200
+    assert login_confirm.json()["data"]["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_app_phone_channel_can_be_disabled(client, monkeypatch):
+    monkeypatch.setattr(settings, "APP_AUTH_PHONE_ENABLED", False)
 
     register_resp = await client.post(
         "/api/v1/app/auth/register",
-        json={"email": "oauth_bind_local@example.com", "password": "secret123", "name": "local"},
+        json={"phone": "15500009999", "password": "secret123", "name": "phone_off"},
     )
-    assert register_resp.status_code == 200
-    tokens = register_resp.json()["data"]
-    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
-
-    start_resp = await client.get("/api/v1/app/auth/oauth/github/start")
-    assert start_resp.status_code == 200
-    state = start_resp.json()["data"]["state"]
-
-    bind_resp = await client.post(
-        "/api/v1/app/auth/oauth/github/bind",
-        json={"code": "abc", "state": state},
-        headers=headers,
-    )
-    assert bind_resp.status_code == 200
-    assert bind_resp.json()["data"]["bound"] is True
-
-    unbind_resp = await client.delete("/api/v1/app/auth/oauth/github", headers=headers)
-    assert unbind_resp.status_code == 200
-    assert unbind_resp.json()["data"]["removed"] is True
+    assert register_resp.status_code == 404

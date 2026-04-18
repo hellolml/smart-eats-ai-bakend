@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, RefreshCcw, Trash2, Link2, Link2Off } from 'lucide-react';
+import { ChevronLeft, RefreshCcw, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { ApiError, appApi } from '@/services/app-api';
 
@@ -28,7 +28,7 @@ const SessionManagement: React.FC = () => {
   const navigate = useNavigate();
   const [items, setItems] = React.useState<SessionItem[]>([]);
   const [loading, setLoading] = React.useState(true);
-  const [methods, setMethods] = React.useState<{ email_bound: boolean; phone_bound: boolean; github_bound: boolean } | null>(null);
+  const [methods, setMethods] = React.useState<{ email_bound: boolean; phone_bound: boolean } | null>(null);
   const [events, setEvents] = React.useState<AuthEventItem[]>([]);
 
   const load = React.useCallback(async () => {
@@ -73,25 +73,6 @@ const SessionManagement: React.FC = () => {
     }
   };
 
-  const bindGithub = async () => {
-    try {
-      const data = await appApi.auth.oauthStart('github');
-      window.location.href = data.auth_url;
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : '获取 GitHub 授权链接失败');
-    }
-  };
-
-  const unbindGithub = async () => {
-    try {
-      const data = await appApi.auth.oauthUnbind('github');
-      if (data.removed) toast.success('GitHub 解绑成功');
-      else toast('当前未绑定 GitHub');
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : '解绑失败');
-    }
-  };
-
   return (
     <div className="space-y-4 pb-8">
       <div className="flex items-center gap-3">
@@ -103,25 +84,13 @@ const SessionManagement: React.FC = () => {
 
       <div className="bg-white rounded-2xl border p-4 space-y-3">
         <div className="text-sm font-medium">登录方式总览</div>
-        <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="grid grid-cols-2 gap-2 text-xs">
           <div className={`rounded-xl p-2 ${methods?.phone_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
             手机号：{methods?.phone_bound ? '已绑定' : '未绑定'}
           </div>
           <div className={`rounded-xl p-2 ${methods?.email_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
             邮箱：{methods?.email_bound ? '已绑定' : '未绑定'}
           </div>
-          <div className={`rounded-xl p-2 ${methods?.github_bound ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
-            GitHub：{methods?.github_bound ? '已绑定' : '未绑定'}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button onClick={bindGithub} className="text-xs px-3 py-1 rounded-lg bg-black text-white flex items-center gap-1">
-            <Link2 size={12} /> 绑定 GitHub
-          </button>
-          <button onClick={unbindGithub} className="text-xs px-3 py-1 rounded-lg bg-gray-100 text-gray-700 flex items-center gap-1">
-            <Link2Off size={12} /> 解绑 GitHub
-          </button>
         </div>
       </div>
 

@@ -3,6 +3,7 @@ const REFRESH_TOKEN_KEY = 'app_refresh_token';
 const CSRF_TOKEN_KEY = 'app_csrf_token';
 const LOGIN_FLAG_KEY = 'isLoggedIn';
 const ME_CACHE_TTL_MS = 30 * 1000;
+const PUBLIC_CONFIG_CACHE_TTL_MS = 30 * 1000;
 
 type JsonValue = any;
 
@@ -206,6 +207,42 @@ export interface AuthPayload {
     token?: string;
 }
 
+export interface AppAuthFeatureCheck {
+    enabled: boolean;
+    ready: boolean;
+    missing: string[];
+}
+
+export interface AppAuthPublicConfig {
+    ready: boolean;
+    auth: {
+        password_login: boolean;
+        register: boolean;
+        otp_login: boolean;
+        otp_register: boolean;
+        password_reset: boolean;
+        one_click: boolean;
+        oauth: {
+            github: boolean;
+        };
+        phone_enabled: boolean;
+        email_enabled: boolean;
+    };
+    checks: Record<string, AppAuthFeatureCheck>;
+}
+
+export interface AppAuthMethods {
+    email_bound: boolean;
+    phone_bound: boolean;
+    oauth_providers: string[];
+    github_bound: boolean;
+    phone_enabled?: boolean;
+    email_enabled?: boolean;
+    oauth_enabled?: {
+        github?: boolean;
+    };
+}
+
 export class ApiError extends Error {
     status?: number;
     code?: string | number;
@@ -245,10 +282,17 @@ function getCsrfToken(): string | null {
 
 let meCache: { data: AppProfile; expiresAt: number } | null = null;
 let meInFlight: Promise<AppProfile> | null = null;
+let publicConfigCache: { data: AppAuthPublicConfig; expiresAt: number } | null = null;
+let publicConfigInFlight: Promise<AppAuthPublicConfig> | null = null;
 
 function clearMeCache(): void {
     meCache = null;
     meInFlight = null;
+}
+
+function clearPublicConfigCache(): void {
+    publicConfigCache = null;
+    publicConfigInFlight = null;
 }
 
 function setTokens(payload: AuthPayload | null | undefined): void {
@@ -278,6 +322,33 @@ function clearTokens(): void {
     localStorage.removeItem(CSRF_TOKEN_KEY);
     localStorage.removeItem(LOGIN_FLAG_KEY);
     clearMeCache();
+}
+
+async function getPublicConfig(options: { force?: boolean } = {}): Promise<AppAuthPublicConfig> {
+    const { force = false } = options;
+    const now = Date.now();
+
+    if (!force && publicConfigCache && publicConfigCache.expiresAt > now) {
+        return publicConfigCache.data;
+    }
+
+    if (!force && publicConfigInFlight) {
+        return publicConfigInFlight;
+    }
+
+    publicConfigInFlight = request<AppAuthPublicConfig>('/auth/public-config', { auth: false })
+        .then((data) => {
+            publicConfigCache = {
+                data,
+                expiresAt: Date.now() + PUBLIC_CONFIG_CACHE_TTL_MS,
+            };
+            return data;
+        })
+        .finally(() => {
+            publicConfigInFlight = null;
+        });
+
+    return publicConfigInFlight;
 }
 
 const ERROR_MESSAGE_ZH_MAP: Array<{ match: RegExp; zh: string }> = [
@@ -462,6 +533,13 @@ export const authStore = {
     clear: clearTokens
 };
 
+export const appConfigStore = {
+    async get(options: { force?: boolean } = {}) {
+        return getPublicConfig(options);
+    },
+    clear: clearPublicConfigCache,
+};
+
 export const appApi = {
     auth: {
         async register(payload: {
@@ -471,31 +549,6 @@ export const appApi = {
             email?: string;
         }) {
             const data = await request<AuthPayload | { tokens?: AuthPayload }>('/auth/register', {
-                method: 'POST',
-                auth: false,
-                body: payload
-            });
-            const tokenPayload = (data as { tokens?: AuthPayload }).tokens || (data as AuthPayload);
-            setTokens(tokenPayload);
-            return data;
-        },
-
-        async registerRequestOtp(payload: { phone?: string; email?: string }) {
-            return request<{ sent: boolean; debug_code?: string }>('/auth/register/request-otp', {
-                method: 'POST',
-                auth: false,
-                body: payload
-            });
-        },
-
-        async registerConfirm(payload: {
-            password: string;
-            code: string;
-            name?: string;
-            phone?: string;
-            email?: string;
-        }) {
-            const data = await request<AuthPayload | { tokens?: AuthPayload }>('/auth/register/confirm', {
                 method: 'POST',
                 auth: false,
                 body: payload
@@ -517,43 +570,6 @@ export const appApi = {
             });
             const tokenPayload = (data as { tokens?: AuthPayload }).tokens || (data as AuthPayload);
             setTokens(tokenPayload);
-            return data;
-        },
-
-        async loginOtpRequest(payload: { account: string }) {
-            return request<{ sent: boolean; debug_code?: string }>('/auth/login/otp/request', {
-                method: 'POST',
-                auth: false,
-                body: payload
-            });
-        },
-
-        async loginOtpConfirm(payload: { account: string; code: string }) {
-            const data = await request<AuthPayload>('/auth/login/otp/confirm', {
-                method: 'POST',
-                auth: false,
-                body: payload
-            });
-            setTokens(data);
-            return data;
-        },
-
-        // Backward-compatible wrappers
-        async loginSmsRequest(payload: { phone: string }) {
-            return this.loginOtpRequest({ account: payload.phone });
-        },
-
-        async loginSmsConfirm(payload: { phone: string; code: string }) {
-            return this.loginOtpConfirm({ account: payload.phone, code: payload.code });
-        },
-
-        async loginOneClick(payload: { token: string }) {
-            const data = await request<AuthPayload>('/auth/login/one-click', {
-                method: 'POST',
-                auth: false,
-                body: payload
-            });
-            setTokens(data);
             return data;
         },
 
@@ -589,26 +605,6 @@ export const appApi = {
             });
         },
 
-        async resetPasswordRequest(payload: { account: string }) {
-            return request<{ sent: boolean; debug_code?: string }>('/auth/password/reset-request', {
-                method: 'POST',
-                auth: false,
-                body: payload
-            });
-        },
-
-        async resetPasswordConfirm(payload: { account: string; code: string; newPassword: string }) {
-            return request<{ updated: boolean }>('/auth/password/reset-confirm', {
-                method: 'POST',
-                auth: false,
-                body: {
-                    account: payload.account,
-                    code: payload.code,
-                    new_password: payload.newPassword
-                }
-            });
-        },
-
         async logoutAll() {
             try {
                 return await request<{ revoked: number }>('/auth/logout-all', {
@@ -620,14 +616,119 @@ export const appApi = {
             }
         },
 
+        async publicConfig(options: { force?: boolean } = {}) {
+            return getPublicConfig(options);
+        },
+
+        async registerRequestOtp(payload: { phone?: string; email?: string }) {
+            return request<{ sent: boolean; provider?: string; debug_code?: string }>('/auth/register/request-otp', {
+                method: 'POST',
+                auth: false,
+                body: payload,
+            });
+        },
+
+        async registerConfirm(payload: { name?: string; password: string; code: string; phone?: string; email?: string }) {
+            const data = await request<AuthPayload | { tokens?: AuthPayload }>('/auth/register/confirm', {
+                method: 'POST',
+                auth: false,
+                body: payload,
+            });
+            const tokenPayload = (data as { tokens?: AuthPayload }).tokens || (data as AuthPayload);
+            setTokens(tokenPayload);
+            return data;
+        },
+
+        async loginOtpRequest(payload: { account: string }) {
+            return request<{ sent: boolean; provider?: string; debug_code?: string }>('/auth/login/otp/request', {
+                method: 'POST',
+                auth: false,
+                body: payload,
+            });
+        },
+
+        async loginOtpConfirm(payload: { account: string; code: string }) {
+            const data = await request<AuthPayload | { tokens?: AuthPayload }>('/auth/login/otp/confirm', {
+                method: 'POST',
+                auth: false,
+                body: payload,
+            });
+            const tokenPayload = (data as { tokens?: AuthPayload }).tokens || (data as AuthPayload);
+            setTokens(tokenPayload);
+            return data;
+        },
+
+        async loginOneClick(payload: { token: string }) {
+            const data = await request<AuthPayload | { tokens?: AuthPayload }>('/auth/login/one-click', {
+                method: 'POST',
+                auth: false,
+                body: payload,
+            });
+            const tokenPayload = (data as { tokens?: AuthPayload }).tokens || (data as AuthPayload);
+            setTokens(tokenPayload);
+            return data;
+        },
+
+        async resetPasswordRequest(payload: { account: string }) {
+            return request<{ sent: boolean }>('/auth/password/reset-request', {
+                method: 'POST',
+                auth: false,
+                body: payload,
+            });
+        },
+
+        async resetPasswordConfirm(payload: { account: string; code: string; newPassword: string }) {
+            return request<{ updated: boolean }>('/auth/password/reset-confirm', {
+                method: 'POST',
+                auth: false,
+                body: {
+                    account: payload.account,
+                    code: payload.code,
+                    new_password: payload.newPassword,
+                    newPassword: payload.newPassword,
+                },
+            });
+        },
+
+        async oauthStart(provider: 'github') {
+            return request<{ provider: string; state: string; auth_url: string }>(`/auth/oauth/${provider}/start`, {
+                auth: false,
+            });
+        },
+
+        async oauthCallback(provider: 'github', payload: { code: string; state: string }) {
+            const data = await request<AuthPayload & { oauth?: Record<string, unknown> }>(`/auth/oauth/${provider}/callback`, {
+                method: 'POST',
+                auth: false,
+                body: payload,
+            });
+            setTokens(data);
+            return data;
+        },
+
+        async oauthBind(provider: 'github', payload: { code: string; state: string }) {
+            return request<{ bound: boolean; provider: string }>(`/auth/oauth/${provider}/bind`, {
+                method: 'POST',
+                auth: true,
+                body: payload,
+            });
+        },
+
+        async oauthUnbind(provider: 'github') {
+            return request<{ removed: boolean; provider: string }>(`/auth/oauth/${provider}`, {
+                method: 'DELETE',
+                auth: true,
+            });
+        },
+
         async methods() {
-            return request<{ email_bound: boolean; phone_bound: boolean; oauth_providers: string[]; github_bound: boolean }>('/auth/methods', {
+            return request<AppAuthMethods>('/auth/methods', {
                 auth: true
             });
         },
 
         async configCheck() {
-            return request<{ ready: boolean; checks: Record<string, unknown> }>('/auth/config-check', {
+            return request<{ ready: boolean; checks: Record<string, AppAuthFeatureCheck> }>('/auth/config-check', {
                 auth: true
             });
         },
@@ -649,37 +750,6 @@ export const appApi = {
             });
         },
 
-        async oauthStart(provider: 'github') {
-            return request<{ provider: string; state: string; auth_url: string }>(`/auth/oauth/${provider}/start`, {
-                method: 'GET',
-                auth: false
-            });
-        },
-
-        async oauthCallback(provider: 'github', payload: { code: string; state: string }) {
-            const data = await request<AuthPayload & { oauth?: Record<string, unknown> }>(`/auth/oauth/${provider}/callback`, {
-                method: 'POST',
-                auth: false,
-                body: payload
-            });
-            setTokens(data);
-            return data;
-        },
-
-        async oauthBind(provider: 'github', payload: { code: string; state: string }) {
-            return request<{ bound: boolean; provider: string }>(`/auth/oauth/${provider}/bind`, {
-                method: 'POST',
-                auth: true,
-                body: payload
-            });
-        },
-
-        async oauthUnbind(provider: 'github') {
-            return request<{ removed: boolean; provider: string }>(`/auth/oauth/${provider}`, {
-                method: 'DELETE',
-                auth: true
-            });
-        }
     },
 
     me: {

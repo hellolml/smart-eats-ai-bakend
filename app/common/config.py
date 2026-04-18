@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     MCP_SERVERS_CONFIG_PATH: str | None = "mcp_servers.json"
     APP_FALLBACK_ENABLED: bool = True
     APP_RECIPE_GEN_TIMEOUT_SECONDS: int = 12
+    APP_AUTH_PASSWORD_ENABLED: bool = True
+    APP_AUTH_REGISTER_ENABLED: bool = True
+    APP_AUTH_OTP_ENABLED: bool = False
+    APP_AUTH_ONECLICK_ENABLED: bool = False
+    APP_AUTH_GITHUB_OAUTH_ENABLED: bool = False
+    APP_AUTH_PASSWORD_RESET_ENABLED: bool = False
+    APP_AUTH_PHONE_ENABLED: bool = True
+    APP_AUTH_EMAIL_ENABLED: bool = True
 
 
 settings = Settings()

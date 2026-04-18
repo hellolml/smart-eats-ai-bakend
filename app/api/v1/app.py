@@ -28,6 +28,8 @@ from app.domain.app.schemas import (
     MePreferencesUpdateRequest,
     GoalStateUpdateRequest,
     OAuthCallbackRequest,
+    OtpLoginConfirmRequest,
+    OtpLoginRequest,
     OneClickLoginRequest,
     PasswordResetConfirmRequest,
     PasswordResetRequestRequest,
@@ -35,8 +37,6 @@ from app.domain.app.schemas import (
     RegisterConfirmRequest,
     RegisterOtpRequest,
     RegisterRequest,
-    OtpLoginConfirmRequest,
-    OtpLoginRequest,
     RestaurantsQuery,
     ScanApplyRequest,
     UpdateMeRequest,
@@ -92,6 +92,10 @@ def _assert_csrf_if_cookie_mode(request: Request, using_cookie_refresh: bool) ->
     header_csrf = request.headers.get(settings.CSRF_HEADER_NAME) or ""
     if not cookie_csrf or cookie_csrf != header_csrf:
         raise HTTPException(status_code=403, detail="csrf token invalid")
+
+
+def _ensure_auth_feature_enabled(feature: str) -> None:
+    AppBffService.ensure_auth_feature_enabled(feature)
 
 
 class DecisionBlindboxRequest(BaseModel):
@@ -161,6 +165,8 @@ async def list_chat_models(request: Request, _user_id: str = Depends(get_current
 
 @router.post("/auth/register")
 async def register(payload: RegisterRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("register")
+    _ensure_auth_feature_enabled("password_auth")
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.register(payload.model_dump(), db, redis, client_ip)
     if data.get("refresh_token"):
@@ -168,69 +174,9 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
-@router.post("/auth/register/request-otp")
-async def register_request_otp(payload: RegisterOtpRequest, request: Request, db: db_dep, redis: redis_dep):
-    data = await AppBffService.register_request_otp(payload.model_dump(), db, redis)
-    return envelope(data, getattr(request.state, "trace_id", ""))
-
-
-@router.post("/auth/register/confirm")
-async def register_confirm(payload: RegisterConfirmRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
-    client_ip = request.client.host if request.client else "unknown"
-    data = await AppBffService.register_confirm(payload.model_dump(), db, redis, client_ip)
-    if data.get("refresh_token"):
-        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
-    return envelope(data, getattr(request.state, "trace_id", ""))
-
-
-@router.get("/auth/oauth/{provider}/start")
-async def oauth_start(provider: str, request: Request, redis: redis_dep):
-    data = await AppBffService.oauth_start(provider, redis)
-    return envelope(data, getattr(request.state, "trace_id", ""))
-
-
-@router.post("/auth/oauth/{provider}/callback")
-async def oauth_callback(
-    provider: str,
-    payload: OAuthCallbackRequest,
-    request: Request,
-    response: Response,
-    db: db_dep,
-    redis: redis_dep,
-):
-    client_ip = request.client.host if request.client else "unknown"
-    data = await AppBffService.oauth_callback(provider, payload.code, payload.state, redis, db, client_ip)
-    if data.get("refresh_token"):
-        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
-    return envelope(data, getattr(request.state, "trace_id", ""))
-
-
-@router.post("/auth/oauth/{provider}/bind")
-async def oauth_bind(
-    provider: str,
-    payload: OAuthCallbackRequest,
-    request: Request,
-    db: db_dep,
-    redis: redis_dep,
-    user_id: str = Depends(get_current_user_id),
-):
-    data = await AppBffService.oauth_bind(user_id, provider, payload.code, payload.state, redis, db)
-    return envelope(data, getattr(request.state, "trace_id", ""))
-
-
-@router.delete("/auth/oauth/{provider}")
-async def oauth_unbind(
-    provider: str,
-    request: Request,
-    db: db_dep,
-    user_id: str = Depends(get_current_user_id),
-):
-    data = await AppBffService.oauth_unbind(user_id, provider, db)
-    return envelope(data, getattr(request.state, "trace_id", ""))
-
-
 @router.post("/auth/login")
 async def login(payload: LoginRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("password_auth")
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.login(payload.model_dump(), db, redis, client_ip)
     if data.get("refresh_token"):
@@ -238,14 +184,35 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
+@router.post("/auth/register/request-otp")
+async def register_request_otp(payload: RegisterOtpRequest, request: Request, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("otp_auth")
+    _ensure_auth_feature_enabled("register")
+    data = await AppBffService.register_request_otp(payload.model_dump(), db, redis)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/register/confirm")
+async def register_confirm(payload: RegisterConfirmRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("otp_auth")
+    _ensure_auth_feature_enabled("register")
+    client_ip = request.client.host if request.client else "unknown"
+    data = await AppBffService.register_confirm(payload.model_dump(), db, redis, client_ip)
+    if data.get("refresh_token"):
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
 @router.post("/auth/login/otp/request")
 async def login_otp_request(payload: OtpLoginRequest, request: Request, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("otp_auth")
     data = await AppBffService.login_otp_request(payload.account, redis, db)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
 @router.post("/auth/login/otp/confirm")
 async def login_otp_confirm(payload: OtpLoginConfirmRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("otp_auth")
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.login_otp_confirm(payload.account, payload.code, redis, db, client_ip)
     if data.get("refresh_token"):
@@ -255,10 +222,62 @@ async def login_otp_confirm(payload: OtpLoginConfirmRequest, request: Request, r
 
 @router.post("/auth/login/one-click")
 async def login_one_click(payload: OneClickLoginRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("one_click")
     client_ip = request.client.host if request.client else "unknown"
     data = await AppBffService.login_one_click(payload.token, redis, db, client_ip)
     if data.get("refresh_token"):
         data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/auth/oauth/{provider}/start")
+async def oauth_start(provider: str, request: Request, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("oauth_github")
+    data = await AppBffService.oauth_start(provider, redis)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/oauth/{provider}/callback")
+async def oauth_callback(provider: str, payload: OAuthCallbackRequest, request: Request, response: Response, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("oauth_github")
+    client_ip = request.client.host if request.client else "unknown"
+    data = await AppBffService.oauth_callback(provider, payload.code, payload.state, redis, db, client_ip)
+    if data.get("refresh_token"):
+        data["csrf_token"] = _set_refresh_cookie(response, data["refresh_token"])
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/oauth/{provider}/bind")
+async def oauth_bind(provider: str, payload: OAuthCallbackRequest, request: Request, db: db_dep, redis: redis_dep, user_id: str = Depends(get_current_user_id)):
+    _ensure_auth_feature_enabled("oauth_github")
+    data = await AppBffService.oauth_bind(user_id, provider, payload.code, payload.state, redis, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.delete("/auth/oauth/{provider}")
+async def oauth_unbind(provider: str, request: Request, db: db_dep, user_id: str = Depends(get_current_user_id)):
+    _ensure_auth_feature_enabled("oauth_github")
+    data = await AppBffService.oauth_unbind(user_id, provider, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/password/reset-request")
+async def password_reset_request(payload: PasswordResetRequestRequest, request: Request, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("password_reset")
+    data = await AppBffService.password_reset_request(payload.account, redis, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/auth/password/reset-confirm")
+async def password_reset_confirm(payload: PasswordResetConfirmRequest, request: Request, db: db_dep, redis: redis_dep):
+    _ensure_auth_feature_enabled("password_reset")
+    data = await AppBffService.password_reset_confirm(payload.account, payload.code, payload.new_password, redis, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/auth/public-config")
+async def auth_public_config(request: Request):
+    data = await AppBffService.public_auth_config()
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -374,36 +393,6 @@ async def change_password(
         new_password=payload.new_password,
         db=db,
     )
-    return envelope(data, getattr(request.state, "trace_id", ""))
-
-
-@router.post("/auth/password/reset-request")
-async def password_reset_request(
-    payload: PasswordResetRequestRequest,
-    request: Request,
-    db: db_dep,
-    redis: redis_dep,
-):
-    data = await AppBffService.password_reset_request(payload.account, redis, db)
-    return envelope(data, getattr(request.state, "trace_id", ""))
-
-
-@router.post("/auth/password/reset-confirm")
-async def password_reset_confirm(
-    payload: PasswordResetConfirmRequest,
-    request: Request,
-    response: Response,
-    db: db_dep,
-    redis: redis_dep,
-):
-    data = await AppBffService.password_reset_confirm(
-        account=payload.account,
-        code=payload.code,
-        new_password=payload.new_password,
-        redis_client=redis,
-        db=db,
-    )
-    _clear_refresh_cookie(response)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 

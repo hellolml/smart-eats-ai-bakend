@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
+import { useAppConfig } from '@/app/app-config';
 import { appApi, authStore } from '@/services/app-api';
 
 const Header = () => {
+    const { config } = useAppConfig();
     const isLoggedIn = authStore.isLoggedIn();
     const [name, setName] = useState<string>('');
 
@@ -46,12 +48,22 @@ const Header = () => {
                             </span>
                         </Link>
                     ) : (
-                        <Link
-                            to="/login"
-                            className="px-3 py-1.5 rounded-full bg-[#7E57FF] text-white text-xs font-bold shadow-sm active:scale-90 transition-transform md:px-5 md:py-2 md:text-sm"
-                        >
-                            登录
-                        </Link>
+                        <div className="flex items-center gap-2">
+                            {config.auth.register && (
+                                <Link
+                                    to="/register"
+                                    className="px-3 py-1.5 rounded-full bg-purple-50 text-[#7E57FF] text-xs font-bold shadow-sm active:scale-90 transition-transform md:px-5 md:py-2 md:text-sm"
+                                >
+                                    注册
+                                </Link>
+                            )}
+                            <Link
+                                to="/login"
+                                className="px-3 py-1.5 rounded-full bg-[#7E57FF] text-white text-xs font-bold shadow-sm active:scale-90 transition-transform md:px-5 md:py-2 md:text-sm"
+                            >
+                                登录
+                            </Link>
+                        </div>
                     )}
                 </div>
             </div>

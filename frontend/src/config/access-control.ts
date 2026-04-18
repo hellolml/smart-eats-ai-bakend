@@ -1,4 +1,4 @@
-export const PUBLIC_ROUTES = ['/', '/blind-box', '/wheel', '/login', '/register'] as const;
+export const PUBLIC_ROUTES = ['/', '/blind-box', '/wheel', '/login', '/register', '/oauth/github/callback'] as const;
 
 export const PROTECTED_ROUTES = [
     '/home-chef',

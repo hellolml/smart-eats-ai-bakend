@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
     User, Mail, Lock, ArrowRight, ChevronLeft,
-    ShieldCheck, Phone, Sparkles, MessageSquare, AlertCircle
+    ShieldCheck, Phone, Sparkles, AlertCircle, MessageSquareText
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { ApiError, appApi } from '@/services/app-api';
+import { useAppConfig } from '@/app/app-config';
 
 const Register = () => {
     const navigate = useNavigate();
+    const { config } = useAppConfig();
     const [loading, setLoading] = useState(false);
     const [registerType, setRegisterType] = useState<'phone' | 'email'>('phone');
     const [name, setName] = useState('');
@@ -18,13 +20,31 @@ const Register = () => {
     const [code, setCode] = useState('');
     const [showPasswordRule, setShowPasswordRule] = useState(false);
 
-    const requestOtp = async () => {
+    const channelOptions = useMemo(() => {
+        const items: Array<'phone' | 'email'> = [];
+        if (config.auth.phone_enabled) items.push('phone');
+        if (config.auth.email_enabled) items.push('email');
+        return items;
+    }, [config.auth.email_enabled, config.auth.phone_enabled]);
+
+    useEffect(() => {
+        if (!config.auth.register) {
+            navigate('/login', { replace: true });
+        }
+    }, [config.auth.register, navigate]);
+
+    useEffect(() => {
+        if (!channelOptions.includes(registerType)) {
+            setRegisterType(channelOptions[0] || 'phone');
+        }
+    }, [channelOptions, registerType]);
+
+    const handleSendCode = async () => {
         if (!identifier.trim()) {
-            toast.error(registerType === 'phone' ? '请输入手机号' : '请输入邮箱');
+            toast.error('请先填写手机号或邮箱');
             return;
         }
-        setLoading(true);
-        toast.loading('正在发送验证码...', { id: 'register-otp' });
+        toast.loading('正在发送验证码...', { id: 'register-code' });
         try {
             const payload = registerType === 'phone'
                 ? { phone: identifier.trim() }
@@ -32,21 +52,25 @@ const Register = () => {
             const data = await appApi.auth.registerRequestOtp(payload);
             if (data.debug_code) {
                 setCode(data.debug_code);
-                toast.success(`验证码已发送（开发模式：${data.debug_code}）`, { id: 'register-otp' });
-            } else {
-                toast.success('验证码已发送，请查收', { id: 'register-otp' });
             }
+            toast.success('验证码已发送', { id: 'register-code' });
         } catch (error) {
-            toast.error(error instanceof ApiError ? error.message : '验证码发送失败', { id: 'register-otp' });
-        } finally {
-            setLoading(false);
+            if (error instanceof ApiError) {
+                toast.error(error.message || '发送验证码失败', { id: 'register-code' });
+                return;
+            }
+            toast.error('发送验证码失败，请稍后重试', { id: 'register-code' });
         }
     };
 
     const handleRegister = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!name.trim() || !identifier.trim() || !password || !code.trim()) {
-            toast.error('请完整填写注册信息与验证码');
+        if (!name.trim() || !identifier.trim() || !password) {
+            toast.error('请完整填写注册信息');
+            return;
+        }
+        if (config.auth.otp_register && !code.trim()) {
+            toast.error('请输入验证码');
             return;
         }
 
@@ -54,19 +78,33 @@ const Register = () => {
         toast.loading('正在完成注册...', { id: 'register' });
 
         try {
-            if (registerType === 'phone') {
-                await appApi.auth.registerConfirm({
+            if (config.auth.otp_register) {
+                if (registerType === 'phone') {
+                    await appApi.auth.registerConfirm({
+                        name: name.trim(),
+                        phone: identifier.trim(),
+                        password,
+                        code: code.trim(),
+                    });
+                } else {
+                    await appApi.auth.registerConfirm({
+                        name: name.trim(),
+                        email: identifier.trim(),
+                        password,
+                        code: code.trim(),
+                    });
+                }
+            } else if (registerType === 'phone') {
+                await appApi.auth.register({
                     name: name.trim(),
                     phone: identifier.trim(),
                     password,
-                    code: code.trim(),
                 });
             } else {
-                await appApi.auth.registerConfirm({
+                await appApi.auth.register({
                     name: name.trim(),
                     email: identifier.trim(),
                     password,
-                    code: code.trim(),
                 });
             }
 
@@ -82,6 +120,8 @@ const Register = () => {
             setLoading(false);
         }
     };
+
+    const showChannelTabs = channelOptions.length > 1;
 
     return (
         <div className="h-full flex flex-col justify-center items-center px-4 py-4 overflow-hidden">
@@ -110,24 +150,32 @@ const Register = () => {
                 </div>
 
                 <div className="bg-white rounded-[2rem] md:rounded-[2.5rem] p-5 md:p-8 shadow-sm border border-purple-50 flex flex-col gap-4 md:gap-6">
-                    <div className="flex p-1 bg-gray-50 rounded-xl md:rounded-2xl">
-                        <button
-                            onClick={() => setRegisterType('phone')}
-                            className={`flex-1 py-2 md:py-2.5 text-[11px] text-sm font-bold rounded-lg md:rounded-xl transition-all ${registerType === 'phone'
-                                ? 'bg-white text-[#7E57FF] shadow-sm'
-                                : 'text-gray-400'}`}
-                        >
-                            手机号注册
-                        </button>
-                        <button
-                            onClick={() => setRegisterType('email')}
-                            className={`flex-1 py-2 md:py-2.5 text-[11px] text-sm font-bold rounded-lg md:rounded-xl transition-all ${registerType === 'email'
-                                ? 'bg-white text-[#7E57FF] shadow-sm'
-                                : 'text-gray-400'}`}
-                        >
-                            邮箱注册
-                        </button>
-                    </div>
+                    {showChannelTabs && (
+                        <div className="flex p-1 bg-gray-50 rounded-xl md:rounded-2xl">
+                            {config.auth.phone_enabled && (
+                                <button
+                                    type="button"
+                                    onClick={() => setRegisterType('phone')}
+                                    className={`flex-1 py-2 md:py-2.5 text-[11px] text-sm font-bold rounded-lg md:rounded-xl transition-all ${registerType === 'phone'
+                                        ? 'bg-white text-[#7E57FF] shadow-sm'
+                                        : 'text-gray-400'}`}
+                                >
+                                    手机号注册
+                                </button>
+                            )}
+                            {config.auth.email_enabled && (
+                                <button
+                                    type="button"
+                                    onClick={() => setRegisterType('email')}
+                                    className={`flex-1 py-2 md:py-2.5 text-[11px] text-sm font-bold rounded-lg md:rounded-xl transition-all ${registerType === 'email'
+                                        ? 'bg-white text-[#7E57FF] shadow-sm'
+                                        : 'text-gray-400'}`}
+                                >
+                                    邮箱注册
+                                </button>
+                            )}
+                        </div>
+                    )}
 
                     <form onSubmit={handleRegister} className="flex flex-col gap-3 md:gap-4">
                         <div className="space-y-3">
@@ -158,27 +206,30 @@ const Register = () => {
                                     className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all" />
                             </div>
 
-                            <div className='flex gap-2'>
-                                <div className="relative flex-1">
-                                    <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-gray-400">
-                                        <MessageSquare size={16} />
+                            {config.auth.otp_register && (
+                                <div className="grid grid-cols-[1fr_auto] gap-2">
+                                    <div className="relative">
+                                        <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-gray-400">
+                                            <MessageSquareText size={16} />
+                                        </div>
+                                        <input
+                                            type="text"
+                                            placeholder="请输入验证码"
+                                            required
+                                            value={code}
+                                            onChange={(e) => setCode(e.target.value)}
+                                            className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all"
+                                        />
                                     </div>
-                                    <input
-                                        type="text"
-                                        placeholder="请输入验证码"
-                                        value={code}
-                                        onChange={(e) => setCode(e.target.value)}
-                                        className="w-full bg-gray-50 border-none rounded-xl md:rounded-2xl py-3 px-4 pl-11 text-xs md:text-sm outline-none focus:ring-2 focus:ring-purple-200 transition-all" />
+                                    <button
+                                        type="button"
+                                        onClick={handleSendCode}
+                                        className="px-4 rounded-xl bg-purple-50 text-[#7E57FF] text-xs font-bold whitespace-nowrap"
+                                    >
+                                        发送验证码
+                                    </button>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={requestOtp}
-                                    disabled={loading}
-                                    className="px-3 py-2 text-xs rounded-xl bg-gray-100 text-gray-700 disabled:opacity-60"
-                                >
-                                    发验证码
-                                </button>
-                            </div>
+                            )}
 
                             <div className="relative">
                                 <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-gray-400">

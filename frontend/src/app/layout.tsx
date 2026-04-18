@@ -1,5 +1,6 @@
 import React from 'react';
 import Header from '@/components/Header';
+import { useAppConfig } from '@/app/app-config';
 import { getNavItems } from '@/nav-items';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { authStore } from '@/services/app-api';
@@ -7,8 +8,9 @@ import { authStore } from '@/services/app-api';
 export default function Layout({ children }: { children: React.ReactNode }) {
     const location = useLocation();
     const navigate = useNavigate();
+    const { config } = useAppConfig();
     const isLoggedIn = authStore.isLoggedIn();
-    const navItems = getNavItems(isLoggedIn);
+    const navItems = getNavItems(isLoggedIn, config);
 
     const isAuthPage = ['/login', '/register'].includes(location.pathname);
     const isAiChat = location.pathname === '/ai-chat';

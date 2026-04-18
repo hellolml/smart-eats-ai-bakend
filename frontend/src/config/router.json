@@ -44,13 +44,13 @@
         "title": "注册",
         "path": "/register"
     },
-    "OAuthGithubCallback": {
-        "title": "GitHub 登录回调",
-        "path": "/oauth/github/callback"
-    },
     "SessionManagement": {
         "title": "会话管理",
         "path": "/security/sessions"
+    },
+    "OAuthGithubCallback": {
+        "title": "GitHub 回调",
+        "path": "/oauth/github/callback"
     },
     "GroupDecisionResult": {
         "title": "群组投票结果",
