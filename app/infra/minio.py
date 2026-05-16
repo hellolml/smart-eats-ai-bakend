@@ -18,6 +18,10 @@ class MinioStub:
         await asyncio.to_thread(target.write_bytes, data)
         return object_key
 
+    async def read_bytes(self, object_key: str) -> bytes:
+        target = self.base_path / self.bucket / object_key
+        return await asyncio.to_thread(target.read_bytes)
+
 
 _minio_client: MinioStub | None = None
 

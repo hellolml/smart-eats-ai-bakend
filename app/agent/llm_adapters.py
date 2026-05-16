@@ -63,6 +63,7 @@ class ProviderConfig:
     base_url: str
     model_planner: str
     model_writer: str
+    model_vision_planner: str | None = None
 
 
 class ProviderRegistry:
@@ -72,6 +73,7 @@ class ProviderRegistry:
         provider_key, _, model_override = raw.partition(":")
         key = provider_key or "qwen"
         override = model_override.strip() or None
+        vision_model = (settings.LLM_VISION_MODEL_PLANNER or None) or override
         if key == "deepseek":
             return ProviderConfig(
                 name="deepseek",
@@ -79,6 +81,7 @@ class ProviderRegistry:
                 base_url=settings.DEEPSEEK_BASE_URL,
                 model_planner=override or settings.DEEPSEEK_MODEL_PLANNER,
                 model_writer=override or settings.DEEPSEEK_MODEL_WRITER,
+                model_vision_planner=vision_model,
             )
         if key == "qwen":
             return ProviderConfig(
@@ -87,6 +90,7 @@ class ProviderRegistry:
                 base_url=settings.QWEN_BASE_URL,
                 model_planner=override or settings.QWEN_MODEL_PLANNER,
                 model_writer=override or settings.QWEN_MODEL_WRITER,
+                model_vision_planner=vision_model,
             )
         return ProviderConfig(
             name="openai",
@@ -94,6 +98,7 @@ class ProviderRegistry:
             base_url=settings.OPENAI_BASE_URL,
             model_planner=override or settings.OPENAI_MODEL_PLANNER,
             model_writer=override or settings.OPENAI_MODEL_WRITER,
+            model_vision_planner=vision_model,
         )
 
 
@@ -169,15 +174,22 @@ class OpenAIPlanner:
         system: str,
         user: str,
         available_tools: list[dict[str, Any]],
+        image_parts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not self.client:
             raise RuntimeError("LLM provider is not configured")
         context = _log_context()
+        requested_image_parts = image_parts if isinstance(image_parts, list) else []
+        model = (
+            self.config.model_vision_planner
+            if requested_image_parts and self.config.model_vision_planner
+            else self.config.model_planner
+        )
         if _should_log_request("system"):
             logger.info(
                 "planner request provider=%s model=%s session_id=%s turn=%s step=%s system=%s",
                 self.config.name,
-                self.config.model_planner,
+                model,
                 context.get("session_id"),
                 context.get("turn"),
                 context.get("step"),
@@ -187,21 +199,26 @@ class OpenAIPlanner:
             logger.info(
                 "planner request provider=%s model=%s session_id=%s turn=%s step=%s user=%s",
                 self.config.name,
-                self.config.model_planner,
+                model,
                 context.get("session_id"),
                 context.get("turn"),
                 context.get("step"),
                 user,
             )
 
+        user_content: str | list[dict[str, Any]]
+        if requested_image_parts:
+            user_content = [{"type": "text", "text": user}, *requested_image_parts]
+        else:
+            user_content = user
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": user},
+            {"role": "user", "content": user_content},
         ]
         openai_tools = self._build_openai_tools(available_tools)
 
         response = await self.client.chat.completions.create(
-            model=self.config.model_planner,
+            model=model,
             messages=messages,
             tools=openai_tools,
             tool_choice="auto",
@@ -215,7 +232,7 @@ class OpenAIPlanner:
         logger.info(
             "planner response provider=%s model=%s session_id=%s turn=%s step=%s tool_calls=%s content=%s",
             self.config.name,
-            self.config.model_planner,
+            model,
             context.get("session_id"),
             context.get("turn"),
             context.get("step"),

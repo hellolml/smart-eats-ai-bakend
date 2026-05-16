@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     CHAT_HISTORY_LOCAL_CACHE_TTL_SECONDS: int = 30
     CHAT_HISTORY_CACHE_MODE: str = "local_validate"
     CHAT_ATTACHMENT_MAX_BYTES: int = 8 * 1024 * 1024
+    LLM_VISION_ENABLED: bool = True
+    LLM_VISION_PROVIDER: str | None = None
+    LLM_VISION_MODEL_PLANNER: str | None = None
+    LLM_VISION_MAX_IMAGES: int = 4
+    LLM_VISION_MAX_IMAGE_BYTES: int = 8 * 1024 * 1024
     TOOL_HISTORY_KEEP: int = 3
     TOOL_HISTORY_ALLOW: str = "get_ip_location,geocode_location,search_restaurants,plan_route,get_weather,rag_search_recipes,search_recipes"
     CHAT_COMPACT_MIN_MESSAGES: int = 3

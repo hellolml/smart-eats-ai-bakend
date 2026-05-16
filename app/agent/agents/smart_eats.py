@@ -1510,7 +1510,40 @@ def build_smart_eats_graph(
             ] or allowed_tools
         available_tool_schemas = list_tools(current_allowed_tools)
 
-        decision = await planner.plan_tool_calls(system, user, available_tool_schemas)
+        image_parts: list[dict[str, Any]] = []
+        active_planner = planner
+        if (
+            settings.LLM_VISION_ENABLED
+            and chat_state.scene == "travel_planner"
+            and isinstance(chat_state.context, dict)
+            and isinstance(chat_state.context.get("attachments"), list)
+        ):
+            try:
+                from app.agent.vision import build_vision_content_parts
+                from app.infra.minio import get_minio
+
+                image_parts = await build_vision_content_parts(
+                    chat_state.context.get("attachments"),
+                    minio=await get_minio(),
+                )
+                if image_parts and settings.LLM_VISION_PROVIDER:
+                    active_planner = OpenAIPlanner(provider=settings.LLM_VISION_PROVIDER)
+            except Exception as exc:
+                logger.info(
+                    "vision_input_build_failed session_id=%s reason=%s",
+                    chat_state.session_id,
+                    str(exc),
+                )
+
+        if image_parts:
+            decision = await active_planner.plan_tool_calls(
+                system,
+                user,
+                available_tool_schemas,
+                image_parts=image_parts,
+            )
+        else:
+            decision = await active_planner.plan_tool_calls(system, user, available_tool_schemas)
         output = dict(state)
 
         raw_content = decision.get("content") if isinstance(decision, dict) else ""
