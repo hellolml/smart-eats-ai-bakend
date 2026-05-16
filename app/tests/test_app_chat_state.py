@@ -43,3 +43,76 @@ async def test_build_chat_state_uses_model_override_when_present(override_redis)
     )
 
     assert state.provider == "qwen:qwen3.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_build_chat_state_accepts_scene_override(override_redis):
+    state = await AppBffService.build_chat_state(
+        session_id="s-travel",
+        user_id="u1",
+        payload={
+            "message": "帮我规划杭州三天两晚旅行",
+            "scene": "travel_planner",
+        },
+        request_client_ip="127.0.0.1",
+        redis_client=override_redis,
+        rate_limit_key_prefix="chat_test",
+    )
+
+    assert state.scene == "travel_planner"
+
+
+@pytest.mark.asyncio
+async def test_build_chat_state_preserves_attachments_in_context(override_redis):
+    attachment = {
+        "attachment_id": "att_1",
+        "kind": "image",
+        "object_key": "chat/u1/s-travel/guide.png",
+        "filename": "guide.png",
+        "content_type": "image/png",
+        "size_bytes": 10,
+    }
+
+    state = await AppBffService.build_chat_state(
+        session_id="s-travel",
+        user_id="u1",
+        payload={
+            "message": "请从这张攻略截图提取地点",
+            "scene": "travel_planner",
+            "attachments": [attachment],
+        },
+        request_client_ip="127.0.0.1",
+        redis_client=override_redis,
+        rate_limit_key_prefix="chat_test",
+    )
+
+    assert state.context_overrides["attachments"] == [attachment]
+
+
+@pytest.mark.asyncio
+async def test_create_chat_attachment_uploads_image_metadata():
+    class FakeMinio:
+        def __init__(self):
+            self.uploaded = []
+
+        async def upload_bytes(self, object_key, data):
+            self.uploaded.append((object_key, data))
+            return object_key
+
+    minio = FakeMinio()
+
+    data = await AppBffService.create_chat_attachment(
+        user_id="u1",
+        session_id="s-travel",
+        filename="guide.png",
+        content_type="image/png",
+        content=b"fake-image",
+        minio=minio,
+    )
+
+    assert data["kind"] == "image"
+    assert data["filename"] == "guide.png"
+    assert data["content_type"] == "image/png"
+    assert data["size_bytes"] == len(b"fake-image")
+    assert data["object_key"].startswith("chat/u1/s-travel/")
+    assert minio.uploaded == [(data["object_key"], b"fake-image")]

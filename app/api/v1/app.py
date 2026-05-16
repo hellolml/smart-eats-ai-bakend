@@ -18,6 +18,7 @@ from app.common.sse import sse_event
 from app.domain.app.schemas import (
     BlindBoxDrawRequest,
     ChangePasswordRequest,
+    ChatSessionCreateRequest,
     ChatSessionStreamRequest,
     ChatSessionUpdateRequest,
     HomeChefRecipeGenerateRequest,
@@ -935,8 +936,14 @@ async def create_chat_session(
     request: Request,
     db: db_dep,
     user_id: str = Depends(get_current_user_id),
+    payload: ChatSessionCreateRequest | None = None,
 ):
-    data = await AppBffService.create_chat_session(user_id, db)
+    data = await AppBffService.create_chat_session(
+        user_id,
+        db,
+        scene=payload.scene if payload else None,
+        title=payload.title if payload else None,
+    )
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -1001,6 +1008,28 @@ async def stop_chat(
     user_id: str = Depends(get_current_user_id),
 ):
     data = await AppBffService.stop_chat_session(user_id, session_id, db, redis)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/chat/session/{session_id}/attachments")
+async def upload_chat_attachment(
+    session_id: str,
+    request: Request,
+    db: db_dep,
+    minio: minio_dep,
+    user_id: str = Depends(get_current_user_id),
+    file: UploadFile = File(...),
+):
+    await AppBffService.ensure_chat_session_access(user_id, session_id, db, allow_missing=False)
+    content = await file.read()
+    data = await AppBffService.create_chat_attachment(
+        user_id=user_id,
+        session_id=session_id,
+        filename=file.filename,
+        content_type=file.content_type,
+        content=content,
+        minio=minio,
+    )
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 

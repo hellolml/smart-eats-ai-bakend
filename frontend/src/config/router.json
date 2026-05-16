@@ -36,6 +36,10 @@
         "title": "AI食神对话",
         "path": "/ai-chat"
     },
+    "TravelPlanner": {
+        "title": "旅行规划",
+        "path": "/travel-planner"
+    },
     "Login": {
         "title": "登录",
         "path": "/login"

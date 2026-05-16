@@ -55,6 +55,7 @@ export interface AppHomeOverview {
 export interface AppChatSession {
     id?: string;
     session_id?: string;
+    scene?: string;
     title?: string;
     created_at?: string;
 }
@@ -78,6 +79,15 @@ export interface AppChatModelsResponse {
     models: AppChatModelOption[];
     default?: string;
     providers?: string[];
+}
+
+export interface AppChatAttachment {
+    attachment_id: string;
+    kind: 'image';
+    object_key: string;
+    filename: string;
+    content_type: string;
+    size_bytes: number;
 }
 
 export type AppRestaurantSort = 'nearest' | 'rating_desc' | 'price_asc';
@@ -518,6 +528,56 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
             }
         }
         throw new ApiError(toZhErrorMessage(errorMessage), { status: response.status });
+    }
+
+    return parseEnvelope<T>(payload, response.status);
+}
+
+async function requestForm<T>(
+    path: string,
+    formData: FormData,
+    options: { auth?: boolean; retryOnUnauthorized?: boolean } = {}
+): Promise<T> {
+    const { auth = true, retryOnUnauthorized = true } = options;
+    const headers: Record<string, string> = {};
+
+    if (auth) {
+        const token = getAccessToken();
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+        }
+    }
+
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+        headers['x-csrf-token'] = csrfToken;
+    }
+
+    const response = await fetch(buildUrl(path), {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: formData
+    });
+
+    if (response.status === 401 && auth && retryOnUnauthorized) {
+        const refreshed = await tryRefreshAccessToken();
+        if (refreshed) {
+            return requestForm<T>(path, formData, { ...options, retryOnUnauthorized: false });
+        }
+        clearTokens();
+    }
+
+    const payload = await parseResponseBody(response);
+    if (!response.ok) {
+        try {
+            parseEnvelope(payload, response.status);
+        } catch (error) {
+            if (error instanceof ApiError) {
+                throw error;
+            }
+        }
+        throw new ApiError(`HTTP ${response.status}`, { status: response.status });
     }
 
     return parseEnvelope<T>(payload, response.status);
@@ -983,7 +1043,7 @@ export const appApi = {
         async listModels() {
             return request<AppChatModelsResponse>('/chat/models');
         },
-        async createSession(payload: { title?: string } = {}) {
+        async createSession(payload: { title?: string; scene?: string } = {}) {
             return request<AppChatSession>('/chat/session', {
                 method: 'POST',
                 body: payload
@@ -995,6 +1055,11 @@ export const appApi = {
         },
         async getSessionMessages(sessionId: string) {
             return request<AppChatMessage[] | { messages?: AppChatMessage[] }>(`/chat/session/${sessionId}/messages`);
+        },
+        async uploadAttachment(sessionId: string, file: File) {
+            const formData = new FormData();
+            formData.append('file', file);
+            return requestForm<AppChatAttachment>(`/chat/session/${sessionId}/attachments`, formData);
         },
         async renameSession(sessionId: string, title: string) {
             return request<{ updated: boolean; title?: string }>(`/chat/session/${sessionId}`, {

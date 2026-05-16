@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     CHAT_HISTORY_LOCAL_CACHE_SIZE: int = 256
     CHAT_HISTORY_LOCAL_CACHE_TTL_SECONDS: int = 30
     CHAT_HISTORY_CACHE_MODE: str = "local_validate"
+    CHAT_ATTACHMENT_MAX_BYTES: int = 8 * 1024 * 1024
     TOOL_HISTORY_KEEP: int = 3
     TOOL_HISTORY_ALLOW: str = "get_ip_location,geocode_location,search_restaurants,plan_route,get_weather,rag_search_recipes,search_recipes"
     CHAT_COMPACT_MIN_MESSAGES: int = 3
@@ -91,6 +92,11 @@ class Settings(BaseSettings):
     QWEN_MODEL_WRITER: str = "qwen3.5-flash"
     LLM_REQUEST_LOG: str = "none"
     AGENT_MAX_STEPS: int = 6
+    AGENT_SKILLS_ENABLED: bool = True
+    AGENT_SKILLS_PATH: str = "agent_skills"
+    AGENT_SKILLS_MAX_ACTIVE: int = 3
+    AGENT_SKILLS_MAX_PROMPT_CHARS: int = 6000
+    AGENT_SKILLS_LOG_DIAGNOSTICS: bool = True
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"
     LANGGRAPH_CHECKPOINT_BACKEND: str = "sqlite"

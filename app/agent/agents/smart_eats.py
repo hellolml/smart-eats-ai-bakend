@@ -90,6 +90,8 @@ TOOL_NAMES: dict[str, str] = {
     "get_ip_location": "get_ip_location",
     "geocode_location": "geocode_location",
     "get_user_info": "get_user_info",
+    "travel_search_poi": "travel_search_poi",
+    "travel_create_personal_map": "travel_create_personal_map",
 }
 
 TOOL_ERROR_CODES: dict[str, str] = {
@@ -592,7 +594,34 @@ async def _refresh_observation_context(
         context = _merge_context(context, extra)
     if isinstance(state.context_overrides, dict) and state.context_overrides:
         context = _merge_context(context, state.context_overrides)
-    context["system_prompt"] = agent_config.system_prompt_builder({"context": context})
+
+    from app.agent.skills.runtime import SkillRuntime
+
+    skill_runtime = SkillRuntime(
+        skills_path=settings.AGENT_SKILLS_PATH,
+        enabled=settings.AGENT_SKILLS_ENABLED,
+        max_active=settings.AGENT_SKILLS_MAX_ACTIVE,
+        max_prompt_chars=settings.AGENT_SKILLS_MAX_PROMPT_CHARS,
+        global_allowlist=agent_config.tool_names,
+        log_diagnostics=settings.AGENT_SKILLS_LOG_DIAGNOSTICS,
+    ).resolve(
+        state,
+        context,
+        base_tools=[],
+    )
+    if skill_runtime.context:
+        context = _merge_context(context, skill_runtime.context)
+    context["allowed_tools"] = (
+        skill_runtime.allowed_tools
+        if skill_runtime.active_skills
+        else list(agent_config.tool_names)
+    )
+    context["system_prompt"] = agent_config.system_prompt_builder(
+        {
+            "context": context,
+            "skill_prompt": skill_runtime.system_prompt_addendum,
+        }
+    )
     state.context = context
 
     if emit_context_event:
@@ -915,9 +944,11 @@ def smart_system_prompt(payload: dict) -> str:
     except FileNotFoundError:
         base_prompt = "你是 SmartEats 智能助手，帮助用户解决「吃什么」的问题。"
 
+    skill_prompt = payload.get("skill_prompt")
+    skill_block = f"\n\n{skill_prompt.strip()}" if isinstance(skill_prompt, str) and skill_prompt.strip() else ""
     context_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return (
-        f"{base_prompt}\n\n"
+        f"{base_prompt}{skill_block}\n\n"
         "## Runtime Context（系统注入，非用户输入）\n"
         f"- output_language: {settings.DEFAULT_LANGUAGE}\n"
         f"- context: {context_json}"
@@ -1377,6 +1408,8 @@ def _smart_eats_graph_config() -> SmartEatsGraphConfig:
             TOOL_NAMES["get_ip_location"],
             TOOL_NAMES["geocode_location"],
             TOOL_NAMES["get_user_info"],
+            TOOL_NAMES["travel_search_poi"],
+            TOOL_NAMES["travel_create_personal_map"],
         ],
         max_steps=6,
         system_prompt_builder=smart_system_prompt,
@@ -1411,7 +1444,6 @@ def build_smart_eats_graph(
     agent_config = get_smart_eats_agent_config()
     planner = OpenAIPlanner(provider=provider)
     allowed_tools = agent_config.tool_names
-    available_tool_schemas = list_tools(allowed_tools)
 
     tool_node = ToolNode(
         [
@@ -1470,6 +1502,13 @@ def build_smart_eats_graph(
         if not system:
             system = agent_config.system_prompt_builder({"context": chat_state.context})
         user = chat_state.message or ""
+        current_allowed_tools = allowed_tools
+        if isinstance(chat_state.context, dict) and isinstance(chat_state.context.get("allowed_tools"), list):
+            current_allowed_tools = [
+                item for item in chat_state.context.get("allowed_tools", [])
+                if isinstance(item, str) and item in allowed_tools
+            ] or allowed_tools
+        available_tool_schemas = list_tools(current_allowed_tools)
 
         decision = await planner.plan_tool_calls(system, user, available_tool_schemas)
         output = dict(state)
@@ -1486,7 +1525,9 @@ def build_smart_eats_graph(
                 if not isinstance(tool_name, str) or not isinstance(args, dict):
                     continue
                 normalized_args = args
-                if tool_name in allowed_tools and agent_config.tool_args_normalizer:
+                if tool_name not in current_allowed_tools and tool_name != TOOL_NAMES["submit_final_answer"]:
+                    continue
+                if tool_name in current_allowed_tools and agent_config.tool_args_normalizer:
                     normalized_args = agent_config.tool_args_normalizer(tool_name, args)
                 if not isinstance(call_id, str) or not call_id:
                     call_id = f"call_{uuid4().hex[:12]}_{index}"
@@ -1599,4 +1640,3 @@ def build_smart_eats_graph(
     graph.set_entry_point("observe")
     logger.info("agent_graph_runtime mode=official agent=smart_eats phase=dedicated")
     return graph
-

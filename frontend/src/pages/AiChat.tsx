@@ -13,12 +13,14 @@ import {
     RotateCcw,
     Copy,
     Mic,
-    Square
+    Square,
+    Compass,
+    ImagePlus
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AppChatMessage, AppChatSession, AppChatModelOption, appApi, authStore } from '@/services/app-api';
+import { AppChatAttachment, AppChatMessage, AppChatSession, AppChatModelOption, appApi, authStore } from '@/services/app-api';
 
 type ChatRole = 'user' | 'assistant';
 
@@ -27,6 +29,12 @@ interface ChatMessageUi {
     role: ChatRole;
     content: string;
 }
+
+type PendingAttachment = {
+    id: string;
+    file: File;
+    previewUrl: string;
+};
 
 function getSpeechRecognitionCtor(): any {
     if (typeof window === 'undefined') return null;
@@ -140,7 +148,9 @@ type StreamChatReplyOptions = {
     onDelta?: (partialText: string, deltaText: string) => void;
     onFinal?: () => void;
     clientContextOverrides?: Record<string, unknown>;
+    attachments?: AppChatAttachment[];
     model?: string;
+    scene?: string;
 };
 
 async function streamChatReply(
@@ -156,8 +166,14 @@ async function streamChatReply(
     if (options.clientContextOverrides) {
         requestBody.client_context_overrides = options.clientContextOverrides;
     }
+    if (options.attachments?.length) {
+        requestBody.attachments = options.attachments;
+    }
     if (options.model) {
         requestBody.model = options.model;
+    }
+    if (options.scene) {
+        requestBody.scene = options.scene;
     }
 
     const response = await fetch(url, {
@@ -295,12 +311,33 @@ async function streamChatReply(
     return collected.trim();
 }
 
-const AiChat = () => {
+type AiChatProps = {
+    scene?: string;
+    title?: string;
+    subtitle?: string;
+    assistantName?: string;
+    newSessionTitle?: string;
+    placeholder?: string;
+    emptyText?: string;
+    starterPrompts?: string[];
+};
+
+const AiChat = ({
+    scene = 'chat',
+    title = '吃点啥AI助手',
+    subtitle,
+    assistantName = '小馋嘴',
+    newSessionTitle = '新会话',
+    placeholder = '输入消息...',
+    emptyText = '告诉我你想吃什么？',
+    starterPrompts = []
+}: AiChatProps) => {
     const navigate = useNavigate();
     const [sessions, setSessions] = useState<AppChatSession[]>([]);
     const [sessionId, setSessionId] = useState('');
     const [messages, setMessages] = useState<ChatMessageUi[]>([]);
     const [inputValue, setInputValue] = useState('');
+    const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
     const [initializing, setInitializing] = useState(true);
     const [sending, setSending] = useState(false);
     const [showSidebar, setShowSidebar] = useState(true); // Control sidebar visibility on small screens
@@ -315,11 +352,23 @@ const AiChat = () => {
         () => modelOptions.find((item) => item.value === selectedModel) || null,
         [modelOptions, selectedModel]
     );
+    const isTravelScene = scene === 'travel_planner';
+    const SceneIcon = isTravelScene ? Compass : Sparkles;
+    const accentSoftClass = isTravelScene ? 'bg-emerald-50 text-emerald-600' : 'bg-[#7E57FF]/10 text-[#7E57FF]';
+    const accentButtonClass = isTravelScene
+        ? 'bg-emerald-600 hover:bg-emerald-700'
+        : 'bg-[#7E57FF] hover:bg-[#6c4ae0]';
+    const accentFocusClass = isTravelScene
+        ? 'focus-within:ring-emerald-500/20 focus-within:border-emerald-600'
+        : 'focus-within:ring-[#7E57FF]/20 focus-within:border-[#7E57FF]';
+    const sceneSubtitle = subtitle || (isTravelScene ? '行程候选、路线编排、个人地图' : (sessionId ? `ID: ${sessionId.slice(0, 8)}` : '初始化中...'));
     const [deviceLocation, setDeviceLocation] = useState<DeviceLocation | null>(null);
     const locationDeniedToastShownRef = React.useRef(
         typeof window !== 'undefined' && window.sessionStorage.getItem(LOCATION_DENY_TOAST_FLAG) === '1'
     );
     const messagesScrollRef = React.useRef<HTMLDivElement>(null);
+    const fileInputRef = React.useRef<HTMLInputElement>(null);
+    const pendingAttachmentsRef = React.useRef<PendingAttachment[]>([]);
     const scrollRafRef = React.useRef<number | null>(null);
     const recognitionRef = React.useRef<any>(null);
     const lastAutoScrollAtRef = React.useRef(0);
@@ -406,8 +455,77 @@ const AiChat = () => {
     }, [inputValue]);
 
     const canSend = useMemo(() => {
-        return Boolean(inputValue.trim()) && Boolean(sessionId) && !sending;
-    }, [inputValue, sessionId, sending]);
+        return Boolean(inputValue.trim() || pendingAttachments.length > 0) && Boolean(sessionId) && !sending;
+    }, [inputValue, pendingAttachments.length, sessionId, sending]);
+
+    useEffect(() => {
+        pendingAttachmentsRef.current = pendingAttachments;
+    }, [pendingAttachments]);
+
+    const clearPendingAttachments = React.useCallback(() => {
+        setPendingAttachments((prev) => {
+            prev.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+            return [];
+        });
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            pendingAttachmentsRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+        };
+    }, []);
+
+    const appendImageFiles = React.useCallback((files: File[]) => {
+        if (!files.length) return;
+
+        const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+        if (imageFiles.length !== files.length) {
+            toast.error('暂时只支持图片附件');
+        }
+        if (!imageFiles.length) return;
+
+        setPendingAttachments((prev) => {
+            const remainingSlots = Math.max(0, 4 - prev.length);
+            const nextFiles = imageFiles.slice(0, remainingSlots);
+            if (nextFiles.length < imageFiles.length) {
+                toast.error('单次最多上传 4 张图片');
+            }
+            return [
+                ...prev,
+                ...nextFiles.map((file) => ({
+                    id: makeId(),
+                    file,
+                    previewUrl: URL.createObjectURL(file)
+                }))
+            ];
+        });
+    }, []);
+
+    const handlePickImages = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+        appendImageFiles(Array.from(event.target.files || []));
+        event.target.value = '';
+    }, [appendImageFiles]);
+
+    const handlePasteImages = React.useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const filesFromClipboard = Array.from(event.clipboardData.items || [])
+            .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => Boolean(file));
+
+        if (!filesFromClipboard.length) return;
+        event.preventDefault();
+        appendImageFiles(filesFromClipboard);
+    }, [appendImageFiles]);
+
+    const handleRemoveAttachment = React.useCallback((id: string) => {
+        setPendingAttachments((prev) => {
+            const target = prev.find((item) => item.id === id);
+            if (target) {
+                URL.revokeObjectURL(target.previewUrl);
+            }
+            return prev.filter((item) => item.id !== id);
+        });
+    }, []);
 
     const handleToggleVoiceInput = React.useCallback(() => {
         if (isListening) {
@@ -529,7 +647,9 @@ const AiChat = () => {
                     appApi.chat.listSessions(),
                     appApi.chat.listModels().catch(() => ({ models: [], default: '' }))
                 ]);
-                setSessions(sessionList);
+                const currentScene = scene || 'chat';
+                const scopedSessions = sessionList.filter((item) => (item.scene || 'chat') === currentScene);
+                setSessions(scopedSessions);
 
                 const options = Array.isArray(modelMeta.models) ? modelMeta.models : [];
                 setModelOptions(options);
@@ -548,8 +668,8 @@ const AiChat = () => {
                 }
 
                 // If sessions exist, load the most recent one
-                if (sessionList.length > 0) {
-                    const latest = sessionList[0];
+                if (scopedSessions.length > 0) {
+                    const latest = scopedSessions[0];
                     const sid = getSessionId(latest);
                     if (sid) {
                         await loadSession(sid);
@@ -567,11 +687,12 @@ const AiChat = () => {
         };
 
         void bootstrap();
-    }, [navigate]);
+    }, [navigate, scene]);
 
     const loadSession = async (sid: string) => {
         setSessionId(sid);
         setMessages([]); // Clear current messages while loading
+        clearPendingAttachments();
         try {
             const response = await appApi.chat.getSessionMessages(sid);
             const rawMessages = Array.isArray(response) ? response : (response.messages || []);
@@ -587,13 +708,19 @@ const AiChat = () => {
 
     const createNewSession = async () => {
         try {
-            const created = await appApi.chat.createSession();
+            const created = await appApi.chat.createSession({ scene, title: newSessionTitle });
             const sid = getSessionId(created);
             if (sid) {
                 setSessionId(sid);
                 setMessages([]);
+                clearPendingAttachments();
                 // Update sessions list locally or re-fetch
-                const newSession: AppChatSession = { id: sid, title: '新会话', created_at: new Date().toISOString() };
+                const newSession: AppChatSession = {
+                    id: sid,
+                    scene,
+                    title: created.title || newSessionTitle,
+                    created_at: new Date().toISOString()
+                };
                 setSessions(prev => [newSession, ...prev]);
             }
         } catch (error) {
@@ -641,8 +768,13 @@ const AiChat = () => {
     }, [deviceLocation]);
 
     const handleSend = async () => {
-        const question = inputValue.trim();
-        if (!question || !sessionId || sending) return;
+        const typedQuestion = inputValue.trim();
+        const attachmentsToSend = pendingAttachments;
+        if ((!typedQuestion && attachmentsToSend.length === 0) || !sessionId || sending) return;
+        const question = typedQuestion || (isTravelScene ? '请从我上传的旅行攻略图片中提取地点并整理候选' : '请分析我上传的图片');
+        const visibleQuestion = attachmentsToSend.length > 0
+            ? `${question}\n\n[已上传 ${attachmentsToSend.length} 张图片]`
+            : question;
 
         const activeRecognition = recognitionRef.current;
         if (activeRecognition) {
@@ -657,9 +789,10 @@ const AiChat = () => {
         const assistantMessageId = makeId();
 
         setInputValue('');
+        clearPendingAttachments();
         setMessages((prev) => [
             ...prev,
-            { id: makeId(), role: 'user', content: question },
+            { id: makeId(), role: 'user', content: visibleQuestion },
             { id: assistantMessageId, role: 'assistant', content: '' }
         ]);
         scheduleAutoScrollToBottom(true);
@@ -680,9 +813,16 @@ const AiChat = () => {
             : undefined;
 
         try {
+            const uploadedAttachments = attachmentsToSend.length > 0
+                ? await Promise.all(
+                    attachmentsToSend.map((item) => appApi.chat.uploadAttachment(sessionId, item.file))
+                )
+                : [];
             const reply = await streamChatReply(sessionId, question, {
                 clientContextOverrides,
+                attachments: uploadedAttachments,
                 model: selectedModel || undefined,
+                scene,
                 onDelta: (partialText) => {
                     setMessages((prev) =>
                         prev.map((message) =>
@@ -711,7 +851,9 @@ const AiChat = () => {
             scheduleAutoScrollToBottom(true);
 
             if (hadNoMessages) {
-                void appApi.chat.listSessions().then(setSessions);
+                void appApi.chat
+                    .listSessions()
+                    .then((items) => setSessions(items.filter((item) => (item.scene || 'chat') === scene)));
             }
         } catch (error) {
             console.error('send ai message failed:', error);
@@ -785,6 +927,7 @@ const AiChat = () => {
             const reply = await streamChatReply(sessionId, previousUser.content, {
                 clientContextOverrides,
                 model: selectedModel || undefined,
+                scene,
                 onDelta: (partialText) => {
                     setMessages((prev) =>
                         prev.map((message) =>
@@ -852,9 +995,9 @@ const AiChat = () => {
                                 setShowSidebar(false);
                             }
                         }}
-                        className="w-full flex items-center gap-2 justify-center py-2.5 px-4 bg-[#7E57FF] text-white rounded-xl active:scale-95 transition-all shadow-sm hover:shadow-md hover:bg-[#6c4ae0]"
+                        className={`w-full flex items-center gap-2 justify-center py-2.5 px-4 text-white rounded-xl active:scale-95 transition-all shadow-sm hover:shadow-md ${accentButtonClass}`}
                     >
-                        <Sparkles size={16} />
+                        <SceneIcon size={16} />
                         <span>新对话</span>
                     </button>
                 </div>
@@ -939,13 +1082,13 @@ const AiChat = () => {
                                 <div className="w-4 h-0.5 bg-current rounded-full"></div>
                             </div>
                         </button>
-                        <div className="w-8 h-8 bg-gradient-to-br from-[#7E57FF] to-[#9b7dff] rounded-xl flex items-center justify-center shadow-lg shadow-purple-200">
-                            <Sparkles size={16} className="text-white" />
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shadow-lg ${isTravelScene ? 'bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-200' : 'bg-gradient-to-br from-[#7E57FF] to-[#9b7dff] shadow-purple-200'}`}>
+                            <SceneIcon size={16} className="text-white" />
                         </div>
                         <div>
-                            <p className="text-sm font-bold text-gray-800">吃点啥AI助手</p>
+                            <p className="text-sm font-bold text-gray-800">{title}</p>
                             <p className="text-[10px] text-gray-400 hidden sm:block">
-                                {sessionId ? `ID: ${sessionId.slice(0, 8)}` : '初始化中...'}
+                                {sceneSubtitle}
                             </p>
                         </div>
                     </div>
@@ -956,7 +1099,7 @@ const AiChat = () => {
                             id="chat-model-select"
                             value={selectedModel}
                             onChange={(e) => onSelectModel(e.target.value)}
-                            className="min-w-[170px] max-w-[220px] rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700 outline-none focus:border-[#7E57FF] focus:ring-2 focus:ring-[#7E57FF]/20"
+                            className={`min-w-[170px] max-w-[220px] rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700 outline-none focus:ring-2 ${isTravelScene ? 'focus:border-emerald-600 focus:ring-emerald-500/20' : 'focus:border-[#7E57FF] focus:ring-[#7E57FF]/20'}`}
                         >
                             {modelOptions.length === 0 && <option value="">默认模型</option>}
                             {modelOptions.map((item) => (
@@ -983,9 +1126,23 @@ const AiChat = () => {
                     ) : messages.length === 0 && !sending ? (
                         <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-4 opacity-70">
                             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center">
-                                <Sparkles size={24} className="text-gray-400" />
+                                <SceneIcon size={24} className="text-gray-400" />
                             </div>
-                            <p className="text-sm">告诉我你想吃什么？</p>
+                            <p className="text-sm">{emptyText}</p>
+                            {starterPrompts.length > 0 && (
+                                <div className="flex max-w-xl flex-wrap items-center justify-center gap-2 px-4">
+                                    {starterPrompts.map((prompt) => (
+                                        <button
+                                            key={prompt}
+                                            type="button"
+                                            onClick={() => setInputValue(prompt)}
+                                            className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 shadow-sm transition hover:border-emerald-200 hover:text-emerald-700"
+                                        >
+                                            {prompt}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <>
@@ -1003,10 +1160,10 @@ const AiChat = () => {
                                         <div className={isAssistant ? 'w-full max-w-3xl' : 'max-w-[85%] sm:max-w-[72%]'}>
                                             {isAssistant && (
                                                 <div className="mb-2 flex items-center gap-2 text-xs text-gray-500">
-                                                    <div className="w-6 h-6 rounded-lg bg-[#7E57FF]/10 text-[#7E57FF] flex items-center justify-center">
-                                                        <Sparkles size={12} />
+                                                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${accentSoftClass}`}>
+                                                        <SceneIcon size={12} />
                                                     </div>
-                                                    <span className="font-medium text-gray-700">小馋嘴</span>
+                                                    <span className="font-medium text-gray-700">{assistantName}</span>
                                                 </div>
                                             )}
                                             <div
@@ -1064,7 +1221,7 @@ const AiChat = () => {
                                                     <button
                                                         type="button"
                                                         onClick={() => handleAssistantFeedback(message.id, 'like')}
-                                                        className={`p-1.5 rounded-lg transition-colors ${feedback === 'like' ? 'bg-purple-50 text-[#7E57FF]' : 'hover:bg-gray-100 hover:text-gray-600'}`}
+                                                        className={`p-1.5 rounded-lg transition-colors ${feedback === 'like' ? accentSoftClass : 'hover:bg-gray-100 hover:text-gray-600'}`}
                                                         title="赞"
                                                     >
                                                         <ThumbsUp size={14} />
@@ -1072,7 +1229,7 @@ const AiChat = () => {
                                                     <button
                                                         type="button"
                                                         onClick={() => handleAssistantFeedback(message.id, 'dislike')}
-                                                        className={`p-1.5 rounded-lg transition-colors ${feedback === 'dislike' ? 'bg-purple-50 text-[#7E57FF]' : 'hover:bg-gray-100 hover:text-gray-600'}`}
+                                                        className={`p-1.5 rounded-lg transition-colors ${feedback === 'dislike' ? accentSoftClass : 'hover:bg-gray-100 hover:text-gray-600'}`}
                                                         title="踩"
                                                     >
                                                         <ThumbsDown size={14} />
@@ -1103,10 +1260,10 @@ const AiChat = () => {
                             {sending && (
                                 <div className="w-full max-w-3xl">
                                     <div className="mb-2 flex items-center gap-2 text-xs text-gray-500">
-                                        <div className="w-6 h-6 rounded-lg bg-[#7E57FF]/10 text-[#7E57FF] flex items-center justify-center">
-                                            <Sparkles size={12} />
+                                        <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${accentSoftClass}`}>
+                                            <SceneIcon size={12} />
                                         </div>
-                                        <span className="font-medium text-gray-700">小馋嘴</span>
+                                        <span className="font-medium text-gray-700">{assistantName}</span>
                                     </div>
                                     <div className="inline-flex rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
                                         <div className="text-gray-400 flex items-center gap-1">
@@ -1123,21 +1280,60 @@ const AiChat = () => {
 
                 {/* Input Area */}
                 <div className="p-4 bg-white border-t border-gray-100 flex-shrink-0">
-                    <div className="max-w-4xl w-full mx-auto relative flex items-end gap-2 bg-gray-50 border border-gray-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-[#7E57FF]/20 focus-within:border-[#7E57FF] transition-all">
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={handlePickImages}
+                    />
+                    {pendingAttachments.length > 0 && (
+                        <div className="max-w-4xl w-full mx-auto mb-2 flex flex-wrap gap-2">
+                            {pendingAttachments.map((item) => (
+                                <div key={item.id} className="group relative h-16 w-16 overflow-hidden rounded-xl border border-gray-200 bg-gray-50 shadow-sm">
+                                    <img
+                                        src={item.previewUrl}
+                                        alt={item.file.name}
+                                        className="h-full w-full object-cover"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => handleRemoveAttachment(item.id)}
+                                        className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white opacity-90 transition hover:bg-black"
+                                        title="移除图片"
+                                    >
+                                        <X size={12} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    <div className={`max-w-4xl w-full mx-auto relative flex items-end gap-2 bg-gray-50 border border-gray-200 rounded-2xl p-2 focus-within:ring-2 transition-all ${accentFocusClass}`}>
                         <textarea
                             ref={textareaRef}
                             value={inputValue}
                             onChange={(e) => setInputValue(e.target.value)}
+                            onPaste={handlePasteImages}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
                                     e.preventDefault();
                                     void handleSend();
                                 }
                             }}
-                            placeholder="输入消息..."
+                            placeholder={placeholder}
                             className="flex-1 bg-transparent border-none outline-none resize-none max-h-[120px] min-h-[24px] py-2 px-2 text-sm text-gray-800 placeholder:text-gray-400 leading-normal"
                             rows={1}
                         />
+                        <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={sending || pendingAttachments.length >= 4}
+                            className="mb-0.5 p-2 rounded-xl bg-white text-gray-500 border border-gray-200 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                            title="上传图片"
+                        >
+                            <ImagePlus size={16} />
+                        </button>
                         {speechSupported && (
                             <button
                                 type="button"
@@ -1160,7 +1356,7 @@ const AiChat = () => {
                             disabled={!canSend}
                             className={`
                                 mb-0.5 p-2 rounded-xl transition-all duration-200
-                                ${canSend ? 'bg-[#7E57FF] text-white shadow-md hover:shadow-lg active:scale-95' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}
+                                ${canSend ? `${accentButtonClass} text-white shadow-md hover:shadow-lg active:scale-95` : 'bg-gray-200 text-gray-400 cursor-not-allowed'}
                             `}
                         >
                             <Send size={18} />

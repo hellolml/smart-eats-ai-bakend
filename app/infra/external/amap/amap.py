@@ -600,6 +600,23 @@ async def search_detail(
     return _extract_detail(payload)
 
 
+async def create_personal_map(
+    org_name: str,
+    line_list: list[dict[str, Any]],
+    *,
+    scene_type: int = 1,
+    servers_path: str | None,
+) -> dict[str, Any] | None:
+    args = {
+        "orgName": org_name,
+        "lineList": line_list,
+        "sceneType": scene_type,
+    }
+    payload = await _fetch_tool_payload("maps_schema_personal_map", args, servers_path)
+    parsed = _parse_json_payload(payload)
+    return parsed if isinstance(parsed, dict) else None
+
+
 async def get_route(
     origin: dict[str, float],
     destination: dict[str, float],

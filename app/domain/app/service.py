@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -2321,16 +2322,57 @@ class AppBffService:
         }
 
     @staticmethod
-    async def create_chat_session(user_id: str | None, db: AsyncSession) -> dict[str, Any]:
+    async def create_chat_session(
+        user_id: str | None,
+        db: AsyncSession,
+        *,
+        scene: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_scene = (scene or "chat").strip() or "chat"
+        resolved_title = (title or "新会话").strip() or "新会话"
         session = ChatSession(
             id=str(uuid4()),
             user_id=user_id,
-            scene="chat",
-            title="新会话",
+            scene=resolved_scene,
+            title=resolved_title,
         )
         db.add(session)
         await db.commit()
-        return {"session_id": session.id, "title": session.title}
+        return {"session_id": session.id, "scene": session.scene, "title": session.title}
+
+    @staticmethod
+    async def create_chat_attachment(
+        user_id: str,
+        session_id: str,
+        filename: str | None,
+        content_type: str | None,
+        content: bytes,
+        minio: Any,
+    ) -> dict[str, Any]:
+        if not content:
+            raise HTTPException(status_code=400, detail="empty attachment")
+        if len(content) > settings.CHAT_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="attachment too large")
+
+        resolved_content_type = (content_type or "").strip().lower()
+        if not resolved_content_type.startswith("image/"):
+            raise HTTPException(status_code=415, detail="only image attachments are supported")
+
+        raw_name = (filename or "image").strip() or "image"
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name).strip("._") or "image"
+        attachment_id = str(uuid4())
+        object_key = f"chat/{user_id}/{session_id}/{attachment_id}_{safe_name}"
+        await minio.upload_bytes(object_key, content)
+
+        return {
+            "attachment_id": attachment_id,
+            "kind": "image",
+            "object_key": object_key,
+            "filename": raw_name,
+            "content_type": resolved_content_type,
+            "size_bytes": len(content),
+        }
 
     @staticmethod
     async def rename_chat_session(
@@ -2521,11 +2563,21 @@ class AppBffService:
             limit=30,
             window_seconds=60,
         )
+        context_overrides = payload.get("client_context_overrides")
+        context_overrides = dict(context_overrides) if isinstance(context_overrides, dict) else None
+        attachments = payload.get("attachments")
+        if isinstance(attachments, list):
+            clean_attachments = [item for item in attachments if isinstance(item, dict)]
+            if clean_attachments:
+                context_overrides = context_overrides or {}
+                context_overrides["attachments"] = clean_attachments
+
         return ChatState(
             session_id=session_id,
             user_id=user_id,
             message=payload.get("message"),
-            context_overrides=payload.get("client_context_overrides"),
+            scene=(payload.get("scene") or "chat"),
+            context_overrides=context_overrides,
             provider=AppBffService.resolve_chat_provider(payload.get("model")) or payload.get("provider"),
             agent_type=payload.get("agent_type"),
             client_ip=request_client_ip,

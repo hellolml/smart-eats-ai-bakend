@@ -338,10 +338,17 @@ class WheelSpinRequest(BaseModel):
 
 class ChatSessionStreamRequest(BaseModel):
     message: str | None = None
+    scene: str | None = None
+    attachments: list[dict[str, Any]] | None = None
     client_context_overrides: dict[str, Any] | None = None
     provider: str | None = None
     model: str | None = None
     agent_type: str | None = None
+
+
+class ChatSessionCreateRequest(BaseModel):
+    title: str | None = None
+    scene: str | None = None
 
 
 class ChatSessionUpdateRequest(BaseModel):

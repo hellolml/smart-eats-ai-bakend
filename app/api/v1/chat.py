@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any, AsyncGenerator
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agent.graph import run_chat_stream
-from app.api.deps import db_dep, get_optional_user_id, redis_dep
+from app.api.deps import db_dep, get_optional_user_id, minio_dep, redis_dep
 from app.common.config import settings
 from app.common.errors import envelope
 from app.common.sse import sse_event
@@ -33,6 +33,8 @@ def _quick_intent(message: str | None) -> str:
 
 class ChatStreamRequest(BaseModel):
     message: str | None = None
+    scene: str | None = None
+    attachments: list[dict[str, Any]] | None = None
     client_context_overrides: dict[str, Any] | None = None
     provider: str | None = None
     model: str | None = None
@@ -41,6 +43,11 @@ class ChatStreamRequest(BaseModel):
     checkpoint_ref: str | None = None
     replay_from_checkpoint: bool | None = None
     resume_payload: dict[str, Any] | None = None
+
+
+class SessionCreateRequest(BaseModel):
+    title: str | None = None
+    scene: str | None = None
 
 
 class SessionUpdateRequest(BaseModel):
@@ -69,9 +76,15 @@ async def create_chat_session(
     request: Request,
     db: db_dep,
     user_id: str | None = Depends(get_optional_user_id),
+    payload: SessionCreateRequest | None = None,
 ):
     user_id = _resolve_user_id(user_id)
-    data = await AppBffService.create_chat_session(user_id, db)
+    data = await AppBffService.create_chat_session(
+        user_id,
+        db,
+        scene=payload.scene if payload else None,
+        title=payload.title if payload else None,
+    )
     trace_id = getattr(request.state, "trace_id", "")
     return envelope(data, trace_id)
 
@@ -168,6 +181,30 @@ async def stop_chat(
 ):
     user_id = _resolve_user_id(user_id)
     data = await AppBffService.stop_chat_session(user_id, session_id, db, redis)
+    trace_id = getattr(request.state, "trace_id", "")
+    return envelope(data, trace_id)
+
+
+@router.post("/sessions/{session_id}/attachments")
+async def upload_chat_attachment(
+    session_id: str,
+    request: Request,
+    db: db_dep,
+    minio: minio_dep,
+    user_id: str | None = Depends(get_optional_user_id),
+    file: UploadFile = File(...),
+):
+    user_id = _resolve_user_id(user_id)
+    await AppBffService.ensure_chat_session_access(user_id, session_id, db, allow_missing=False)
+    content = await file.read()
+    data = await AppBffService.create_chat_attachment(
+        user_id=user_id or "anonymous",
+        session_id=session_id,
+        filename=file.filename,
+        content_type=file.content_type,
+        content=content,
+        minio=minio,
+    )
     trace_id = getattr(request.state, "trace_id", "")
     return envelope(data, trace_id)
 

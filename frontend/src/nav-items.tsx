@@ -29,7 +29,8 @@ import {
     LogIn,
     UserPlus,
     Shield,
-    MessageSquare
+    MessageSquare,
+    Compass
 } from 'lucide-react';
 
 const routeMap: Record<string, React.ReactNode> = {
@@ -42,6 +43,21 @@ const routeMap: Record<string, React.ReactNode> = {
     BlindBox: <BlindBox />,
     Wheel: <Wheel />,
     AiChat: <AiChat />,
+    TravelPlanner: (
+        <AiChat
+            scene="travel_planner"
+            title="旅行规划助手"
+            assistantName="行程管家"
+            newSessionTitle="新旅行计划"
+            placeholder="说说目的地、天数、同行人和想玩的内容..."
+            emptyText="想去哪里走走？"
+            starterPrompts={[
+                '帮我规划杭州3天2晚，偏自然风景和本地小吃',
+                '把这批旅行链接整理成可执行行程',
+                '周末上海出发，做一个轻松亲子游路线'
+            ]}
+        />
+    ),
     Login: <Login />,
     Register: <Register />,
     SessionManagement: <SessionManagement />,
@@ -60,6 +76,7 @@ const routerIconMap: Record<string, any> = {
     BlindBox: Package,
     Wheel: RotateCw,
     AiChat: MessageSquare,
+    TravelPlanner: Compass,
     Login: LogIn,
     Register: UserPlus,
     SessionManagement: Shield

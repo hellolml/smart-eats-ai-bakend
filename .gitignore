@@ -45,3 +45,5 @@ build/
 # ===== Deployment generated files =====
 # Rendered by deploy/enable_https.sh
 /deploy/nginx/gateway.conf
+.specify/
+docs/
