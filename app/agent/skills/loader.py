@@ -48,10 +48,10 @@ def load_skills_from_path(path: str | Path | None) -> list[SkillSpec]:
         return []
 
     skills: list[SkillSpec] = []
-    for skill_dir in sorted(item for item in root.iterdir() if item.is_dir()):
-        manifest_path = skill_dir / "skill.yaml"
-        if not manifest_path.exists():
+    for manifest_path in sorted(root.rglob("skill.yaml")):
+        if any(part.startswith(".") for part in manifest_path.relative_to(root).parts):
             continue
+        skill_dir = manifest_path.parent
         raw = _read_yaml(manifest_path)
         if not raw:
             continue
@@ -70,4 +70,3 @@ def load_skills_from_path(path: str | Path | None) -> list[SkillSpec]:
 
     logger.info("skill_registry_loaded count=%s path=%s", len(skills), root)
     return skills
-

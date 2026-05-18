@@ -11,6 +11,7 @@ import AiChat from '@/pages/AiChat';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
 import SessionManagement from '@/pages/SessionManagement';
+import SkillManagement from '@/pages/SkillManagement';
 import OAuthGithubCallback from '@/pages/OAuthGithubCallback';
 import GroupDecisionResult from '@/pages/GroupDecisionResult';
 import GroupDecisionCreate from '@/pages/GroupDecisionCreate';
@@ -30,7 +31,8 @@ import {
     UserPlus,
     Shield,
     MessageSquare,
-    Compass
+    Compass,
+    Puzzle
 } from 'lucide-react';
 
 const routeMap: Record<string, React.ReactNode> = {
@@ -61,6 +63,7 @@ const routeMap: Record<string, React.ReactNode> = {
     Login: <Login />,
     Register: <Register />,
     SessionManagement: <SessionManagement />,
+    SkillManagement: <SkillManagement />,
     OAuthGithubCallback: <OAuthGithubCallback />,
     GroupDecisionResult: <GroupDecisionResult />,
     GroupDecisionCreate: <GroupDecisionCreate />
@@ -79,7 +82,8 @@ const routerIconMap: Record<string, any> = {
     TravelPlanner: Compass,
     Login: LogIn,
     Register: UserPlus,
-    SessionManagement: Shield
+    SessionManagement: Shield,
+    SkillManagement: Puzzle
 };
 
 const allRoutes = Object.entries(router).map(([key, value]) => ({

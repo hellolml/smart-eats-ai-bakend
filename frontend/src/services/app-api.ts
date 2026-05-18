@@ -90,6 +90,31 @@ export interface AppChatAttachment {
     size_bytes: number;
 }
 
+export interface AppSkillInstallReport {
+    allowed_tools: string[];
+    denied_tools: Record<string, string>;
+    warnings: string[];
+    blocked_files: string[];
+    risk_level: string;
+}
+
+export interface AppAgentSkill {
+    id: string;
+    name: string;
+    version: string;
+    description?: string;
+    enabled: boolean;
+    source: 'built_in' | 'imported' | string;
+    tools: string[];
+    install_report?: AppSkillInstallReport | null;
+}
+
+export interface AppSkillImportResult {
+    skill_id: string;
+    install_path: string;
+    report: AppSkillInstallReport;
+}
+
 export type AppRestaurantSort = 'nearest' | 'rating_desc' | 'price_asc';
 
 export interface AppRestaurant {
@@ -273,9 +298,11 @@ function getApiBaseUrl(): string {
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
 }
 
-function buildUrl(path: string): string {
+type ApiScope = 'app' | 'agent';
+
+function buildUrl(path: string, scope: ApiScope = 'app'): string {
     const normalized = path.startsWith('/') ? path : `/${path}`;
-    return `${getApiBaseUrl()}/api/v1/app${normalized}`;
+    return `${getApiBaseUrl()}/api/v1/${scope}${normalized}`;
 }
 
 function getAccessToken(): string | null {
@@ -469,6 +496,7 @@ interface RequestOptions {
     body?: JsonValue;
     auth?: boolean;
     retryOnUnauthorized?: boolean;
+    scope?: ApiScope;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -476,7 +504,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         method = 'GET',
         body,
         auth = true,
-        retryOnUnauthorized = true
+        retryOnUnauthorized = true,
+        scope = 'app'
     } = options;
 
     const headers: Record<string, string> = {
@@ -497,7 +526,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         }
     }
 
-    const response = await fetch(buildUrl(path), {
+    const response = await fetch(buildUrl(path, scope), {
         method,
         headers,
         credentials: 'include',
@@ -536,9 +565,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 async function requestForm<T>(
     path: string,
     formData: FormData,
-    options: { auth?: boolean; retryOnUnauthorized?: boolean } = {}
+    options: { auth?: boolean; retryOnUnauthorized?: boolean; scope?: ApiScope } = {}
 ): Promise<T> {
-    const { auth = true, retryOnUnauthorized = true } = options;
+    const { auth = true, retryOnUnauthorized = true, scope = 'app' } = options;
     const headers: Record<string, string> = {};
 
     if (auth) {
@@ -553,7 +582,7 @@ async function requestForm<T>(
         headers['x-csrf-token'] = csrfToken;
     }
 
-    const response = await fetch(buildUrl(path), {
+    const response = await fetch(buildUrl(path, scope), {
         method: 'POST',
         headers,
         credentials: 'include',
@@ -1035,6 +1064,35 @@ export const appApi = {
             return request<AppGroceryListItem>(`/grocery-lists/${listId}/items/${itemId}`, {
                 method: 'PATCH',
                 body: { checked }
+            });
+        }
+    },
+
+    skills: {
+        async list() {
+            const data = await request<{ skills: AppAgentSkill[] }>('/skills', {
+                scope: 'agent'
+            });
+            return data.skills || [];
+        },
+        async importUrl(url: string) {
+            return request<AppSkillImportResult>('/skills/import/url', {
+                method: 'POST',
+                scope: 'agent',
+                body: { url }
+            });
+        },
+        async importZip(file: File) {
+            const formData = new FormData();
+            formData.append('file', file);
+            return requestForm<AppSkillImportResult>('/skills/import/zip', formData, {
+                scope: 'agent'
+            });
+        },
+        async uninstall(skillId: string) {
+            return request<{ deleted: boolean; skill_id: string }>(`/skills/${encodeURIComponent(skillId)}`, {
+                method: 'DELETE',
+                scope: 'agent'
             });
         }
     },

@@ -40,6 +40,10 @@
         "title": "旅行规划",
         "path": "/travel-planner"
     },
+    "SkillManagement": {
+        "title": "Skill 管理",
+        "path": "/skills"
+    },
     "Login": {
         "title": "登录",
         "path": "/login"
