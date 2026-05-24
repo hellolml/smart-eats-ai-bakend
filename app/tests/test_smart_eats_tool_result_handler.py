@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from app.agent.agents.smart_eats import (
+    TOOL_NAMES,
+    _TOOL_RESULT_DISPATCH,
     _tool_result_handler,
     smart_intent_resolver,
     smart_tool_args_normalizer,
@@ -10,6 +12,21 @@ from app.agent.state import ChatState
 
 def _build_state() -> ChatState:
     return ChatState(session_id="s1", user_id="u1", message="test", context={})
+
+
+def test_tool_result_dispatch_table_keeps_business_handlers_explicit():
+    expected_tools = {
+        TOOL_NAMES["get_fridge_items"],
+        TOOL_NAMES["search_recipes"],
+        TOOL_NAMES["rag_search_recipes"],
+        TOOL_NAMES["search_restaurants"],
+        TOOL_NAMES["get_ip_location"],
+        TOOL_NAMES["geocode_location"],
+        TOOL_NAMES["plan_route"],
+    }
+
+    assert expected_tools.issubset(_TOOL_RESULT_DISPATCH.keys())
+    assert all(callable(_TOOL_RESULT_DISPATCH[name]) for name in expected_tools)
 
 
 def test_get_fridge_items_empty_relaxed_to_llm():

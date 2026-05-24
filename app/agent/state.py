@@ -26,6 +26,7 @@ class ChatState:
     planner_retry_count: int = 0
     action: Any | None = None
     provider: str | None = None
+    resolved_model_config: dict[str, Any] | None = None
     agent_type: str | None = None
     client_ip: str | None = None
     intent: str | None = None

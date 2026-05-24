@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import os
 import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Annotated, Any, Callable, TypedDict
 
 from app.agent.agents.base import default_writer_prompt, normalize_action_from_raw
 from app.common.config import settings
@@ -15,6 +14,7 @@ from app.agent.schemas import FinalAction, FinalAnswer, FinalAnswerArgs
 from app.agent import history, memory
 from app.agent.tools.location_cache import load_cached_location
 from app.agent.tools.restaurant_cache import load_cached_restaurants
+from langgraph.graph.message import add_messages
 
 # 规则分层说明：
 # - 代码规则（本文件）：可测试、可确定执行的逻辑（意图判定、工具编排、参数归一化、结果兜底）。
@@ -183,6 +183,7 @@ class SmartEatsState:
     planner_retry_count: int = 0
     action: Any | None = None
     provider: str | None = None
+    resolved_model_config: dict[str, Any] | None = None
     agent_type: str | None = None
     client_ip: str | None = None
     intent: str | None = None
@@ -220,20 +221,125 @@ class SmartEatsGraphConfig:
     best_effort_fallback_handler: Any = None
 
 
-_SMART_EATS_TOOL_RUNTIME_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-    "smart_eats_tool_runtime_context",
-    default={},
-)
+@dataclass(frozen=True)
+class SmartEatsRuntimeContext:
+    redis_client: Any
+    db: Any
+    user_id: str | None
+    context: dict[str, Any] | None
+    session_id: str
+    client_ip: str | None
+    last_user_message: str | None
+    servers_path: str | None
+
+    def as_tool_payload(self) -> dict[str, Any]:
+        return dict(self.__dict__)
+
+
+class SmartEatsGraphState(TypedDict, total=False):
+    messages: Annotated[list[Any], add_messages]
+    session_id: str
+    user_id: str | None
+    message: str | None
+    trace_id: str | None
+    scene: str
+    context_overrides: dict[str, Any] | None
+    snapshot: dict[str, Any] | None
+    context: dict[str, Any] | None
+    thought: str | None
+    steps_left: int
+    turn_index: int
+    step_index: int
+    tool_calls: list[dict[str, Any]]
+    pending_tool_calls: list[dict[str, Any]]
+    tool_results_batch: list[dict[str, Any]]
+    observations: list[dict[str, Any]]
+    final_json: dict[str, Any] | None
+    planner_retry_count: int
+    action: Any | None
+    provider: str | None
+    resolved_model_config: dict[str, Any] | None
+    agent_type: str | None
+    client_ip: str | None
+    intent: str | None
+    intent_confidence: float
+    intent_slots: dict[str, Any]
+    intent_need_clarify: bool
+    intent_clarify_question: str | None
+    location_source: str | None
+    task_stage: str | None
+    tool_plan: list[dict[str, Any]]
+    recovery_path: list[str]
+    resume_from_checkpoint: bool
+    checkpoint_ref: str | None
+    replay_from_checkpoint: bool
+    resume_payload: dict[str, Any] | None
+    last_user_message: str | None
+    user_message_logged: bool
+    history: list[dict[str, Any]]
+    events: list[dict[str, Any]]
+    runtime_context: dict[str, Any]
+
+
 _SMART_EATS_STATE_FIELDS = set(SmartEatsState.__dataclass_fields__.keys())
 
 
 def _state_from_dict(payload: dict[str, Any]) -> SmartEatsState:
     filtered = {key: value for key, value in payload.items() if key in _SMART_EATS_STATE_FIELDS}
+    filtered["events"] = []
     return SmartEatsState(**filtered)
 
 
 def _state_to_dict(state: SmartEatsState) -> dict[str, Any]:
     return dict(state.__dict__)
+
+
+def _state_update(state: SmartEatsState) -> dict[str, Any]:
+    return _state_to_dict(state)
+
+
+def _initialize_graph_state(payload: dict[str, Any]) -> dict[str, Any]:
+    state = _state_from_dict(payload)
+    output = _state_update(state)
+    output["messages"] = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    return output
+
+
+def _latest_ai_messages(messages: Any) -> list[Any]:
+    from langchain_core.messages import AIMessage
+
+    if not isinstance(messages, list):
+        return []
+    for index in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[index], AIMessage):
+            return [messages[index]]
+    return []
+
+
+def _latest_tool_messages(messages: Any) -> list[Any]:
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    if not isinstance(messages, list):
+        return []
+    latest_ai_index: int | None = None
+    latest_tool_call_ids: set[str] = set()
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, AIMessage) and message.tool_calls:
+            latest_ai_index = index
+            latest_tool_call_ids = {
+                call.get("id")
+                for call in message.tool_calls
+                if isinstance(call, dict) and isinstance(call.get("id"), str)
+            }
+            break
+    if latest_ai_index is None or not latest_tool_call_ids:
+        return []
+    return [
+        message
+        for message in messages[latest_ai_index + 1:]
+        if isinstance(message, ToolMessage) and message.tool_call_id in latest_tool_call_ids
+    ]
 
 
 def _build_submit_final_answer_tool() -> Any:
@@ -259,16 +365,16 @@ def _build_official_runtime_context(
     redis_client: Any,
     servers_path: str | None,
 ) -> dict[str, Any]:
-    return {
-        "redis_client": redis_client,
-        "db": db,
-        "user_id": state.user_id,
-        "context": state.context,
-        "session_id": state.session_id,
-        "client_ip": state.client_ip,
-        "last_user_message": state.last_user_message or state.message,
-        "servers_path": servers_path,
-    }
+    return SmartEatsRuntimeContext(
+        redis_client=redis_client,
+        db=db,
+        user_id=state.user_id,
+        context=state.context,
+        session_id=state.session_id,
+        client_ip=state.client_ip,
+        last_user_message=state.last_user_message or state.message,
+        servers_path=servers_path,
+    ).as_tool_payload()
 
 
 def _decode_tool_content(raw_content: Any) -> Any:
@@ -341,22 +447,12 @@ async def _invoke_tool_node_with_runtime(
         db=db,
         redis_client=redis_client,
     )
-    token = _SMART_EATS_TOOL_RUNTIME_CONTEXT.set(runtime_payload)
-    try:
-        return await tool_node.ainvoke({"messages": ai_messages})
-    finally:
-        _SMART_EATS_TOOL_RUNTIME_CONTEXT.reset(token)
+    return await tool_node.ainvoke({"messages": ai_messages, "runtime_context": runtime_payload})
 
 
-def _build_tools_node_output(state: dict[str, Any], chat_state: SmartEatsState, tool_output: Any, ai_messages: list[Any]) -> dict[str, Any]:
-    tool_messages = _normalize_official_tool_messages(tool_output)
-    call_args_map = _collect_tool_call_args(ai_messages)
-
-    output = dict(state)
-    output.update(_state_to_dict(chat_state))
-    output["_tool_messages"] = tool_messages
-    output["_tool_call_args"] = call_args_map
-    output["next_action"] = "tool_postprocess"
+def _build_tools_node_output(chat_state: SmartEatsState, tool_output: Any) -> dict[str, Any]:
+    output = _state_update(chat_state)
+    output["messages"] = _normalize_official_tool_messages(tool_output)
     return output
 
 
@@ -468,7 +564,30 @@ def _finalize_official_after_tools(chat_state: SmartEatsState, agent_config: Sma
 
 
 def _official_is_final(state: dict[str, Any]) -> bool:
-    return bool(state.get("next_action") == "final" or state.get("final_json"))
+    return bool(state.get("final_json"))
+
+
+def _route_after_prepare(state: dict[str, Any]) -> str:
+    route = "__end__" if _official_is_final(state) else "agent"
+    logger.info("graph_route node=prepare route=%s session_id=%s", route, state.get("session_id"))
+    return route
+
+
+def _route_after_agent(state: dict[str, Any]) -> str:
+    if _official_is_final(state):
+        route = "__end__"
+    else:
+        from langgraph.prebuilt import tools_condition
+
+        route = tools_condition(state, messages_key="messages")
+    logger.info("graph_route node=agent route=%s session_id=%s", route, state.get("session_id"))
+    return route
+
+
+def _route_after_tools(state: dict[str, Any]) -> str:
+    route = "__end__" if _official_is_final(state) else "agent"
+    logger.info("graph_route node=tools route=%s session_id=%s", route, state.get("session_id"))
+    return route
 
 
 def _merge_context(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
@@ -498,61 +617,77 @@ async def _ensure_chat_session(db: Any, state: SmartEatsState) -> None:
         await db.commit()
 
 
-async def _refresh_observation_context(
+def _should_persist_user_message(state: SmartEatsState) -> bool:
+    return bool(state.message and (not state.user_message_logged or state.last_user_message != state.message))
+
+
+async def _load_runtime_context_sources(
     db: Any,
     redis_client: Any,
     state: SmartEatsState,
-    agent_config: SmartEatsGraphConfig,
-    emit_context_event: bool = True,
-) -> None:
-    should_log = False
-    if state.message:
-        should_log = not state.user_message_logged or state.last_user_message != state.message
-
-    history_coro = history.load_history(
-        db,
-        redis_client,
-        state.session_id,
-        settings.CHAT_HISTORY_LIMIT,
-        state.message if not should_log else None,
-    )
-    memory_coro = memory.search_memories(db, state.user_id, state.message or "", redis_client=redis_client)
-    cached_location_coro = load_cached_location(redis_client, state.session_id)
-    cached_restaurants_coro = load_cached_restaurants(redis_client, state.session_id)
-    state.history, memories, cached_location, cached_restaurants = await asyncio.gather(
-        history_coro,
-        memory_coro,
-        cached_location_coro,
-        cached_restaurants_coro,
-    )
-
-    if state.message and should_log:
-        logger.info(
-            "user_message session_id=%s message=%s",
-            state.session_id,
-            state.message,
-        )
-        await history.save_user_message(
+    *,
+    should_log: bool,
+) -> tuple[list[dict[str, Any]], list[str], Any, Any]:
+    return await asyncio.gather(
+        history.load_history(
             db,
             redis_client,
             state.session_id,
-            state.message,
-        )
-        state.user_message_logged = True
-        state.last_user_message = state.message
+            settings.CHAT_HISTORY_LIMIT,
+            state.message if not should_log else None,
+        ),
+        memory.search_memories(db, state.user_id, state.message or "", redis_client=redis_client),
+        load_cached_location(redis_client, state.session_id),
+        load_cached_restaurants(redis_client, state.session_id),
+    )
 
+
+async def _persist_user_message_once(
+    db: Any,
+    redis_client: Any,
+    state: SmartEatsState,
+    *,
+    should_log: bool,
+) -> None:
+    if not state.message or not should_log:
+        return
+    logger.info(
+        "user_message session_id=%s message=%s",
+        state.session_id,
+        state.message,
+    )
+    await history.save_user_message(
+        db,
+        redis_client,
+        state.session_id,
+        state.message,
+    )
+    state.user_message_logged = True
+    state.last_user_message = state.message
+
+
+async def _compact_runtime_history(
+    redis_client: Any,
+    state: SmartEatsState,
+) -> str | None:
     state.history, summary = await history.maybe_compress_history(
         redis_client,
         state.provider or settings.LLM_PROVIDER,
         state.session_id,
         state.history,
     )
+    return summary
 
-    state.turn_index = sum(1 for item in state.history if item.get("role") == "user") + (1 if state.message else 0)
 
-    state.intent = smart_intent_resolver(state) or "unknown"
-
-    context = {"ui_scene": state.scene or "chat"}
+def _build_base_prompt_context(
+    state: SmartEatsState,
+    *,
+    memories: list[str],
+    cached_location: Any,
+    cached_restaurants: Any,
+    summary: str | None,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {"ui_scene": state.scene or "chat"}
     context["user_message"] = state.message or ""
     context["history"] = state.history
     if summary:
@@ -588,13 +723,23 @@ async def _refresh_observation_context(
         "checkpoint_ref": state.checkpoint_ref,
         "replay_from_checkpoint": state.replay_from_checkpoint,
     }
+    return context
 
+
+def _merge_prompt_context_overrides(state: SmartEatsState, context: dict[str, Any]) -> dict[str, Any]:
     extra = smart_context_extender(state)
     if extra:
         context = _merge_context(context, extra)
     if isinstance(state.context_overrides, dict) and state.context_overrides:
         context = _merge_context(context, state.context_overrides)
+    return context
 
+
+def _resolve_runtime_skills(
+    state: SmartEatsState,
+    context: dict[str, Any],
+    agent_config: SmartEatsGraphConfig,
+) -> tuple[dict[str, Any], str]:
     from app.agent.skills.runtime import SkillRuntime
 
     skill_runtime = SkillRuntime(
@@ -616,10 +761,21 @@ async def _refresh_observation_context(
         if skill_runtime.active_skills
         else list(agent_config.tool_names)
     )
+    return context, skill_runtime.system_prompt_addendum
+
+
+def _finalize_prompt_context(
+    state: SmartEatsState,
+    context: dict[str, Any],
+    agent_config: SmartEatsGraphConfig,
+    *,
+    skill_prompt: str,
+    emit_context_event: bool,
+) -> None:
     context["system_prompt"] = agent_config.system_prompt_builder(
         {
             "context": context,
-            "skill_prompt": skill_runtime.system_prompt_addendum,
+            "skill_prompt": skill_prompt,
         }
     )
     state.context = context
@@ -631,6 +787,43 @@ async def _refresh_observation_context(
             sorted(state.context.keys()),
         )
         state.events.append({"event": "context", "data": state.context})
+
+
+async def _refresh_observation_context(
+    db: Any,
+    redis_client: Any,
+    state: SmartEatsState,
+    agent_config: SmartEatsGraphConfig,
+    emit_context_event: bool = True,
+) -> None:
+    should_log = _should_persist_user_message(state)
+    state.history, memories, cached_location, cached_restaurants = await _load_runtime_context_sources(
+        db,
+        redis_client,
+        state,
+        should_log=should_log,
+    )
+    await _persist_user_message_once(db, redis_client, state, should_log=should_log)
+    summary = await _compact_runtime_history(redis_client, state)
+    state.turn_index = sum(1 for item in state.history if item.get("role") == "user") + (1 if state.message else 0)
+    state.intent = smart_intent_resolver(state) or "unknown"
+
+    context = _build_base_prompt_context(
+        state,
+        memories=memories,
+        cached_location=cached_location,
+        cached_restaurants=cached_restaurants,
+        summary=summary,
+    )
+    context = _merge_prompt_context_overrides(state, context)
+    context, skill_prompt = _resolve_runtime_skills(state, context, agent_config)
+    _finalize_prompt_context(
+        state,
+        context,
+        agent_config,
+        skill_prompt=skill_prompt,
+        emit_context_event=emit_context_event,
+    )
 
 
 def _record_agent_metric(state: SmartEatsState, name: str, **tags: Any) -> None:
@@ -1430,34 +1623,38 @@ def build_smart_eats_graph(
     db: Any,
     redis_client: Any,
     provider: str | None = None,
+    resolved_model_config: dict[str, Any] | None = None,
 ) -> Any:
     """SmartEats 专属官方图构建入口。"""
     from uuid import uuid4
 
-    from langchain_core.messages import AIMessage
-    from langgraph.graph import END, StateGraph
-    from langgraph.prebuilt import ToolNode, tools_condition
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langgraph.graph import StateGraph
+    from langgraph.prebuilt import ToolNode
 
-    from app.agent.llm_adapters import OpenAIPlanner
-    from app.agent.tools_registry import list_tools, to_langchain_tools
+    from app.agent.llm_adapters import OpenAIPlanner, ProviderRegistry, build_planner
+    from app.agent.tools_registry import get_langchain_tools
 
     agent_config = get_smart_eats_agent_config()
-    planner = OpenAIPlanner(provider=provider)
+    planner_config = (
+        ProviderRegistry.from_resolved_config(resolved_model_config)
+        if isinstance(resolved_model_config, dict) and resolved_model_config.get("source") == "user_config"
+        else None
+    )
+    planner = build_planner(provider=provider, config=planner_config)
     allowed_tools = agent_config.tool_names
 
     tool_node = ToolNode(
         [
-            *to_langchain_tools(
-                allowlist=allowed_tools,
-                runtime_context_factory=lambda: _SMART_EATS_TOOL_RUNTIME_CONTEXT.get(),
-            ),
+            *get_langchain_tools(allowlist=allowed_tools),
             _build_submit_final_answer_tool(),
         ],
         messages_key="messages",
     )
 
-    async def observe_node(state: dict[str, Any]) -> dict[str, Any]:
-        chat_state = _state_from_dict(state)
+    async def prepare_node(state: dict[str, Any]) -> dict[str, Any]:
+        initialized = _initialize_graph_state(state)
+        chat_state = _state_from_dict(initialized)
         first_round = (
             chat_state.steps_left <= 0
             and not chat_state.tool_calls
@@ -1474,15 +1671,11 @@ def build_smart_eats_graph(
             emit_context_event=first_round,
         )
 
-        output = dict(state)
-        output.update(_state_to_dict(chat_state))
-        if chat_state.final_json:
-            output["next_action"] = "final"
-            return output
-        output["next_action"] = "think"
+        output = _state_update(chat_state)
+        output["messages"] = initialized.get("messages", [])
         return output
 
-    async def think_node(state: dict[str, Any]) -> dict[str, Any]:
+    async def agent_node(state: dict[str, Any]) -> dict[str, Any]:
         chat_state = _state_from_dict(state)
 
         if chat_state.intent_need_clarify and chat_state.intent_confidence < INTENT_CLARIFY_CONFIDENCE_THRESHOLD:
@@ -1491,10 +1684,7 @@ def build_smart_eats_graph(
                 NOTE_TEMPLATE_KEYS["intent_clarify"],
                 title_override=question,
             )
-            output = dict(state)
-            output.update(_state_to_dict(chat_state))
-            output["next_action"] = "final"
-            return output
+            return _state_update(chat_state)
 
         system = None
         if chat_state.context:
@@ -1508,7 +1698,10 @@ def build_smart_eats_graph(
                 item for item in chat_state.context.get("allowed_tools", [])
                 if isinstance(item, str) and item in allowed_tools
             ] or allowed_tools
-        available_tool_schemas = list_tools(current_allowed_tools)
+        current_langchain_tools = [
+            *get_langchain_tools(allowlist=current_allowed_tools, inject_runtime_context=False),
+            _build_submit_final_answer_tool(),
+        ]
 
         image_parts: list[dict[str, Any]] = []
         active_planner = planner
@@ -1535,19 +1728,14 @@ def build_smart_eats_graph(
                     str(exc),
                 )
 
-        if image_parts:
-            decision = await active_planner.plan_tool_calls(
-                system,
-                user,
-                available_tool_schemas,
-                image_parts=image_parts,
-            )
-        else:
-            decision = await active_planner.plan_tool_calls(system, user, available_tool_schemas)
-        output = dict(state)
-
-        raw_content = decision.get("content") if isinstance(decision, dict) else ""
-        normalized_tool_calls = decision.get("tool_calls") if isinstance(decision, dict) else []
+        planner_messages = [SystemMessage(content=system), HumanMessage(content=user)]
+        ai_message = await active_planner.ainvoke_with_tools(
+            planner_messages,
+            current_langchain_tools,
+            image_parts=image_parts or None,
+        )
+        raw_content = ai_message.content
+        normalized_tool_calls = ai_message.tool_calls
 
         if isinstance(normalized_tool_calls, list) and normalized_tool_calls:
             tool_calls: list[dict[str, Any]] = []
@@ -1574,9 +1762,9 @@ def build_smart_eats_graph(
                 )
 
             if tool_calls:
-                output.update(_state_to_dict(chat_state))
-                output["messages"] = [AIMessage(content="", tool_calls=tool_calls)]
-                output["next_action"] = tools_condition(output, messages_key="messages")
+                ai_message.tool_calls = tool_calls
+                output = _state_update(chat_state)
+                output["messages"] = [ai_message]
                 return output
 
         content = raw_content if isinstance(raw_content, str) else ""
@@ -1585,25 +1773,18 @@ def build_smart_eats_graph(
             if isinstance(mapped, FinalAction):
                 final = mapped.answer
                 chat_state.final_json = final.model_dump() if isinstance(final, FinalAnswer) else final
-                output.update(_state_to_dict(chat_state))
-                output["next_action"] = "final"
-                return output
+                return _state_update(chat_state)
 
         final_action = planner.final_action_from_text(content)
         final = final_action.answer
         chat_state.final_json = final.model_dump() if isinstance(final, FinalAnswer) else final
-        output.update(_state_to_dict(chat_state))
-        output["next_action"] = "final"
-        return output
+        return _state_update(chat_state)
 
     async def tools_node(state: dict[str, Any]) -> dict[str, Any]:
         chat_state = _state_from_dict(state)
-        ai_messages = state.get("messages") if isinstance(state.get("messages"), list) else []
+        ai_messages = _latest_ai_messages(state.get("messages"))
         if not ai_messages:
-            output = dict(state)
-            output.update(_state_to_dict(chat_state))
-            output["next_action"] = "think"
-            return output
+            return _state_update(chat_state)
 
         tool_output = await _invoke_tool_node_with_runtime(
             tool_node,
@@ -1612,12 +1793,8 @@ def build_smart_eats_graph(
             db=db,
             redis_client=redis_client,
         )
-        return _build_tools_node_output(state, chat_state, tool_output, ai_messages)
-
-    async def tool_postprocess_node(state: dict[str, Any]) -> dict[str, Any]:
-        chat_state = _state_from_dict(state)
-        tool_messages = state.get("_tool_messages") if isinstance(state.get("_tool_messages"), list) else []
-        call_args_map = state.get("_tool_call_args") if isinstance(state.get("_tool_call_args"), dict) else {}
+        tool_messages = _normalize_official_tool_messages(tool_output)
+        call_args_map = _collect_tool_call_args(ai_messages)
 
         await _apply_official_tool_postprocess(
             chat_state,
@@ -1628,48 +1805,27 @@ def build_smart_eats_graph(
             agent_config=agent_config,
         )
         _finalize_official_after_tools(chat_state, agent_config)
-
-        output = dict(state)
-        output.update(_state_to_dict(chat_state))
-        output.pop("_tool_messages", None)
-        output.pop("_tool_call_args", None)
-        output["messages"] = []
-        output["next_action"] = "final" if chat_state.final_json else "observe"
-        return output
-
-    async def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
-        chat_state = _state_from_dict(state)
         if not chat_state.final_json:
-            chat_state.final_json = _fallback_final()
-        output = dict(state)
-        output.update(_state_to_dict(chat_state))
-        output["next_action"] = "final"
+            await _refresh_observation_context(
+                db,
+                redis_client,
+                chat_state,
+                agent_config,
+                emit_context_event=False,
+            )
+
+        output = _state_update(chat_state)
+        output["messages"] = tool_messages
         return output
 
-    graph = StateGraph(dict)
-    graph.add_node("observe", observe_node)
-    graph.add_node("think", think_node)
+    graph = StateGraph(SmartEatsGraphState)
+    graph.add_node("prepare", prepare_node)
+    graph.add_node("agent", agent_node)
     graph.add_node("tools", tools_node)
-    graph.add_node("tool_postprocess", tool_postprocess_node)
-    graph.add_node("finalize", finalize_node)
 
-    graph.add_conditional_edges(
-        "observe",
-        lambda state: END if _official_is_final(state) else "think",
-    )
-    graph.add_conditional_edges(
-        "think",
-        lambda state: "tools" if state.get("next_action") == "tools" else "finalize",
-    )
-    graph.add_conditional_edges(
-        "tools",
-        lambda state: "tool_postprocess" if state.get("next_action") == "tool_postprocess" else "observe",
-    )
-    graph.add_conditional_edges(
-        "tool_postprocess",
-        lambda state: "finalize" if _official_is_final(state) else "observe",
-    )
-    graph.add_edge("finalize", END)
-    graph.set_entry_point("observe")
+    graph.add_conditional_edges("prepare", _route_after_prepare)
+    graph.add_conditional_edges("agent", _route_after_agent)
+    graph.add_conditional_edges("tools", _route_after_tools)
+    graph.set_entry_point("prepare")
     logger.info("agent_graph_runtime mode=official agent=smart_eats phase=dedicated")
     return graph

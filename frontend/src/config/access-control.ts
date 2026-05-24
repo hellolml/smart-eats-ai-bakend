@@ -8,7 +8,8 @@ export const PROTECTED_ROUTES = [
     '/skills',
     '/profile',
     '/preferences',
-    '/security-settings'
+    '/security-settings',
+    '/model-settings'
 ] as const;
 
 export const GUEST_NAV_PATHS = ['/blind-box', '/wheel', '/login'] as const;

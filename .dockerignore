@@ -17,3 +17,7 @@ node_modules
 .claude
 memory
 *.log
+*.log*
+Dockerfile*
+.dockerignore
+coverage/

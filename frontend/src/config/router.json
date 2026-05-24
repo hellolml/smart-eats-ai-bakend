@@ -24,6 +24,10 @@
         "title": "安全设置",
         "path": "/security-settings"
     },
+    "ModelSettings": {
+        "title": "AI 模型设置",
+        "path": "/model-settings"
+    },
     "BlindBox": {
         "title": "盲盒摇一摇",
         "path": "/blind-box"

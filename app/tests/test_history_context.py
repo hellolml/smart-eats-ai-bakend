@@ -5,10 +5,39 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
+from app.agent import memory
 from app.agent.agents.smart_eats import _refresh_observation_context, get_smart_eats_agent_config
 from app.agent.state import ChatState
 from app.infra.db import AsyncSessionLocal
 from app.infra.models.chat import ChatMessage, ChatSession
+
+
+@pytest.mark.asyncio
+async def test_user_memory_store_adapter_delegates_to_existing_memory_functions(monkeypatch):
+    calls = []
+
+    async def _fake_store_memory(db, user_id, text, redis_client=None):
+        calls.append(("put", db, user_id, text, redis_client))
+
+    async def _fake_search_memories(db, user_id, query, limit=3, redis_client=None):
+        calls.append(("search", db, user_id, query, limit, redis_client))
+        return ["喜欢清淡口味"]
+
+    monkeypatch.setattr(memory, "store_memory", _fake_store_memory)
+    monkeypatch.setattr(memory, "search_memories", _fake_search_memories)
+
+    store = memory.UserMemoryStoreAdapter(
+        db="db",
+        redis_client="redis",
+        namespace=("users", "u1"),
+    )
+
+    await store.put({"content": "喜欢清淡口味"})
+    result = await store.search("口味", limit=5)
+
+    assert calls[0] == ("put", "db", "u1", "喜欢清淡口味", "redis")
+    assert calls[1] == ("search", "db", "u1", "口味", 5, "redis")
+    assert result == [{"namespace": "u1", "content": "喜欢清淡口味"}]
 
 
 @pytest.mark.asyncio

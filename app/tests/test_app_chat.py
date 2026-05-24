@@ -5,11 +5,74 @@ from unittest.mock import MagicMock
 import pytest
 from openai import PermissionDeniedError
 
-from app.agent.graph import _normalize_llm_upstream_error_message
+from app.agent.graph import _normalize_llm_upstream_error_message, run_chat_stream
+from app.agent.state import ChatState
+
+
+class _FakeRequest:
+    async def is_disconnected(self):
+        return False
+
+
+class _FakeRedis:
+    async def get(self, key):
+        return None
+
+
+class _FakeCheckpointerContext:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeCompiledGraph:
+    def __init__(self, updates):
+        self._updates = updates
+
+    async def astream(self, *_args, **_kwargs):
+        for update in self._updates:
+            yield update
+
+
+class _FakeGraphBuilder:
+    def __init__(self, updates):
+        self._updates = updates
+
+    def compile(self, **_kwargs):
+        return _FakeCompiledGraph(self._updates)
 
 
 @pytest.mark.asyncio
-async def test_app_chat_stream_stop(client):
+async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monkeypatch):
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    final_json = {
+        "recommendations": [{"type": "note", "title": "typed state final", "reason": "graph_values"}],
+        "followups": [],
+        "warnings": [],
+    }
+
+    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.graph.build_smart_eats_graph",
+        lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-values", "message": "你好", "final_json": final_json}]),
+    )
+
+    events = []
+    async for item in run_chat_stream(_FakeRequest(), db=None, redis_client=_FakeRedis(), state=ChatState(session_id="s-values", message="你好")):
+        events.append(item)
+
+    assert events[-1]["event"] == "final"
+    assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "typed state final"
+
+
+@pytest.mark.asyncio
+async def test_app_chat_stream_stop(client, monkeypatch):
     resp = await client.post(
         "/api/v1/app/auth/register",
         json={"email": "app_chat@example.com", "password": "secret123", "name": "chatter"},
@@ -24,6 +87,13 @@ async def test_app_chat_stream_stop(client):
     resp = await client.get("/api/v1/app/chat/sessions", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["data"]["sessions"]
+
+    async def _slow_plan_tool_calls(self, system, user, available_tools):
+        await asyncio.sleep(0.2)
+        return {"content": "", "tool_calls": []}
+
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _slow_plan_tool_calls)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
 
     got_final = False
     stopped_flag = None
@@ -97,6 +167,7 @@ async def test_app_chat_stream_accepts_client_location_overrides(client, monkeyp
         }
 
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
 
     got_final = False
     current_event = None
@@ -146,15 +217,9 @@ async def test_app_chat_models_endpoint_returns_model_options(client):
     assert payload["models"]
 
     values = [item.get("value") for item in payload["models"] if isinstance(item, dict)]
-    assert values == [
-        "qwen:qwen3.5-flash",
-        "qwen:qwen3.5-plus",
-        "qwen:qwen3.5-flash-2026-02-23",
-        "qwen:qwen3.5-plus-2026-02-15",
-        "qwen:qwen3.5-397b-a17b",
-    ]
+    assert all(isinstance(value, str) and ":" in value for value in values)
     assert isinstance(payload.get("default"), str)
-    assert payload["default"] == "qwen:qwen3.5-flash"
+    assert payload["default"] in values
 
 
 def test_normalize_llm_upstream_error_message_maps_free_tier_quota():

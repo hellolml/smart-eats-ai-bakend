@@ -4,15 +4,180 @@ import json
 import pytest
 
 from app.agent.agents.smart_eats import _best_effort_final_from_observations, get_smart_eats_agent_config
-from app.agent.graph import _render_final_text
+from app.agent.graph import _render_final_text, run_chat_stream
 from app.agent.state import ChatState
 
 
+class _FakeRequest:
+    async def is_disconnected(self):
+        return False
+
+
+class _FakeRedis:
+    async def get(self, key):
+        return None
+
+
+class _FakeCheckpointerContext:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeCompiledGraph:
+    def __init__(self, updates):
+        self._updates = updates
+
+    async def astream(self, *_args, **_kwargs):
+        for update in self._updates:
+            yield update
+
+
+class _FakeGraphBuilder:
+    def __init__(self, updates):
+        self._updates = updates
+
+    def compile(self, **_kwargs):
+        return _FakeCompiledGraph(self._updates)
+
+
+class _FakeStatefulCheckpointerContext:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 @pytest.mark.asyncio
-async def test_chat_stream_stop(client):
+async def test_run_chat_stream_resume_without_pending_checkpoint_uses_state_input(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    final_json = {
+        "recommendations": [{"type": "note", "title": "继续", "reason": "resume"}],
+        "followups": [],
+        "warnings": [],
+    }
+    captured = {}
+
+    class _ResumeGraph:
+        async def aget_state(self, _config):
+            return None
+
+        async def astream(self, input_payload, *_args, **kwargs):
+            captured["input_payload"] = input_payload
+            captured["config"] = kwargs.get("config")
+            yield {"session_id": "s-resume", "message": "继续", "final_json": final_json}
+
+    class _ResumeGraphBuilder:
+        def compile(self, **_kwargs):
+            return _ResumeGraph()
+
+    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeStatefulCheckpointerContext())
+    monkeypatch.setattr("app.agent.graph.build_smart_eats_graph", lambda **_kwargs: _ResumeGraphBuilder())
+
+    state = ChatState(
+        session_id="s-resume",
+        message="继续",
+        resume_from_checkpoint=True,
+        resume_payload={"message": "继续上次"},
+    )
+    events = []
+
+    async for item in run_chat_stream(_FakeRequest(), db=None, redis_client=_FakeRedis(), state=state):
+        events.append(item)
+
+    assert isinstance(captured["input_payload"], dict)
+    assert captured["input_payload"]["resume_from_checkpoint"] is True
+    assert captured["config"]["recursion_limit"] == 64
+    assert [item["event"] for item in events].count("final") == 1
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_preserves_core_event_contract(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    final_json = {
+        "recommendations": [{"type": "note", "title": "你好", "reason": "direct"}],
+        "followups": [],
+        "warnings": [],
+    }
+
+    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.graph.build_smart_eats_graph",
+        lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-contract", "message": "你好", "final_json": final_json}]),
+    )
+
+    state = ChatState(session_id="s-contract", message="你好")
+    events = []
+
+    async for item in run_chat_stream(_FakeRequest(), db=None, redis_client=_FakeRedis(), state=state):
+        events.append(item)
+
+    event_names = [item["event"] for item in events]
+    assert event_names == ["thinking", "thinking", "delta", "final"]
+    assert events[0]["data"] == {"status": "start"}
+    assert events[1]["data"] == {"status": "done"}
+    assert events[-1]["data"]["stopped"] is False
+    assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "你好"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_cancellation_emits_single_stopped_final(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    class CancelRedis:
+        async def get(self, key):
+            return b"1"
+
+    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.graph.build_smart_eats_graph",
+        lambda **_kwargs: _FakeGraphBuilder([
+            {
+                "session_id": "s-cancel",
+                "final_json": {
+                    "recommendations": [{"type": "note", "title": "不应输出", "reason": "cancelled"}],
+                    "followups": [],
+                    "warnings": [],
+                },
+            }
+        ]),
+    )
+
+    events = []
+    async for item in run_chat_stream(_FakeRequest(), db=None, redis_client=CancelRedis(), state=ChatState(session_id="s-cancel", message="停下")):
+        events.append(item)
+
+    final_events = [item for item in events if item["event"] == "final"]
+    assert len(final_events) == 1
+    assert final_events[0]["data"] == {"stopped": True}
+    assert all(item["event"] != "delta" for item in events)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_stop(client, monkeypatch):
     resp = await client.post("/api/v1/chat/sessions")
     assert resp.status_code == 200
     session_id = resp.json()["data"]["session_id"]
+
+    async def _slow_plan_tool_calls(self, system, user, available_tools):
+        await asyncio.sleep(0.2)
+        return {"content": "", "tool_calls": []}
+
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _slow_plan_tool_calls)
 
     got_tool_call = False
     got_delta = False

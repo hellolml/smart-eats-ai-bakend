@@ -124,6 +124,48 @@ async def _apply_turn_preference_extraction(
     await db.commit()
 
 
+def _build_graph_config(state: ChatState) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "configurable": {"thread_id": state.session_id},
+        "recursion_limit": 64,
+    }
+    if state.checkpoint_ref:
+        config["configurable"]["checkpoint_id"] = state.checkpoint_ref
+    return config
+
+
+async def _load_graph_snapshot(graph: Any, config: dict[str, Any], checkpointer: Any) -> Any:
+    if not checkpointer:
+        return None
+    if hasattr(graph, "aget_state"):
+        return await graph.aget_state(config)
+    return graph.get_state(config)
+
+
+def _resolve_graph_input(state: ChatState, snapshot: Any, checkpointer: Any) -> Any:
+    has_pending = bool(snapshot and getattr(snapshot, "next", None))
+    if has_pending and checkpointer:
+        resume_payload: dict[str, Any] = {}
+        user_message = (state.message or "").strip()
+        if user_message:
+            resume_payload["message"] = user_message
+        if state.context_overrides:
+            resume_payload["context_overrides"] = state.context_overrides
+        if Command and resume_payload:
+            return Command(resume=resume_payload)
+        return None
+
+    if state.resume_from_checkpoint and checkpointer:
+        if snapshot and getattr(snapshot, "values", None):
+            return None
+        return state.__dict__
+
+    if state.replay_from_checkpoint:
+        return None
+
+    return state.__dict__
+
+
 async def run_chat_stream(
     request: Request,
     db: AsyncSession,
@@ -148,51 +190,21 @@ async def run_chat_stream(
                 db=db,
                 redis_client=redis_client,
                 provider=provider,
+                resolved_model_config=state.resolved_model_config,
             ).compile(checkpointer=checkpointer)
             latest_state = state
             last_final_json: dict[str, Any] | None = None
-            config = {"configurable": {"thread_id": state.session_id}}
-            if state.checkpoint_ref:
-                config["configurable"]["checkpoint_id"] = state.checkpoint_ref
-
-            user_message = (state.message or "").strip()
-            snapshot = None
-            if checkpointer:
-                if hasattr(graph, "aget_state"):
-                    snapshot = await graph.aget_state(config)
-                else:
-                    snapshot = graph.get_state(config)
+            config = _build_graph_config(state)
+            snapshot = await _load_graph_snapshot(graph, config, checkpointer)
             has_pending = bool(snapshot and getattr(snapshot, "next", None))
+            input_payload = _resolve_graph_input(state, snapshot, checkpointer)
 
-            if has_pending and checkpointer:
-                resume_payload: dict[str, Any] = {}
-                if user_message:
-                    resume_payload["message"] = user_message
-                if state.context_overrides:
-                    resume_payload["context_overrides"] = state.context_overrides
-                if Command and resume_payload:
-                    input_payload = Command(resume=resume_payload)
-                else:
-                    input_payload = None
+            if has_pending:
                 logger.info(
                     "agent_auto_resume session_id=%s trace_id=%s",
                     state.session_id,
                     trace_id,
                 )
-            elif state.resume_from_checkpoint and checkpointer and Command:
-                resume_payload = state.resume_payload or {}
-                if state.message:
-                    resume_payload.setdefault("message", state.message)
-                if state.context_overrides:
-                    resume_payload.setdefault("context_overrides", state.context_overrides)
-                if resume_payload:
-                    input_payload = Command(resume=resume_payload)
-                else:
-                    input_payload = None
-            elif state.replay_from_checkpoint:
-                input_payload = None
-            else:
-                input_payload = state.__dict__
 
             if input_payload is None:
                 if not snapshot or not getattr(snapshot, "values", None):

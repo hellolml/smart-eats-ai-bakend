@@ -53,6 +53,8 @@ from app.domain.app.mappers import (
     map_preferences,
     map_restaurant,
 )
+from app.domain.llm_config.repository import list_user_configs
+from app.domain.llm_config.resolver import resolve_model_config
 from app.domain.game.blindbox_map import map_blindbox_result
 from app.domain.recipe.service import RecipeService
 from app.domain.restaurant.service import RestaurantService
@@ -132,6 +134,7 @@ class AppBffService:
                 display_rows.append(
                     {
                         "value": value,
+                        "source": "env",
                         "provider": provider,
                         "model": model_id,
                         "label": model_aliases.get(model_id, model_id),
@@ -147,6 +150,7 @@ class AppBffService:
             display_rows.append(
                 {
                     "value": value,
+                    "source": "env",
                     "provider": fallback_provider.name,
                     "model": fallback_model,
                     "label": model_aliases.get(fallback_model, fallback_model),
@@ -166,11 +170,53 @@ class AppBffService:
         }
 
     @staticmethod
+    async def list_chat_models_for_user(db: AsyncSession, user_id: str | None) -> dict[str, Any]:
+        data = AppBffService.list_chat_models()
+        if not user_id:
+            return data
+
+        user_configs = [config for config in await list_user_configs(db, user_id) if config.enabled]
+        if not user_configs:
+            return data
+
+        models: list[dict[str, Any]] = []
+        providers: list[str] = []
+        default_value: str | None = None
+        first_value: str | None = None
+        for config in user_configs:
+            value = f"config:{config.id}:{config.model_planner}"
+            first_value = first_value or value
+            models.append(
+                {
+                    "value": value,
+                    "source": "user_config",
+                    "config_id": config.id,
+                    "provider": config.provider_type,
+                    "model": config.model_planner,
+                    "label": f"{config.display_name} / {config.model_planner}",
+                    "provider_label": config.display_name,
+                    "is_default": config.is_default,
+                }
+            )
+            if config.provider_type not in providers:
+                providers.append(config.provider_type)
+            if config.is_default:
+                default_value = value
+
+        return {
+            "models": models,
+            "default": default_value or first_value,
+            "providers": providers,
+        }
+
+    @staticmethod
     def resolve_chat_provider(model_value: str | None) -> str | None:
         if not isinstance(model_value, str):
             return None
         value = model_value.strip()
-        if not value:
+        if value.startswith("env:"):
+            value = value.removeprefix("env:")
+        if not value or value.startswith("config:"):
             return None
         provider_key, _, model_id = value.partition(":")
         provider_key = provider_key.strip().lower()
@@ -2609,6 +2655,20 @@ class AppBffService:
             request_client_ip=client_ip,
             redis_client=redis_client,
             rate_limit_key_prefix=rate_limit_key_prefix,
+        )
+        requested_model = (payload or {}).get("model")
+        resolved = await resolve_model_config(db, user_id, requested_model)
+        state.provider = resolved.provider_value if resolved.source == "env" else None
+        state.resolved_model_config = resolved.model_dump()
+        logger.info(
+            "chat_model_resolved session_id=%s requested_model=%s source=%s provider=%s provider_value=%s model=%s config_id=%s",
+            session_id,
+            requested_model,
+            resolved.source,
+            resolved.provider,
+            resolved.provider_value,
+            resolved.model_planner,
+            resolved.config_id,
         )
         state.trace_id = trace_id
         return state

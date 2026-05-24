@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib
 import pkgutil
-from typing import Any, Awaitable, Callable
+from typing import Annotated, Any, Awaitable, Callable
 import builtins
 import logging
 import re
@@ -14,6 +14,11 @@ try:
     from langchain_core.tools import StructuredTool
 except ImportError:  # pragma: no cover
     StructuredTool = None
+
+try:
+    from langgraph.prebuilt.tool_node import InjectedState
+except ImportError:  # pragma: no cover
+    InjectedState = None
 
 
 @dataclass
@@ -122,34 +127,43 @@ def _tool_args_model_name(tool_name: str) -> str:
     return f"{base}Args"
 
 
-def _build_args_model(tool_name: str, input_schema: dict[str, Any]):
+def _build_args_model(
+    tool_name: str,
+    input_schema: dict[str, Any],
+    *,
+    inject_runtime_context: bool = False,
+):
     model_name = _tool_args_model_name(tool_name)
-    if not isinstance(input_schema, dict):
-        return create_model(model_name)
-
-    properties = input_schema.get("properties")
-    if not isinstance(properties, dict):
-        return create_model(model_name)
-
-    required = set(input_schema.get("required") or [])
     fields: dict[str, tuple[Any, Any]] = {}
 
-    for field_name, schema in properties.items():
-        field_schema = schema if isinstance(schema, dict) else {}
-        python_type = _json_schema_to_python_type(field_schema)
-        description = field_schema.get("description")
+    if isinstance(input_schema, dict):
+        properties = input_schema.get("properties")
+        if isinstance(properties, dict):
+            required = set(input_schema.get("required") or [])
+            for field_name, schema in properties.items():
+                field_schema = schema if isinstance(schema, dict) else {}
+                python_type = _json_schema_to_python_type(field_schema)
+                description = field_schema.get("description")
 
-        if field_name in required:
-            fields[field_name] = (python_type, Field(default=..., description=description))
-        else:
-            fields[field_name] = (python_type | None, Field(default=None, description=description))
+                if field_name in required:
+                    fields[field_name] = (python_type, Field(default=..., description=description))
+                else:
+                    fields[field_name] = (python_type | None, Field(default=None, description=description))
+
+    if inject_runtime_context and InjectedState is not None:
+        fields["runtime_context"] = (
+            Annotated[dict[str, Any], InjectedState("runtime_context")],
+            Field(default_factory=dict),
+        )
 
     return create_model(model_name, **fields)
 
 
-def to_langchain_tools(
+def get_langchain_tools(
     allowlist: list[str] | None = None,
     runtime_context_factory: Callable[[], dict[str, Any] | None] | None = None,
+    *,
+    inject_runtime_context: bool = True,
 ) -> list[Any]:
     if StructuredTool is None:
         raise RuntimeError("langchain_core.tools.StructuredTool is unavailable")
@@ -163,10 +177,17 @@ def to_langchain_tools(
         if allowlist and name not in names:
             continue
 
-        args_schema = _build_args_model(spec.name, spec.input_schema)
+        args_schema = _build_args_model(
+            spec.name,
+            spec.input_schema,
+            inject_runtime_context=inject_runtime_context,
+        )
 
         async def _runner(_spec: ToolSpec = spec, **kwargs: Any) -> Any:
             payload = dict(kwargs)
+            runtime_context = payload.pop("runtime_context", None)
+            if isinstance(runtime_context, dict):
+                payload.update(runtime_context)
             if runtime_context_factory:
                 context_payload = runtime_context_factory() or {}
                 if isinstance(context_payload, dict):
@@ -183,6 +204,19 @@ def to_langchain_tools(
         tools.append(tool)
 
     return tools
+
+
+def to_langchain_tools(
+    allowlist: list[str] | None = None,
+    runtime_context_factory: Callable[[], dict[str, Any] | None] | None = None,
+    *,
+    inject_runtime_context: bool = True,
+) -> list[Any]:
+    return get_langchain_tools(
+        allowlist=allowlist,
+        runtime_context_factory=runtime_context_factory,
+        inject_runtime_context=inject_runtime_context,
+    )
 
 
 def preview_result(result: Any) -> Any:

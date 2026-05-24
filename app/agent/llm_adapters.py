@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from contextvars import ContextVar, Token
@@ -10,6 +11,7 @@ from typing import Any, AsyncGenerator, Callable
 
 import httpx
 from openai import AsyncOpenAI
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agent.schemas import (
     AgentAction,
@@ -64,9 +66,29 @@ class ProviderConfig:
     model_planner: str
     model_writer: str
     model_vision_planner: str | None = None
+    client_pool_key: str | None = None
 
 
 class ProviderRegistry:
+    @staticmethod
+    def from_resolved_config(config: dict[str, Any]) -> ProviderConfig:
+        api_key = config.get("api_key")
+        fingerprint = ""
+        if isinstance(api_key, str) and api_key:
+            fingerprint = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+        config_id = str(config.get("config_id") or "custom")
+        model_planner = str(config.get("model_planner") or "")
+        model_writer = str(config.get("model_writer") or model_planner)
+        return ProviderConfig(
+            name=str(config.get("provider") or config.get("display_name") or "openai_compatible"),
+            api_key=api_key if isinstance(api_key, str) else None,
+            base_url=str(config.get("base_url") or ""),
+            model_planner=model_planner,
+            model_writer=model_writer,
+            model_vision_planner=config.get("model_vision_planner") if isinstance(config.get("model_vision_planner"), str) else None,
+            client_pool_key=f"config:{config_id}:{fingerprint}",
+        )
+
     @staticmethod
     def get(provider: str | None) -> ProviderConfig:
         raw = (provider or settings.LLM_PROVIDER or "qwen").strip().lower()
@@ -104,13 +126,15 @@ class ProviderRegistry:
 
 _CLIENT_POOL: dict[str, AsyncOpenAI] = {}
 _CLIENT_POOL_LOCK = threading.Lock()
+_ANTHROPIC_CLIENT_POOL: dict[str, httpx.AsyncClient] = {}
+_ANTHROPIC_CLIENT_POOL_LOCK = threading.Lock()
 
 
 def _get_shared_client(config: ProviderConfig) -> AsyncOpenAI | None:
     """获取或创建共享的 AsyncOpenAI 客户端，复用 TCP/TLS 连接。"""
     if not config.api_key:
         return None
-    key = f"{config.name}:{config.base_url}"
+    key = config.client_pool_key or f"{config.name}:{config.base_url}"
     client = _CLIENT_POOL.get(key)
     if client is not None:
         return client
@@ -128,10 +152,90 @@ def _get_shared_client(config: ProviderConfig) -> AsyncOpenAI | None:
         return client
 
 
+def _get_shared_anthropic_client(config: ProviderConfig) -> httpx.AsyncClient | None:
+    if not config.api_key:
+        return None
+    key = config.client_pool_key or f"{config.name}:{config.base_url}"
+    client = _ANTHROPIC_CLIENT_POOL.get(key)
+    if client is not None:
+        return client
+    with _ANTHROPIC_CLIENT_POOL_LOCK:
+        client = _ANTHROPIC_CLIENT_POOL.get(key)
+        if client is not None:
+            return client
+        client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
+        _ANTHROPIC_CLIENT_POOL[key] = client
+        return client
+
+
+def _anthropic_messages_url(base_url: str) -> str:
+    root = base_url.rstrip("/")
+    return f"{root}/messages" if root.endswith("/v1") else f"{root}/v1/messages"
+
+
 class OpenAIPlanner:
-    def __init__(self, provider: str | None = None) -> None:
-        self.config = ProviderRegistry.get(provider)
+    def __init__(self, provider: str | None = None, config: ProviderConfig | None = None) -> None:
+        self.config = config or ProviderRegistry.get(provider)
         self.client = _get_shared_client(self.config)
+
+    async def ainvoke_with_tools(
+        self,
+        messages: list[Any],
+        tools: list[Any],
+        image_parts: list[dict[str, Any]] | None = None,
+    ) -> AIMessage:
+        system, user = self._messages_to_system_user(messages)
+        available_tools = self._langchain_tools_to_available_schemas(tools)
+        if image_parts:
+            decision = await self.plan_tool_calls(
+                system,
+                user,
+                available_tools,
+                image_parts=image_parts,
+            )
+        else:
+            decision = await self.plan_tool_calls(system, user, available_tools)
+        content = decision.get("content") if isinstance(decision, dict) else ""
+        tool_calls = decision.get("tool_calls") if isinstance(decision, dict) else []
+        return AIMessage(
+            content=content if isinstance(content, str) else "",
+            tool_calls=tool_calls if isinstance(tool_calls, list) else [],
+        )
+
+    def _messages_to_system_user(self, messages: list[Any]) -> tuple[str, str]:
+        system_parts: list[str] = []
+        user_parts: list[str] = []
+        for message in messages:
+            content = self._message_content_to_text(getattr(message, "content", None))
+            if not content:
+                continue
+            if isinstance(message, SystemMessage):
+                system_parts.append(content)
+            elif isinstance(message, HumanMessage):
+                user_parts.append(content)
+        return "\n".join(system_parts).strip(), "\n".join(user_parts).strip()
+
+    def _langchain_tools_to_available_schemas(self, tools: list[Any]) -> list[dict[str, Any]]:
+        available: list[dict[str, Any]] = []
+        for tool in tools:
+            name = getattr(tool, "name", None)
+            if not isinstance(name, str) or not name or name == "submit_final_answer":
+                continue
+            args_schema = getattr(tool, "args_schema", None)
+            if hasattr(args_schema, "model_json_schema"):
+                input_schema = args_schema.model_json_schema()
+            elif isinstance(args_schema, dict):
+                input_schema = args_schema
+            else:
+                input_schema = {"type": "object", "properties": {}}
+            available.append(
+                {
+                    "name": name,
+                    "description": str(getattr(tool, "description", "") or ""),
+                    "input_schema": input_schema,
+                }
+            )
+        return available
 
     async def plan(
         self,
@@ -395,6 +499,177 @@ class OpenAIPlanner:
         except Exception as exc:
             logger.info("intent_classify_fallback reason=%s", str(exc))
             return IntentDecision()
+
+
+class AnthropicPlanner(OpenAIPlanner):
+    def __init__(self, config: ProviderConfig) -> None:
+        self.config = config
+        self.client = _get_shared_anthropic_client(config)
+
+    async def plan_tool_calls(
+        self,
+        system: str,
+        user: str,
+        available_tools: list[dict[str, Any]],
+        image_parts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if not self.client:
+            raise RuntimeError("LLM provider is not configured")
+        context = _log_context()
+        requested_image_parts = image_parts if isinstance(image_parts, list) else []
+        model = (
+            self.config.model_vision_planner
+            if requested_image_parts and self.config.model_vision_planner
+            else self.config.model_planner
+        )
+        if _should_log_request("system"):
+            logger.info(
+                "planner request provider=%s model=%s session_id=%s turn=%s step=%s system=%s",
+                self.config.name,
+                model,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                system,
+            )
+        if _should_log_request("user"):
+            logger.info(
+                "planner request provider=%s model=%s session_id=%s turn=%s step=%s user=%s",
+                self.config.name,
+                model,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                user,
+            )
+
+        response = await self.client.post(
+            _anthropic_messages_url(self.config.base_url),
+            headers={
+                "x-api-key": self.config.api_key or "",
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 2048,
+                "system": system,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": self._build_anthropic_user_content(user, requested_image_parts),
+                    }
+                ],
+                "tools": self._build_anthropic_tools(available_tools),
+                "tool_choice": {"type": "auto"},
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        content_blocks = data.get("content") if isinstance(data, dict) else []
+        if not isinstance(content_blocks, list):
+            content_blocks = []
+
+        text_parts: list[str] = []
+        normalized_calls: list[dict[str, Any]] = []
+        for index, block in enumerate(content_blocks):
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "text" and isinstance(block.get("text"), str):
+                text_parts.append(block["text"].strip())
+                continue
+            if block_type != "tool_use":
+                continue
+            tool_name = block.get("name")
+            if not isinstance(tool_name, str) or not tool_name:
+                raise RuntimeError("invalid planner response: missing tool name")
+            args = block.get("input") if isinstance(block.get("input"), dict) else {}
+            call_id = block.get("id")
+            normalized_calls.append(
+                {
+                    "name": tool_name,
+                    "args": args,
+                    "id": call_id if isinstance(call_id, str) and call_id else f"toolu_{index}",
+                    "type": "tool_call",
+                }
+            )
+
+        content = "\n".join(part for part in text_parts if part).strip()
+        logger.info(
+            "planner response provider=%s model=%s session_id=%s turn=%s step=%s tool_calls=%s content=%s",
+            self.config.name,
+            model,
+            context.get("session_id"),
+            context.get("turn"),
+            context.get("step"),
+            [item.get("name") for item in normalized_calls],
+            content,
+        )
+        return {"content": content, "tool_calls": normalized_calls}
+
+    def _build_anthropic_tools(self, available_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        for item in available_tools:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            input_schema = item.get("parameters") or item.get("input_schema")
+            if not isinstance(input_schema, dict):
+                input_schema = {"type": "object", "properties": {}}
+            tools.append(
+                {
+                    "name": name,
+                    "description": str(item.get("description") or ""),
+                    "input_schema": input_schema,
+                }
+            )
+        tools.append(
+            {
+                "name": "submit_final_answer",
+                "description": "当你已收集足够信息并准备给用户最终回复时调用。",
+                "input_schema": FinalAnswerArgs.model_json_schema(),
+            }
+        )
+        return tools
+
+    def _build_anthropic_user_content(self, user: str, image_parts: list[dict[str, Any]]) -> str | list[dict[str, Any]]:
+        if not image_parts:
+            return user
+        content: list[dict[str, Any]] = [{"type": "text", "text": user}]
+        for item in image_parts:
+            if not isinstance(item, dict):
+                continue
+            image_url = item.get("image_url")
+            if item.get("type") != "image_url" or not isinstance(image_url, dict):
+                continue
+            url = image_url.get("url")
+            if not isinstance(url, str) or not url.startswith("data:") or ";base64," not in url:
+                continue
+            media_prefix, data = url.split(",", 1)
+            media_type = media_prefix.removeprefix("data:").removesuffix(";base64")
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data,
+                    },
+                }
+            )
+        return content
+
+    async def classify_intent(self, user: str, context: dict[str, Any] | None = None) -> IntentDecision:
+        return IntentDecision()
+
+
+def build_planner(provider: str | None = None, config: ProviderConfig | None = None) -> OpenAIPlanner:
+    if config and config.name == "anthropic":
+        return AnthropicPlanner(config=config)
+    return OpenAIPlanner(provider=provider, config=config)
 
 
 class OpenAIWriter:

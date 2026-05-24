@@ -73,6 +73,45 @@ export interface AppChatModelOption {
     model: string;
     label: string;
     provider_label?: string;
+    source?: 'env' | 'user_config';
+    config_id?: string;
+    is_default?: boolean;
+}
+
+export type AppLlmProviderType = 'openai_compatible' | 'anthropic';
+
+export interface AppLlmProviderConfig {
+    id: string;
+    user_id: string;
+    display_name: string;
+    provider_type: AppLlmProviderType;
+    base_url: string;
+    api_key_hint: string;
+    model_planner: string;
+    model_writer?: string | null;
+    model_vision_planner?: string | null;
+    enabled: boolean;
+    is_default: boolean;
+    last_tested_at?: string | null;
+    last_test_status?: string | null;
+    last_test_error?: string | null;
+}
+
+export interface AppLlmProviderConfigInput {
+    display_name: string;
+    provider_type?: AppLlmProviderType;
+    base_url: string;
+    api_key?: string;
+    model_planner: string;
+    model_writer?: string | null;
+    model_vision_planner?: string | null;
+    enabled?: boolean;
+    is_default?: boolean;
+}
+
+export interface AppLlmProviderConfigTestResult {
+    status: 'success' | 'failed';
+    error?: string | null;
 }
 
 export interface AppChatModelsResponse {
@@ -1100,6 +1139,37 @@ export const appApi = {
     chat: {
         async listModels() {
             return request<AppChatModelsResponse>('/chat/models');
+        },
+        async listModelConfigs() {
+            return request<AppLlmProviderConfig[]>('/chat/model-configs');
+        },
+        async createModelConfig(payload: AppLlmProviderConfigInput & { api_key: string }) {
+            return request<AppLlmProviderConfig>('/chat/model-configs', {
+                method: 'POST',
+                body: payload
+            });
+        },
+        async updateModelConfig(configId: string, payload: Partial<AppLlmProviderConfigInput>) {
+            return request<AppLlmProviderConfig>(`/chat/model-configs/${encodeURIComponent(configId)}`, {
+                method: 'PATCH',
+                body: payload
+            });
+        },
+        async deleteModelConfig(configId: string) {
+            return request<{ deleted: boolean }>(`/chat/model-configs/${encodeURIComponent(configId)}`, {
+                method: 'DELETE'
+            });
+        },
+        async setDefaultModelConfig(configId: string) {
+            return request<AppLlmProviderConfig>(`/chat/model-configs/${encodeURIComponent(configId)}/default`, {
+                method: 'POST'
+            });
+        },
+        async testModelConfig(payload: { config_id?: string; provider_type?: AppLlmProviderType; base_url?: string; api_key?: string; model?: string }) {
+            return request<AppLlmProviderConfigTestResult>('/chat/model-configs/test', {
+                method: 'POST',
+                body: payload
+            });
         },
         async createSession(payload: { title?: string; scene?: string } = {}) {
             return request<AppChatSession>('/chat/session', {

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.agents.smart_eats import get_smart_eats_agent_config, SmartEatsState
+from app.agent.agents import smart_eats as smart_eats_module
+from app.agent.agents.smart_eats import build_smart_eats_graph, get_smart_eats_agent_config, SmartEatsState
+from app.agent.state import ChatState
 from app.agent.skills.loader import load_skills_from_path
 from app.agent.skills.resolver import SkillResolver
 
@@ -31,6 +33,59 @@ def test_smart_eats_tool_allowlist_includes_travel_tools():
 
     assert "travel_search_poi" in tool_names
     assert "travel_create_personal_map" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_travel_skill_allowed_tools_filter_planner_visible_tools(monkeypatch, override_redis):
+    captured = {"tool_names": []}
+
+    async def _noop_ensure_chat_session(db, state):
+        return None
+
+    async def _refresh_with_skill_allowlist(db, redis_client, state, agent_config, emit_context_event=True):
+        state.context = {
+            "system_prompt": "test system",
+            "allowed_tools": ["travel_search_poi"],
+        }
+
+    async def _fake_plan_tool_calls(self, system, user, available_tools):
+        captured["tool_names"] = [tool["name"] for tool in available_tools]
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "name": "submit_final_answer",
+                    "args": {
+                        "recommendations": [
+                            {"type": "note", "title": "旅行规划", "reason": "allowlist_filtered"}
+                        ],
+                        "followups": [],
+                        "warnings": [],
+                    },
+                    "id": "call_travel_allowlist",
+                    "type": "tool_call",
+                }
+            ],
+        }
+
+    async def _noop_save_tool_message(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
+    monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
+    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _refresh_with_skill_allowlist)
+    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", _noop_save_tool_message)
+
+    graph = build_smart_eats_graph(
+        db=None,
+        redis_client=override_redis,
+        provider=None,
+    ).compile()
+
+    result = await graph.ainvoke(ChatState(session_id="s-travel-allowlist", message="规划杭州旅行").__dict__)
+
+    assert captured["tool_names"] == ["travel_search_poi"]
+    assert result["final_json"]["recommendations"][0]["reason"] == "allowlist_filtered"
 
 
 @pytest.mark.asyncio
