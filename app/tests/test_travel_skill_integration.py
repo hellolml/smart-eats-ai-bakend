@@ -35,6 +35,19 @@ def test_smart_eats_tool_allowlist_includes_travel_tools():
     assert "travel_create_personal_map" in tool_names
 
 
+def test_skill_tool_call_limit_preserves_final_answer_and_limits_external_tools():
+    calls = [
+        {"name": "travel_search_poi", "args": {"keywords": "赛里木湖"}, "id": "call_1", "type": "tool_call"},
+        {"name": "travel_search_poi", "args": {"keywords": "伊宁"}, "id": "call_2", "type": "tool_call"},
+        {"name": "travel_search_poi", "args": {"keywords": "昭苏"}, "id": "call_3", "type": "tool_call"},
+        {"name": "submit_final_answer", "args": {"recommendations": [], "followups": [], "warnings": []}, "id": "final", "type": "tool_call"},
+    ]
+
+    limited = smart_eats_module._limit_skill_tool_calls(calls, max_tool_calls=2)
+
+    assert [item["id"] for item in limited] == ["call_1", "call_2", "final"]
+
+
 @pytest.mark.asyncio
 async def test_travel_skill_allowed_tools_filter_planner_visible_tools(monkeypatch, override_redis):
     captured = {"tool_names": []}

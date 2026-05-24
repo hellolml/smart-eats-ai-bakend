@@ -6,6 +6,7 @@ import Profile from '@/pages/Profile';
 import Preferences from '@/pages/Preferences';
 import SecuritySettings from '@/pages/SecuritySettings';
 import ModelSettings from '@/pages/ModelSettings';
+import Settings from '@/pages/Settings';
 import BlindBox from '@/pages/BlindBox';
 import Wheel from '@/pages/Wheel';
 import AiChat from '@/pages/AiChat';
@@ -44,6 +45,7 @@ const routeMap: Record<string, React.ReactNode> = {
     Preferences: <Preferences />,
     SecuritySettings: <SecuritySettings />,
     ModelSettings: <ModelSettings />,
+    Settings: <Settings />,
     BlindBox: <BlindBox />,
     Wheel: <Wheel />,
     AiChat: <AiChat />,
@@ -79,6 +81,7 @@ const routerIconMap: Record<string, any> = {
     Preferences: Settings2,
     SecuritySettings: Shield,
     ModelSettings: Settings2,
+    Settings: Settings2,
     BlindBox: Package,
     Wheel: RotateCw,
     AiChat: MessageSquare,
@@ -101,17 +104,15 @@ const allRoutes = Object.entries(router).map(([key, value]) => ({
 /* 底部导航栏显示的项 */
 export function getNavItems(isLoggedIn: boolean, config?: AppAuthPublicConfig) {
     const allowed = isLoggedIn ? AUTH_NAV_PATHS : GUEST_NAV_PATHS;
-    return allRoutes.filter((item) => {
-        if (!(allowed as readonly string[]).includes(item.to)) {
-            return false;
+    return allowed.flatMap((path) => {
+        if (path === '/register' && config && !config.auth.register) {
+            return [];
         }
-        if (item.to === '/register' && config && !config.auth.register) {
-            return false;
+        if (path === '/oauth/github/callback' && config && !config.auth.oauth.github) {
+            return [];
         }
-        if (item.to === '/oauth/github/callback' && config && !config.auth.oauth.github) {
-            return false;
-        }
-        return true;
+        const route = allRoutes.find((item) => item.to === path);
+        return route ? [route] : [];
     });
 }
 

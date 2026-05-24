@@ -5,6 +5,8 @@ const LOGIN_FLAG_KEY = 'isLoggedIn';
 const ME_CACHE_TTL_MS = 30 * 1000;
 const PUBLIC_CONFIG_CACHE_TTL_MS = 30 * 1000;
 
+let refreshInFlight: Promise<boolean> | null = null;
+
 type JsonValue = any;
 
 interface Envelope<T> {
@@ -498,36 +500,46 @@ async function parseResponseBody(response: Response): Promise<unknown> {
 }
 
 async function tryRefreshAccessToken(): Promise<boolean> {
-    const refreshToken = getRefreshToken();
-    const csrfToken = getCsrfToken();
-
-    const headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-    };
-    if (csrfToken) {
-        headers['x-csrf-token'] = csrfToken;
+    if (refreshInFlight) {
+        return refreshInFlight;
     }
 
-    const response = await fetch(buildUrl('/auth/refresh'), {
-        method: 'POST',
-        headers,
-        credentials: 'include',
-        body: JSON.stringify(
-            refreshToken
-                ? {
-                      refresh_token: refreshToken,
-                      refreshToken
-                  }
-                : {}
-        )
+    refreshInFlight = (async () => {
+        const refreshToken = getRefreshToken();
+        const csrfToken = getCsrfToken();
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json'
+        };
+        if (csrfToken) {
+            headers['x-csrf-token'] = csrfToken;
+        }
+
+        const response = await fetch(buildUrl('/auth/refresh'), {
+            method: 'POST',
+            headers,
+            credentials: 'include',
+            body: JSON.stringify(
+                refreshToken
+                    ? {
+                          refresh_token: refreshToken,
+                          refreshToken
+                      }
+                    : {}
+            )
+        });
+
+        if (!response.ok) return false;
+
+        const body = await parseResponseBody(response);
+        const data = parseEnvelope<AuthPayload>(body, response.status);
+        setTokens(data);
+        return Boolean(getAccessToken());
+    })().finally(() => {
+        refreshInFlight = null;
     });
 
-    if (!response.ok) return false;
-
-    const body = await parseResponseBody(response);
-    const data = parseEnvelope<AuthPayload>(body, response.status);
-    setTokens(data);
-    return Boolean(getAccessToken());
+    return refreshInFlight;
 }
 
 interface RequestOptions {

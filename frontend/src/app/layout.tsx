@@ -17,6 +17,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     const isSubPage = [
         '/preferences',
         '/security-settings',
+        '/model-settings',
+        '/settings/skills',
         '/blind-box',
         '/wheel',
         '/ai-chat'

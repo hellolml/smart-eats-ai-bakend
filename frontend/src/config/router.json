@@ -28,6 +28,10 @@
         "title": "AI 模型设置",
         "path": "/model-settings"
     },
+    "Settings": {
+        "title": "设置",
+        "path": "/settings"
+    },
     "BlindBox": {
         "title": "盲盒摇一摇",
         "path": "/blind-box"
@@ -46,7 +50,7 @@
     },
     "SkillManagement": {
         "title": "Skill 管理",
-        "path": "/skills"
+        "path": "/settings/skills"
     },
     "Login": {
         "title": "登录",

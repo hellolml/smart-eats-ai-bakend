@@ -57,11 +57,13 @@ class SkillRuntime:
             )
             for skill in active.skills
         ]
+        max_tool_calls = self._resolve_max_tool_calls_per_turn(active.skills)
         diagnostics = SkillDiagnostics(
             prompt_chars=len(prompt_addendum),
             denied_tools=tool_output.denied_tools,
             warnings=active.warnings,
             tool_sources=tool_output.tool_sources,
+            max_tool_calls_per_turn=max_tool_calls,
         )
         context_payload = self._build_context_payload(
             active_infos=active_infos,
@@ -92,6 +94,14 @@ class SkillRuntime:
             context=context_payload,
             diagnostics=diagnostics,
         )
+
+    def _resolve_max_tool_calls_per_turn(self, skills: list[Any]) -> int | None:
+        limits = [
+            skill.safety.max_tool_calls_per_turn
+            for skill in skills
+            if skill.safety.max_tool_calls_per_turn is not None and skill.safety.max_tool_calls_per_turn >= 0
+        ]
+        return min(limits) if limits else None
 
     def _build_context_payload(
         self,
