@@ -84,6 +84,7 @@ class SkillDiagnostics(BaseModel):
     denied_tools: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     tool_sources: dict[str, list[str]] = Field(default_factory=dict)
+    max_tool_calls_per_turn: int | None = None
 
 
 class SkillRuntimeResult(BaseModel):

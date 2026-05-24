@@ -56,7 +56,7 @@ const SecuritySettings = () => {
                 newPassword
             });
             toast.success('密码已成功修改', { id: 'update-pass' });
-            navigate('/profile');
+            navigate('/settings');
         } catch (error) {
             if (error instanceof ApiError) {
                 toast.error(error.message || '密码修改失败', { id: 'update-pass' });
@@ -100,7 +100,7 @@ const SecuritySettings = () => {
         <div className="space-y-6 pb-10 no-scrollbar">
             <div className="flex items-center gap-4">
                 <button
-                    onClick={() => navigate('/profile')}
+                    onClick={() => navigate('/settings')}
                     className="p-2 bg-white rounded-xl shadow-sm text-gray-600 active:scale-90 transition-transform"
                 >
                     <ChevronLeft size={20} />

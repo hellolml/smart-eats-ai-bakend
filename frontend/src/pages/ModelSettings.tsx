@@ -11,7 +11,7 @@ export default function ModelSettings() {
             <div className="mb-4 flex items-center gap-3 rounded-[1.5rem] border border-purple-50 bg-white p-4 shadow-sm">
                 <button
                     type="button"
-                    onClick={() => navigate(-1)}
+                    onClick={() => navigate('/settings')}
                     className="rounded-xl p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
                     title="返回"
                 >

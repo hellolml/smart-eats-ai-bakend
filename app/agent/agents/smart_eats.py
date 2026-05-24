@@ -414,6 +414,36 @@ def _collect_tool_call_args(ai_messages: list[Any]) -> dict[str, dict[str, Any]]
     return call_args_map
 
 
+def _skill_max_tool_calls_per_turn(context: dict[str, Any] | None) -> int | None:
+    if not isinstance(context, dict):
+        return None
+    diagnostics = context.get("skill_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    value = diagnostics.get("max_tool_calls_per_turn")
+    return value if isinstance(value, int) and value >= 0 else None
+
+
+def _limit_skill_tool_calls(
+    tool_calls: list[dict[str, Any]],
+    *,
+    max_tool_calls: int | None,
+) -> list[dict[str, Any]]:
+    if max_tool_calls is None:
+        return tool_calls
+    limited: list[dict[str, Any]] = []
+    external_count = 0
+    for call in tool_calls:
+        if call.get("name") == TOOL_NAMES["submit_final_answer"]:
+            limited.append(call)
+            continue
+        if external_count >= max_tool_calls:
+            continue
+        limited.append(call)
+        external_count += 1
+    return limited
+
+
 def _clear_system_directive_override(state: SmartEatsState) -> None:
     if isinstance(state.context_overrides, dict):
         state.context_overrides.pop(STATE_CONTEXT_OVERRIDE_KEYS["system_directive"], None)
@@ -1762,7 +1792,17 @@ def build_smart_eats_graph(
                 )
 
             if tool_calls:
-                ai_message.tool_calls = tool_calls
+                max_tool_calls = _skill_max_tool_calls_per_turn(chat_state.context)
+                limited_tool_calls = _limit_skill_tool_calls(tool_calls, max_tool_calls=max_tool_calls)
+                if len(limited_tool_calls) < len(tool_calls):
+                    logger.info(
+                        "skill_tool_calls_limited session_id=%s max=%s original=%s kept=%s",
+                        chat_state.session_id,
+                        max_tool_calls,
+                        len(tool_calls),
+                        len(limited_tool_calls),
+                    )
+                ai_message.tool_calls = limited_tool_calls
                 output = _state_update(chat_state)
                 output["messages"] = [ai_message]
                 return output

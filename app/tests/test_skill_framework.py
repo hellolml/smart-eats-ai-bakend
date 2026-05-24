@@ -13,15 +13,19 @@ def _write_skill(
     *,
     priority: int = 50,
     enabled: bool = True,
+    scenes: list[str] | None = None,
     keywords: list[str] | None = None,
     tools: list[str] | None = None,
     instructions: str = "Use this skill carefully.",
+    safety_lines: list[str] | None = None,
 ) -> None:
     skill_dir = root / skill_id
     skill_dir.mkdir(parents=True)
     (skill_dir / "instructions.md").write_text(instructions, encoding="utf-8")
+    scene_lines = "\n".join(f"    - {item}" for item in (scenes or ["chat"]))
     keyword_lines = "\n".join(f"    - {item}" for item in (keywords or []))
     tool_lines = "\n".join(f"    - {item}" for item in (tools or []))
+    safety_extra = "\n".join(f"  {item}" for item in (safety_lines or []))
     (skill_dir / "skill.yaml").write_text(
         f"""id: {skill_id}
 name: {skill_id.replace("_", " ").title()}
@@ -31,7 +35,7 @@ enabled: {str(enabled).lower()}
 priority: {priority}
 activation:
   scenes:
-    - chat
+{scene_lines}
   intents:
     - cook_home
   keywords:
@@ -47,6 +51,7 @@ tools:
 safety:
   can_override_global_rules: false
   allow_external_tools: false
+{safety_extra}
 """,
         encoding="utf-8",
     )
@@ -161,7 +166,33 @@ def test_skill_runtime_returns_prompt_tools_and_context(tmp_path):
     assert result.allowed_tools == ["get_user_info", "get_fridge_items"]
     assert set(result.context) == {"active_skills", "skill_allowed_tools", "skill_diagnostics"}
     assert result.context["active_skills"][0]["id"] == "home_chef"
+    assert result.context["skill_diagnostics"]["max_tool_calls_per_turn"] is None
     assert "Prefer fridge ingredients." in result.system_prompt_addendum
+
+
+def test_skill_runtime_exposes_strictest_tool_call_limit(tmp_path):
+    from app.agent.skills.runtime import SkillRuntime
+
+    _write_skill(
+        tmp_path,
+        "travel_planner",
+        scenes=["travel_planner"],
+        tools=["travel_search_poi"],
+        instructions="Plan trips.",
+        safety_lines=["max_tool_calls_per_turn: 4"],
+    )
+    runtime = SkillRuntime(
+        skills_path=tmp_path,
+        enabled=True,
+        max_active=2,
+        max_prompt_chars=1000,
+        global_allowlist=["travel_search_poi"],
+    )
+    state = SmartEatsState(session_id="s1", message="新疆旅行", scene="travel_planner")
+
+    result = runtime.resolve(state, {"user_message": state.message}, base_tools=[])
+
+    assert result.context["skill_diagnostics"]["max_tool_calls_per_turn"] == 4
 
 
 def test_smart_system_prompt_includes_skill_addendum():

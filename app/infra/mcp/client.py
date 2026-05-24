@@ -13,11 +13,34 @@ except ImportError:  # pragma: no cover
 
 _CLIENTS: dict[str, Any] = {}
 _CLIENT_LOCK = asyncio.Lock()
+_TOOLS_CACHE: dict[tuple[str, str], list[Any]] = {}
+_TOOLS_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+_CALL_SEMAPHORES: dict[tuple[str, str], asyncio.Semaphore] = {}
 logger = logging.getLogger("mcp")
 
 
 def _servers_key(servers: dict[str, Any]) -> str:
     return json.dumps(servers, sort_keys=True, ensure_ascii=True)
+
+
+def _tools_cache_key(servers: dict[str, Any], server: str) -> tuple[str, str]:
+    return (_servers_key(servers), server)
+
+
+def _tools_lock(key: tuple[str, str]) -> asyncio.Lock:
+    lock = _TOOLS_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _TOOLS_LOCKS[key] = lock
+    return lock
+
+
+def _call_semaphore(key: tuple[str, str]) -> asyncio.Semaphore:
+    semaphore = _CALL_SEMAPHORES.get(key)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(1)
+        _CALL_SEMAPHORES[key] = semaphore
+    return semaphore
 
 
 async def get_client(servers: dict[str, Any] | None) -> Any | None:
@@ -47,6 +70,36 @@ async def get_client(servers: dict[str, Any] | None) -> Any | None:
         return client
 
 
+async def _get_tools(servers: dict[str, Any], server: str, client: Any) -> list[Any]:
+    cache_key = _tools_cache_key(servers, server)
+    cached = _TOOLS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    async with _tools_lock(cache_key):
+        cached = _TOOLS_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
+        tools: list[Any] = []
+        for method_name in ("get_tools", "aget_tools"):
+            method = getattr(client, method_name, None)
+            if not method:
+                continue
+            params = list(inspect.signature(method).parameters)
+            if len(params) == 2:
+                result = method(server_name=server)
+            else:
+                result = method()
+            tools = await result if inspect.isawaitable(result) else result
+            break
+        if not tools:
+            raise RuntimeError("MCP client does not support tool listing")
+        _TOOLS_CACHE[cache_key] = tools
+        logger.info("MCP tools=%s", [getattr(item, "name", None) for item in tools])
+        return tools
+
+
 async def call_tool(
     servers: dict[str, Any] | None,
     server: str,
@@ -54,44 +107,29 @@ async def call_tool(
     args: dict[str, Any],
 ) -> Any:
     client = await get_client(servers)
-    if not client:
+    if not client or not servers:
         return None
-    tools: list[Any] = []
-    for method_name in ("get_tools", "aget_tools"):
-        method = getattr(client, method_name, None)
-        if not method:
-            continue
-        params = list(inspect.signature(method).parameters)
-        if len(params) == 2:
-            result = method(server_name=server)
-        else:
-            result = method()
-        if inspect.isawaitable(result):
-            tools = await result
-        else:
-            tools = result
-        break
-    if not tools:
-        raise RuntimeError("MCP client does not support tool listing")
-    logger.info("MCP tools=%s", [getattr(item, "name", None) for item in tools])
 
-    tool = next((item for item in tools if getattr(item, "name", None) == tool_name), None)
-    if not tool:
-        available = [getattr(item, "name", None) for item in tools]
-        raise RuntimeError(f"MCP tool not found: {tool_name}. Available: {available}")
+    cache_key = _tools_cache_key(servers, server)
+    async with _call_semaphore(cache_key):
+        tools = await _get_tools(servers, server, client)
+        tool = next((item for item in tools if getattr(item, "name", None) == tool_name), None)
+        if not tool:
+            available = [getattr(item, "name", None) for item in tools]
+            raise RuntimeError(f"MCP tool not found: {tool_name}. Available: {available}")
 
-    if hasattr(tool, "ainvoke"):
-        return await tool.ainvoke(args)
-    if hasattr(tool, "invoke"):
-        return tool.invoke(args)
-    raise RuntimeError("MCP tool does not support invocation")
+        if hasattr(tool, "ainvoke"):
+            return await tool.ainvoke(args)
+        if hasattr(tool, "invoke"):
+            return tool.invoke(args)
+        raise RuntimeError("MCP tool does not support invocation")
 
 
 def extract_payload(response: Any) -> Any:
     if response is None:
         return None
     if isinstance(response, tuple) and len(response) == 2:
-        content, _artifact = response
+        content = response[0]
         return content
     if isinstance(response, (dict, list)):
         return response

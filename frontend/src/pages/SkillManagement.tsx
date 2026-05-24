@@ -104,7 +104,7 @@ export default function SkillManagement() {
             <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                     <button
-                        onClick={() => navigate('/profile')}
+                        onClick={() => navigate('/settings')}
                         className="p-2 bg-white rounded-xl shadow-sm text-gray-600 active:scale-95 transition-transform"
                     >
                         <ChevronLeft size={20} />
