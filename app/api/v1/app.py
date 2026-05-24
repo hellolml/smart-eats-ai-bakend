@@ -47,6 +47,12 @@ from app.domain.app.schemas import (
 from app.domain.app.service import AppBffService
 from app.domain.decision.service import DecisionService
 from app.domain.group_decision.service import GroupDecisionService
+from app.domain.llm_config.schemas import (
+    LlmProviderConfigCreate,
+    LlmProviderConfigTestRequest,
+    LlmProviderConfigUpdate,
+)
+from app.domain.llm_config.service import LlmConfigService
 from app.tasks import fridge_recognition
 
 router = APIRouter()
@@ -159,9 +165,71 @@ class GroupDecisionVoteRequest(BaseModel):
 
 
 @router.get("/chat/models")
-async def list_chat_models(request: Request, _user_id: str = Depends(get_current_user_id)):
-    data = AppBffService.list_chat_models()
+async def list_chat_models(request: Request, db: db_dep, user_id: str = Depends(get_current_user_id)):
+    data = await AppBffService.list_chat_models_for_user(db, user_id)
     return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/chat/model-configs")
+async def list_model_configs(request: Request, db: db_dep, user_id: str = Depends(get_current_user_id)):
+    data = await LlmConfigService.list_configs(db, user_id)
+    return envelope([item.model_dump(mode="json") for item in data], getattr(request.state, "trace_id", ""))
+
+
+@router.post("/chat/model-configs")
+async def create_model_config(
+    payload: LlmProviderConfigCreate,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await LlmConfigService.create_config(db, user_id, payload)
+    return envelope(data.model_dump(mode="json"), getattr(request.state, "trace_id", ""))
+
+
+@router.patch("/chat/model-configs/{config_id}")
+async def update_model_config(
+    config_id: str,
+    payload: LlmProviderConfigUpdate,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await LlmConfigService.update_config(db, user_id, config_id, payload)
+    return envelope(data.model_dump(mode="json"), getattr(request.state, "trace_id", ""))
+
+
+@router.delete("/chat/model-configs/{config_id}")
+async def delete_model_config(
+    config_id: str,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await LlmConfigService.delete_config(db, user_id, config_id)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/chat/model-configs/{config_id}/default")
+async def set_default_model_config(
+    config_id: str,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await LlmConfigService.set_default(db, user_id, config_id)
+    return envelope(data.model_dump(mode="json"), getattr(request.state, "trace_id", ""))
+
+
+@router.post("/chat/model-configs/test")
+async def test_model_config(
+    payload: LlmProviderConfigTestRequest,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await LlmConfigService.test_config(db, user_id, payload)
+    return envelope(data.model_dump(mode="json"), getattr(request.state, "trace_id", ""))
 
 
 @router.post("/auth/register")

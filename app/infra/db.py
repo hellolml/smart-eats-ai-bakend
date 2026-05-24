@@ -59,6 +59,7 @@ async def init_db() -> None:
         game,
         grocery,
         group_decision,
+        llm_config,
         memory,
         preference,
         recipe,
@@ -114,6 +115,33 @@ async def _ensure_sqlite_columns(conn) -> None:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """
+    )
+
+    await conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS user_llm_provider_configs (
+            id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36),
+            display_name VARCHAR(120),
+            provider_type VARCHAR(32),
+            base_url VARCHAR(512),
+            api_key_encrypted TEXT,
+            api_key_hint VARCHAR(64),
+            model_planner VARCHAR(120),
+            model_writer VARCHAR(120),
+            model_vision_planner VARCHAR(120),
+            enabled BOOLEAN DEFAULT 1,
+            is_default BOOLEAN DEFAULT 0,
+            last_tested_at DATETIME,
+            last_test_status VARCHAR(24),
+            last_test_error TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_user_llm_provider_configs_user_id ON user_llm_provider_configs(user_id)"
     )
 
     group_session_cols_result = await conn.exec_driver_sql("PRAGMA table_info(group_decision_sessions)")

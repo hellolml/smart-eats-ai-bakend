@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Sequence
+from typing import Any, Sequence
 from uuid import uuid4
 
 import redis.asyncio as redis
@@ -45,6 +45,69 @@ async def store_memory(
             await redis_client.delete(_cache_key(user_id))
         except Exception:
             pass
+
+
+async def put_user_memory(
+    namespace: tuple[str, ...] | str,
+    value: str | dict[str, Any],
+    *,
+    db: AsyncSession,
+    redis_client: redis.Redis | None = None,
+) -> None:
+    user_id = _user_id_from_namespace(namespace)
+    content = value.get("content") if isinstance(value, dict) else value
+    await store_memory(db, user_id, str(content or ""), redis_client=redis_client)
+
+
+async def search_user_memories(
+    namespace: tuple[str, ...] | str,
+    query: str,
+    *,
+    db: AsyncSession,
+    redis_client: redis.Redis | None = None,
+    limit: int = 3,
+) -> list[dict[str, str]]:
+    user_id = _user_id_from_namespace(namespace)
+    rows = await search_memories(db, user_id, query, limit=limit, redis_client=redis_client)
+    return [{"namespace": user_id or "", "content": item} for item in rows]
+
+
+class UserMemoryStoreAdapter:
+    def __init__(
+        self,
+        *,
+        db: AsyncSession,
+        redis_client: redis.Redis | None = None,
+        namespace: tuple[str, ...] | str,
+    ) -> None:
+        self.db = db
+        self.redis_client = redis_client
+        self.namespace = namespace
+
+    async def put(self, value: str | dict[str, Any]) -> None:
+        await put_user_memory(
+            self.namespace,
+            value,
+            db=self.db,
+            redis_client=self.redis_client,
+        )
+
+    async def search(self, query: str, *, limit: int = 3) -> list[dict[str, str]]:
+        return await search_user_memories(
+            self.namespace,
+            query,
+            db=self.db,
+            redis_client=self.redis_client,
+            limit=limit,
+        )
+
+
+def _user_id_from_namespace(namespace: tuple[str, ...] | str) -> str | None:
+    if isinstance(namespace, str):
+        return namespace or None
+    if not namespace:
+        return None
+    return str(namespace[-1] or "") or None
 
 
 async def search_memories(

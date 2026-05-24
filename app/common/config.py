@@ -96,6 +96,8 @@ class Settings(BaseSettings):
     QWEN_MODEL_PLANNER: str = "qwen3.5-flash"
     QWEN_MODEL_WRITER: str = "qwen3.5-flash"
     LLM_REQUEST_LOG: str = "none"
+    LLM_CONFIG_ENCRYPTION_KEY: str | None = None
+    LLM_CONFIG_TEST_TIMEOUT_SECONDS: int = 15
     AGENT_MAX_STEPS: int = 6
     AGENT_SKILLS_ENABLED: bool = True
     AGENT_SKILLS_PATH: str = "agent_skills"

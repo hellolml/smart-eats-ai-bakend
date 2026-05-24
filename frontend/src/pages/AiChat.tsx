@@ -159,7 +159,7 @@ async function streamChatReply(
     options: StreamChatReplyOptions = {}
 ): Promise<string> {
     const token = authStore.getAccessToken();
-    const url = `${getStreamBaseUrl()}/api/v1/chat/sessions/${sessionId}/stream`;
+    const url = `${getStreamBaseUrl()}/api/v1/app/chat/session/${sessionId}/stream`;
     const requestBody: Record<string, unknown> = {
         message: input
     };
@@ -654,10 +654,12 @@ const AiChat = ({
                 const options = Array.isArray(modelMeta.models) ? modelMeta.models : [];
                 setModelOptions(options);
                 const storedModel = typeof window !== 'undefined' ? window.localStorage.getItem(MODEL_STORAGE_KEY) || '' : '';
-                const preferredModel = storedModel || (typeof modelMeta.default === 'string' ? modelMeta.default : '');
-                const resolvedModel = options.some((item) => item.value === preferredModel)
-                    ? preferredModel
-                    : (options[0]?.value || '');
+                const defaultModel = typeof modelMeta.default === 'string' ? modelMeta.default : '';
+                const storedOption = options.find((item) => item.value === storedModel);
+                const defaultOption = options.find((item) => item.value === defaultModel);
+                const resolvedModel = defaultOption?.source === 'user_config' && storedOption?.source !== 'user_config'
+                    ? defaultModel
+                    : (storedOption?.value || defaultOption?.value || options[0]?.value || '');
                 setSelectedModel(resolvedModel);
                 if (typeof window !== 'undefined') {
                     if (resolvedModel) {
@@ -1112,8 +1114,7 @@ const AiChat = ({
                             <span className="hidden md:inline text-[11px] text-gray-400 whitespace-nowrap">
                                 {selectedModelOption.provider_label || selectedModelOption.provider}
                             </span>
-                        )}
-                    </div>
+                        )}                    </div>
                 </div>
 
                 {/* Messages */}

@@ -159,6 +159,7 @@ def test_skill_runtime_returns_prompt_tools_and_context(tmp_path):
     result = runtime.resolve(state, {"user_message": state.message}, base_tools=["get_user_info"])
 
     assert result.allowed_tools == ["get_user_info", "get_fridge_items"]
+    assert set(result.context) == {"active_skills", "skill_allowed_tools", "skill_diagnostics"}
     assert result.context["active_skills"][0]["id"] == "home_chef"
     assert "Prefer fridge ingredients." in result.system_prompt_addendum
 

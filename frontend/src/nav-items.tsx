@@ -5,6 +5,7 @@ import FoodHunter from '@/pages/FoodHunter';
 import Profile from '@/pages/Profile';
 import Preferences from '@/pages/Preferences';
 import SecuritySettings from '@/pages/SecuritySettings';
+import ModelSettings from '@/pages/ModelSettings';
 import BlindBox from '@/pages/BlindBox';
 import Wheel from '@/pages/Wheel';
 import AiChat from '@/pages/AiChat';
@@ -42,6 +43,7 @@ const routeMap: Record<string, React.ReactNode> = {
     Profile: <Profile />,
     Preferences: <Preferences />,
     SecuritySettings: <SecuritySettings />,
+    ModelSettings: <ModelSettings />,
     BlindBox: <BlindBox />,
     Wheel: <Wheel />,
     AiChat: <AiChat />,
@@ -76,6 +78,7 @@ const routerIconMap: Record<string, any> = {
     Profile: User,
     Preferences: Settings2,
     SecuritySettings: Shield,
+    ModelSettings: Settings2,
     BlindBox: Package,
     Wheel: RotateCw,
     AiChat: MessageSquare,

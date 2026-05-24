@@ -4,10 +4,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.agent import tools_registry
 from app.agent.agents import smart_eats as smart_eats_module
 from app.agent.agents.smart_eats import build_smart_eats_graph, get_smart_eats_agent_config
+from app.agent.llm_adapters import AnthropicPlanner, OpenAIPlanner, ProviderConfig
 from app.agent.state import ChatState
 
 
@@ -22,7 +24,7 @@ def test_build_smart_eats_graph_returns_graph(override_redis):
     assert hasattr(graph, "add_node")
 
 
-def test_build_smart_eats_graph_contains_dedicated_nodes(override_redis):
+def test_build_smart_eats_graph_contains_native_long_term_nodes(override_redis):
     graph = build_smart_eats_graph(
         db=None,
         redis_client=override_redis,
@@ -30,7 +32,188 @@ def test_build_smart_eats_graph_contains_dedicated_nodes(override_redis):
     )
 
     node_names = set(getattr(graph, "nodes", {}).keys())
-    assert {"observe", "think", "tools", "tool_postprocess", "finalize"}.issubset(node_names)
+    assert {"prepare", "agent", "tools"}.issubset(node_names)
+    assert not {"initialize", "observe", "think", "tool_postprocess", "finalize"} & node_names
+
+
+def test_build_smart_eats_graph_uses_typed_state_and_message_accumulator():
+    assert smart_eats_module.SmartEatsGraphState.__annotations__["messages"] is not None
+    source = inspect.getsource(smart_eats_module.SmartEatsGraphState)
+    assert "add_messages" in source
+
+
+def test_initialize_graph_state_normalizes_api_payload_once():
+    state = ChatState(session_id="s-init", message="你好")
+
+    initialized = smart_eats_module._initialize_graph_state(state.__dict__)
+
+    assert initialized["session_id"] == "s-init"
+    assert initialized["message"] == "你好"
+    assert initialized["messages"] == []
+    assert "_tool_messages" not in initialized
+    assert "_tool_call_args" not in initialized
+
+
+def test_build_official_runtime_context_uses_typed_context_payload():
+    state = smart_eats_module.SmartEatsState(
+        session_id="s-runtime",
+        user_id="u1",
+        message="你好",
+        client_ip="127.0.0.1",
+    )
+    state.context = {"city": "杭州"}
+
+    payload = smart_eats_module._build_official_runtime_context(
+        state,
+        db="db",
+        redis_client="redis",
+        servers_path="/tmp/mcp.json",
+    )
+
+    assert payload["session_id"] == "s-runtime"
+    assert payload["user_id"] == "u1"
+    assert payload["context"] == {"city": "杭州"}
+    assert payload["last_user_message"] == "你好"
+    assert payload["servers_path"] == "/tmp/mcp.json"
+
+
+def test_state_from_dict_treats_events_as_transient_stream_output():
+    state = smart_eats_module.SmartEatsState(session_id="s-events")
+    state.events = [{"event": "tool_call", "data": {"name": "search_restaurants"}}]
+    state.tool_calls = [{"name": "search_restaurants", "args": {}, "latency_ms": 0}]
+
+    restored = smart_eats_module._state_from_dict(state.__dict__)
+
+    assert restored.events == []
+    assert restored.tool_calls == state.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_planner_adapter_returns_native_ai_message(monkeypatch):
+    async def _fake_plan_tool_calls(self, system, user, available_tools):
+        assert system == "system prompt"
+        assert user == "用户消息"
+        assert available_tools[0]["name"] == "demo_tool"
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "name": "demo_tool",
+                    "args": {"query": "火锅"},
+                    "id": "call_demo",
+                    "type": "tool_call",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
+    planner = OpenAIPlanner(provider=None)
+    tool = SimpleNamespace(
+        name="demo_tool",
+        description="demo",
+        args_schema=SimpleNamespace(
+            model_json_schema=lambda: {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            }
+        ),
+    )
+
+    message = await planner.ainvoke_with_tools(
+        [SystemMessage(content="system prompt"), HumanMessage(content="用户消息")],
+        [tool],
+    )
+
+    assert isinstance(message, AIMessage)
+    assert message.tool_calls[0]["name"] == "demo_tool"
+    assert message.tool_calls[0]["args"] == {"query": "火锅"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_planner_normalizes_tool_use(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "content": [
+                    {"type": "text", "text": ""},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_demo",
+                        "name": "demo_tool",
+                        "input": {"query": "烤肉"},
+                    },
+                ]
+            }
+
+    class FakeClient:
+        async def post(self, url, headers=None, json=None):
+            assert url == "https://api.anthropic.com/v1/messages"
+            assert headers["x-api-key"] == "sk-ant-test"
+            assert json["tools"][0]["name"] == "demo_tool"
+            return FakeResponse()
+
+    monkeypatch.setattr("app.agent.llm_adapters._get_shared_anthropic_client", lambda _config: FakeClient())
+    planner = AnthropicPlanner(
+        ProviderConfig(
+            name="anthropic",
+            api_key="sk-ant-test",
+            base_url="https://api.anthropic.com",
+            model_planner="claude-sonnet-4-6",
+            model_writer="claude-sonnet-4-6",
+        )
+    )
+    tool = SimpleNamespace(
+        name="demo_tool",
+        description="demo",
+        args_schema=SimpleNamespace(
+            model_json_schema=lambda: {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            }
+        ),
+    )
+
+    message = await planner.ainvoke_with_tools(
+        [SystemMessage(content="system prompt"), HumanMessage(content="用户消息")],
+        [tool],
+    )
+
+    assert isinstance(message, AIMessage)
+    assert message.tool_calls[0]["name"] == "demo_tool"
+    assert message.tool_calls[0]["args"] == {"query": "烤肉"}
+    assert message.tool_calls[0]["id"] == "toolu_demo"
+
+
+def test_build_tools_node_output_appends_tool_messages_without_replacing_existing_messages():
+    existing = HumanMessage(content="附近吃什么")
+    ai_message = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "geocode_location",
+                "args": {"query": "长沙"},
+                "id": "call_geo",
+                "type": "tool_call",
+            }
+        ],
+    )
+    tool_message = ToolMessage(content='{"lat": 28.2}', name="geocode_location", tool_call_id="call_geo")
+    chat_state = smart_eats_module.SmartEatsState(session_id="s-msg")
+
+    output = smart_eats_module._build_tools_node_output(
+        chat_state,
+        {"messages": [tool_message]},
+    )
+
+    assert output["messages"] == [tool_message]
+    assert smart_eats_module._latest_tool_messages([existing, ai_message, tool_message]) == [tool_message]
+    assert smart_eats_module._collect_tool_call_args([ai_message]) == {"call_geo": {"query": "长沙"}}
+    assert "_tool_messages" not in output
+    assert "_tool_call_args" not in output
+    assert "next_action" not in output
 
 
 def test_build_smart_eats_graph_source_does_not_import_graph_helpers():
@@ -38,11 +221,17 @@ def test_build_smart_eats_graph_source_does_not_import_graph_helpers():
     assert "from app.agent.graph import" not in source
 
 
-def test_build_smart_eats_graph_tools_node_keeps_toolnode_bridge_shape():
+def test_build_smart_eats_graph_source_does_not_use_next_action_routing():
+    source = inspect.getsource(build_smart_eats_graph)
+    assert "next_action" not in source
+
+
+def test_build_smart_eats_graph_tools_node_merges_toolnode_and_postprocess_boundary():
     source = inspect.getsource(build_smart_eats_graph)
     assert "async def tools_node" in source
     assert "_invoke_tool_node_with_runtime(" in source
-    assert "_build_tools_node_output(" in source
+    assert "_apply_official_tool_postprocess(" in source
+    assert "_finalize_official_after_tools(" in source
 
 
 @pytest.mark.asyncio
@@ -71,7 +260,7 @@ async def test_build_smart_eats_graph_think_node_short_circuits_intent_clarify(m
     result = await graph.ainvoke(ChatState(session_id="s-smart-clarify", message="想吃点东西").__dict__)
 
     assert result["final_json"]["recommendations"][0]["title"] == "你是想出去吃，还是在家做饭？"
-    assert result["next_action"] == "final"
+    assert "next_action" not in result
     planner_mock.assert_not_called()
 
 
@@ -121,7 +310,7 @@ async def test_build_smart_eats_graph_think_node_skips_clarify_when_confident(mo
 
 
 @pytest.mark.asyncio
-async def test_build_smart_eats_graph_tools_node_without_messages_returns_think(monkeypatch, override_redis):
+async def test_build_smart_eats_graph_tools_node_without_messages_returns_final_without_routing_flag(monkeypatch, override_redis):
     async def _noop_ensure_chat_session(db, state):
         return None
 
@@ -149,7 +338,7 @@ async def test_build_smart_eats_graph_tools_node_without_messages_returns_think(
         "messages": [],
     })
 
-    assert result["next_action"] == "final"
+    assert "next_action" not in result
     assert result["final_json"] is not None
 
 
@@ -325,6 +514,8 @@ async def test_build_smart_eats_graph_route_result_is_used_in_submit_final_answe
     assert result["final_json"]["recommendations"][0]["title"] == "步行约465米，预计372秒可达"
     assert result["final_json"]["recommendations"][0]["reason"] == "route_context_used"
     assert result["final_json"]["followups"][0] == "向南步行190米左转"
+    assert "_tool_messages" not in result
+    assert "_tool_call_args" not in result
     assert call_counter["count"] >= 2
 
 

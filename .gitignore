@@ -41,9 +41,17 @@ build/
 .vscode/
 .claude/
 .DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.log
+venv/
+node_modules/
+frontend/node_modules/
 
 # ===== Deployment generated files =====
 # Rendered by deploy/enable_https.sh
 /deploy/nginx/gateway.conf
 .specify/
 docs/
+specs/

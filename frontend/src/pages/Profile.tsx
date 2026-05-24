@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     ChevronRight, LogOut, Settings2, Shield, Pencil, Check,
-    Camera, HelpCircle, Info, Clock,
+    Camera, HelpCircle, Info, Clock, Bot,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -102,6 +102,14 @@ const Profile = () => {
             color: 'text-purple-500',
             bgColor: 'bg-purple-50',
             path: '/security-settings'
+        },
+        {
+            title: 'AI 模型设置',
+            desc: '配置 Base URL、API Key 与默认模型',
+            icon: Bot,
+            color: 'text-indigo-500',
+            bgColor: 'bg-indigo-50',
+            path: '/model-settings'
         },
         {
             title: '帮助中心',

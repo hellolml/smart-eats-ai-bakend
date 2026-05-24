@@ -63,11 +63,11 @@ class SkillRuntime:
             warnings=active.warnings,
             tool_sources=tool_output.tool_sources,
         )
-        context_payload = {
-            "active_skills": [item.model_dump() for item in active_infos],
-            "skill_allowed_tools": tool_output.allowed_tools,
-            "skill_diagnostics": diagnostics.model_dump(),
-        }
+        context_payload = self._build_context_payload(
+            active_infos=active_infos,
+            allowed_tools=tool_output.allowed_tools,
+            diagnostics=diagnostics,
+        )
 
         if active_infos and self.log_diagnostics:
             logger.info(
@@ -92,3 +92,16 @@ class SkillRuntime:
             context=context_payload,
             diagnostics=diagnostics,
         )
+
+    def _build_context_payload(
+        self,
+        *,
+        active_infos: list[ActiveSkillInfo],
+        allowed_tools: list[str],
+        diagnostics: SkillDiagnostics,
+    ) -> dict[str, Any]:
+        return {
+            "active_skills": [item.model_dump() for item in active_infos],
+            "skill_allowed_tools": list(allowed_tools),
+            "skill_diagnostics": diagnostics.model_dump(),
+        }

@@ -40,12 +40,14 @@ async def test_to_langchain_tools_respects_allowlist_and_executes_with_runtime_c
         async def _other(args):
             return args
 
-        tools = tools_registry.to_langchain_tools(
+        tools = tools_registry.get_langchain_tools(
             allowlist=["demo_tool"],
             runtime_context_factory=lambda: {"session_id": "s1"},
         )
+        alias_tools = tools_registry.to_langchain_tools(allowlist=["demo_tool"])
 
         assert len(tools) == 1
+        assert len(alias_tools) == 1
         tool = tools[0]
         assert tool.name == "demo_tool"
         assert "query" in tool.args
