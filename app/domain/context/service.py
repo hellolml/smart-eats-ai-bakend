@@ -13,6 +13,46 @@ from app.infra.models.user import User
 
 class ContextService:
     @staticmethod
+    async def build_debug_snapshot(
+        db: AsyncSession,
+        *,
+        thread_id: str,
+    ) -> dict[str, Any]:
+        from app.context_engine.stores import SqlConversationStore
+        from app.context_engine.view import ViewBuilder
+
+        store = SqlConversationStore(db)
+        view = await ViewBuilder(store).build(thread_id)
+        runs = await store.list_compaction_runs(thread_id)
+        return {
+            "thread_id": thread_id,
+            "event_count": len(view.events),
+            "events": [
+                {
+                    "id": item.id,
+                    "type": item.type,
+                    "role": item.role,
+                    "content_preview": (item.content or "")[:200],
+                    "token_estimate": item.token_estimate,
+                }
+                for item in view.events
+            ],
+            "compaction_runs": [
+                {
+                    "id": item.id,
+                    "condensation_id": item.condensation_id,
+                    "status": item.status,
+                    "input_event_count": item.input_event_count,
+                    "compression_ratio": item.compression_ratio,
+                    "latency_ms": item.latency_ms,
+                    "quality_score": item.quality_score,
+                    "error_type": item.error_type,
+                }
+                for item in runs
+            ],
+        }
+
+    @staticmethod
     async def build(
         db: AsyncSession,
         user_id: str | None,
@@ -96,6 +136,12 @@ class ContextService:
 
         if overrides:
             snapshot = _merge_overrides(snapshot, overrides)
+
+        if session_id:
+            snapshot["context_engine"] = await ContextService.build_debug_snapshot(
+                db,
+                thread_id=session_id,
+            )
 
         if user_id:
             db.add(

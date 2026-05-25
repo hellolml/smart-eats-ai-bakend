@@ -55,6 +55,7 @@ async def init_db() -> None:
         auth,
         chat,
         context,
+        context_engine,
         fridge,
         game,
         grocery,
@@ -68,7 +69,18 @@ async def init_db() -> None:
     )  # noqa: F401
 
     async with engine.begin() as conn:
+        if settings.DATABASE_URL.startswith("postgresql"):
+            await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
         await conn.run_sync(Base.metadata.create_all)
+        if settings.DATABASE_URL.startswith("postgresql"):
+            await conn.exec_driver_sql("ALTER TABLE context_memories ADD COLUMN IF NOT EXISTS embedding vector(384)")
+            await conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_context_memories_embedding ON context_memories USING ivfflat (embedding vector_cosine_ops)"
+            )
+            await conn.exec_driver_sql("ALTER TABLE context_event_embeddings ADD COLUMN IF NOT EXISTS embedding vector(384)")
+            await conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_context_event_embeddings_embedding ON context_event_embeddings USING ivfflat (embedding vector_cosine_ops)"
+            )
         if settings.DATABASE_URL.startswith("sqlite+aiosqlite"):
             await _ensure_sqlite_columns(conn)
 

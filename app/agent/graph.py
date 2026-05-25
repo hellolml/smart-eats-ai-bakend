@@ -298,6 +298,17 @@ async def run_chat_stream(
                 answer_text,
                 latest_state.final_json,
             )
+            if db is not None and hasattr(db, "add") and hasattr(db, "execute"):
+                try:
+                    from app.context_engine.factory import build_context_engine
+
+                    await build_context_engine(db=db, providers=[]).append_assistant_message(
+                        thread_id=latest_state.session_id,
+                        content=answer_text,
+                        payload={"final_json": latest_state.final_json},
+                    )
+                except Exception:
+                    logger.exception("context_engine_assistant_event_failed session_id=%s", latest_state.session_id)
             await _apply_turn_preference_extraction(
                 db,
                 user_id=latest_state.user_id,
@@ -312,6 +323,17 @@ async def run_chat_stream(
                 answer_text,
                 temp_state.final_json,
             )
+            if db is not None and hasattr(db, "add") and hasattr(db, "execute"):
+                try:
+                    from app.context_engine.factory import build_context_engine
+
+                    await build_context_engine(db=db, providers=[]).append_assistant_message(
+                        thread_id=temp_state.session_id,
+                        content=answer_text,
+                        payload={"final_json": temp_state.final_json},
+                    )
+                except Exception:
+                    logger.exception("context_engine_assistant_event_failed session_id=%s", temp_state.session_id)
             await _apply_turn_preference_extraction(
                 db,
                 user_id=temp_state.user_id,

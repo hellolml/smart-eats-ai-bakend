@@ -5,6 +5,7 @@ import os
 import json
 import logging
 import re
+from dataclasses import asdict
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Callable, TypedDict
 
@@ -90,6 +91,11 @@ TOOL_NAMES: dict[str, str] = {
     "get_ip_location": "get_ip_location",
     "geocode_location": "geocode_location",
     "get_user_info": "get_user_info",
+    "memory_search": "memory_search",
+    "memory_write": "memory_write",
+    "memory_update": "memory_update",
+    "memory_forget": "memory_forget",
+    "source_event_search": "source_event_search",
     "travel_search_poi": "travel_search_poi",
     "travel_create_personal_map": "travel_create_personal_map",
 }
@@ -303,6 +309,108 @@ def _initialize_graph_state(payload: dict[str, Any]) -> dict[str, Any]:
     output = _state_update(state)
     output["messages"] = payload.get("messages") if isinstance(payload.get("messages"), list) else []
     return output
+
+
+async def _prepare_context_engine(
+    db: Any,
+    redis_client: Any,
+    state: SmartEatsState,
+    agent_config: SmartEatsGraphConfig,
+    *,
+    emit_context_event: bool = True,
+) -> list[Any]:
+    from langchain_core.messages import HumanMessage
+
+    from app.context_engine.factory import build_context_engine
+    from app.context_engine.types import ContextRequest
+
+    if db is None or not hasattr(db, "add") or not hasattr(db, "execute"):
+        await _refresh_observation_context(
+            db,
+            redis_client,
+            state,
+            agent_config,
+            emit_context_event=emit_context_event,
+        )
+        return []
+
+    context_overrides = state.context_overrides if isinstance(state.context_overrides, dict) else None
+    cached_location, cached_restaurants = await asyncio.gather(
+        load_cached_location(redis_client, state.session_id),
+        load_cached_restaurants(redis_client, state.session_id),
+    )
+    state.history = []
+    base_context = _build_base_prompt_context(
+        state,
+        memories=[],
+        cached_location=cached_location,
+        cached_restaurants=cached_restaurants,
+        summary=None,
+    )
+    base_context = _merge_prompt_context_overrides(state, base_context)
+    base_context, skill_prompt = _resolve_runtime_skills(state, base_context, agent_config)
+    system_prompt = agent_config.system_prompt_builder(
+        {
+            "context": base_context,
+            "skill_prompt": skill_prompt,
+        }
+    )
+    request = ContextRequest(
+        thread_id=state.session_id,
+        user_id=state.user_id,
+        message=state.message,
+        scene=state.scene,
+        system_prompt=system_prompt,
+        provider=state.provider,
+        context_overrides=context_overrides,
+    )
+    from app.agent.context_providers import SmartEatsBusinessProvider
+
+    engine = build_context_engine(db=db, providers=[SmartEatsBusinessProvider(db)])
+    if _should_persist_user_message(state):
+        await engine.append_user_message(request)
+        await history.save_user_message(
+            db,
+            redis_client,
+            state.session_id,
+            state.message,
+        )
+        state.user_message_logged = True
+        state.last_user_message = state.message
+
+    prepared = await engine.prepare(
+        ContextRequest(
+            thread_id=state.session_id,
+            user_id=state.user_id,
+            message=None if state.user_message_logged else state.message,
+            scene=state.scene,
+            system_prompt=system_prompt,
+            provider=state.provider,
+            context_overrides=context_overrides,
+        )
+    )
+    state.turn_index = sum(1 for msg in prepared.messages if isinstance(msg, HumanMessage))
+    state.intent = smart_intent_resolver(state) or "unknown"
+    prepared_context = {
+        "prepared_context": True,
+        "budget": asdict(prepared.budget_report) if prepared.budget_report else {},
+        "runtime": prepared.runtime,
+        "allowed_tools": list(base_context.get("allowed_tools") or agent_config.tool_names),
+        "system_prompt": prepared.messages[0].content if prepared.messages else request.system_prompt,
+    }
+    state.context = _merge_context(base_context, prepared_context)
+    if emit_context_event:
+        state.events.append(
+            {
+                "event": "context",
+                "data": {
+                    "prepared_context": True,
+                    "budget": state.context.get("budget"),
+                    "allowed_tools": state.context.get("allowed_tools"),
+                },
+            }
+        )
+    return prepared.messages
 
 
 def _latest_ai_messages(messages: Any) -> list[Any]:
@@ -573,6 +681,25 @@ async def _apply_official_tool_postprocess(
                 "result_preview": result_preview,
             },
         )
+        if db is not None and hasattr(db, "add") and hasattr(db, "execute"):
+            try:
+                from app.context_engine.factory import build_context_engine
+
+                engine = build_context_engine(db=db, providers=[])
+                await engine.append_tool_result(
+                    thread_id=chat_state.session_id,
+                    tool_name=tool_name,
+                    content=json.dumps(result_preview, ensure_ascii=False),
+                    payload={"args": args, "result": result},
+                    preview=result_preview,
+                )
+            except Exception as exc:
+                logger.info(
+                    "context_engine_tool_event_failed session_id=%s tool=%s reason=%s",
+                    chat_state.session_id,
+                    tool_name,
+                    str(exc),
+                )
         chat_state.events.append(
             {
                 "event": "tool_call",
@@ -1631,6 +1758,11 @@ def _smart_eats_graph_config() -> SmartEatsGraphConfig:
             TOOL_NAMES["get_ip_location"],
             TOOL_NAMES["geocode_location"],
             TOOL_NAMES["get_user_info"],
+            TOOL_NAMES["memory_search"],
+            TOOL_NAMES["memory_write"],
+            TOOL_NAMES["memory_update"],
+            TOOL_NAMES["memory_forget"],
+            TOOL_NAMES["source_event_search"],
             TOOL_NAMES["travel_search_poi"],
             TOOL_NAMES["travel_create_personal_map"],
         ],
@@ -1693,7 +1825,7 @@ def build_smart_eats_graph(
         if first_round:
             chat_state.steps_left = agent_config.max_steps
         await _ensure_chat_session(db, chat_state)
-        await _refresh_observation_context(
+        prepared_messages = await _prepare_context_engine(
             db,
             redis_client,
             chat_state,
@@ -1702,7 +1834,7 @@ def build_smart_eats_graph(
         )
 
         output = _state_update(chat_state)
-        output["messages"] = initialized.get("messages", [])
+        output["messages"] = prepared_messages or initialized.get("messages", [])
         return output
 
     async def agent_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -1758,7 +1890,16 @@ def build_smart_eats_graph(
                     str(exc),
                 )
 
-        planner_messages = [SystemMessage(content=system), HumanMessage(content=user)]
+        state_messages = state.get("messages")
+        if (
+            isinstance(chat_state.context, dict)
+            and chat_state.context.get("prepared_context") is True
+            and isinstance(state_messages, list)
+            and state_messages
+        ):
+            planner_messages = state_messages
+        else:
+            planner_messages = [SystemMessage(content=system), HumanMessage(content=user)]
         ai_message = await active_planner.ainvoke_with_tools(
             planner_messages,
             current_langchain_tools,
@@ -1845,8 +1986,9 @@ def build_smart_eats_graph(
             agent_config=agent_config,
         )
         _finalize_official_after_tools(chat_state, agent_config)
+        refreshed_messages: list[Any] = []
         if not chat_state.final_json:
-            await _refresh_observation_context(
+            refreshed_messages = await _prepare_context_engine(
                 db,
                 redis_client,
                 chat_state,
@@ -1855,7 +1997,7 @@ def build_smart_eats_graph(
             )
 
         output = _state_update(chat_state)
-        output["messages"] = tool_messages
+        output["messages"] = refreshed_messages or tool_messages
         return output
 
     graph = StateGraph(SmartEatsGraphState)
