@@ -1,1326 +1,768 @@
-# Context Engine 学习说明文档
+# SmartEats LangGraph-Native 上下文管理学习说明文档
 
-本文基于当前 SmartEats 后端已经实现的 Context Engine v2 编写，目标是帮助读者理解这套上下文系统的设计动机、核心机制、数据流、压缩算法、长期记忆、源事件检索、可观测性以及和 SmartEats agent 的接入方式。
+本文档说明 SmartEats 当前版本的上下文管理实现。当前主链路已经从自研 `ContextEngine.prepare()` 切换为 LangGraph-native runtime：短期上下文由 `StateGraph` state 的 `messages` 承载，持久化由 checkpointer 按 `thread_id` 管理，长期记忆、工具源事件、压缩观测数据由 LangGraph store 管理。
 
-适合读者：
+旧版 `app/context_engine/` 已经从代码库移除；旧 `history/memory/context_overrides` 拼装模型输入的方式也不再是主链路。`app.agent.history` 仍用于产品聊天记录展示和审计，但不再作为 LLM prompt 的历史来源。
 
-- 需要维护 `app/context_engine/` 的后端工程师。
-- 需要理解 agent 每次调用大模型时到底发送什么内容的人。
-- 需要继续优化长期记忆、上下文压缩、agentic memory tools 的工程师。
-- 需要评估这套方案是否可迁移到其他 agent 项目的人。
+## 1. 当前结论
 
-## 1. 背景与目标
-
-早期 SmartEats 的上下文链路主要依赖 `history`、`memory`、`context_overrides` 拼接。它能工作，但长期运行会暴露几个问题：
-
-- 历史消息、工具结果、业务上下文混在一起，边界不清。
-- 工具结果可能很大，直接进入 prompt 容易挤爆上下文窗口。
-- 历史压缩如果只做字符串摘要，很难追踪摘要覆盖了哪些原始事件。
-- 长期记忆和短期任务状态容易混淆，临时事实可能污染用户长期记忆。
-- debug API 如果直接暴露完整上下文，会有 system prompt、完整工具结果、完整 memory 泄露风险。
-- 上下文逻辑和 SmartEats 业务耦合，不利于复用到其他 agent。
-
-本次升级的长期目标是把上下文系统抽象为通用 Context Engine：
-
-```text
-Context Engine = 原始事件账本 + 结构化压缩 + 长期记忆 + 源事件检索 + token budget + 可观测性 + agentic memory tools
-```
-
-核心原则：
-
-- 原始事件永远持久化，summary 只是 view 层替代，不删除源事件。
-- LLM 摘要只压缩历史中段，不代表全局最新状态。
-- 最新状态由 tail 原文和 runtime context block 承担。
-- 工具结果完整落库，但下一轮默认只给模型 preview/facts。
-- 长期 memory 只写稳定偏好、长期约束、用户画像、可复用事实。
-- 通用层不依赖 SmartEats 业务模型，业务信息通过 provider 注入。
+- 短期对话上下文唯一真相源：`SmartEatsGraphState.messages: Annotated[list[Any], add_messages]`。
+- 每个新用户 turn 只向 graph 输入本轮 `HumanMessage`，历史由 LangGraph checkpointer 自动恢复。
+- 调模型前临时构造 `model_messages`，包含 system prompt、业务上下文、长期记忆、历史摘要和 `state.messages`。
+- 临时注入的 `SystemMessage`、长期记忆、业务事实不会写回 `state.messages`。
+- 工具完整结果不会进入 prompt；写入 state 的 `ToolMessage` 只保留 preview/facts。
+- 完整工具结果作为可检索源事件写入 LangGraph store 的 `("source_events", thread_id)`。
+- 长期记忆写入 LangGraph store 的 `("memories", user_id)`。
+- 压缩结果写回 state 的 `summary`，被压缩旧消息用 `RemoveMessage` 从 `messages` 删除。
+- 压缩观测记录写入 LangGraph store 的 `("compaction_runs", thread_id)`。
 
 ## 2. 代码地图
 
-核心目录：
-
 ```text
-app/context_engine/
-  __init__.py
-  types.py                  # 核心 dataclass 类型
-  engine.py                 # ContextEngine.prepare 主入口
-  providers.py              # ContextProvider 协议
-  tokenizer.py              # token 估算
-  budget.py                 # token budget 和裁剪/压缩触发
-  view.py                   # events + condensations 生成 LLM view
-  condenser.py              # 压缩段选择、摘要、memory extraction、metrics
-  summarizers.py            # LLM structured summarizer 抽象与实现
-  prompts/condense_v1.md    # LLM 压缩提示词
-  renderers.py              # condensation summary 渲染为模型可读文本
-  memory.py                 # InMemory/PgVector memory store
-  memory_extractor.py       # memory candidate policy 和写入
-  source_events.py          # 原始事件检索
-  agentic_memory.py         # agent 主动管理 memory 的服务
-  stores.py                 # InMemory/SQL conversation store
+app/agent/graph.py
+  run_chat_stream()
+  checkpointer_context() + langgraph_store_context()
+  graph.compile(checkpointer=..., store=...)
 
-app/agent/
-  context_providers.py      # SmartEatsBusinessProvider
-  tools/context_memory.py   # memory_search/write/update/forget/source_event_search
-  agents/smart_eats.py      # SmartEats 图接入 Context Engine
-  graph.py                  # assistant final 回写 context event
-  llm_adapters.py           # OpenAIPlanner native messages 接入
+app/agent/agents/smart_eats.py
+  SmartEatsState
+  SmartEatsGraphState
+  _initialize_graph_state()
+  _prepare_langgraph_context()
+  summarize_node()
+  agent_node()
+  tools_node()
 
-app/infra/models/context_engine.py
-  ContextThread
-  ContextEventModel
-  ContextCondensationModel
-  ContextMemoryModel
-  ContextCompactionRunModel
-  ContextEventEmbeddingModel
+app/agent/langgraph_context.py
+  build_model_messages()
+  should_summarize()
+  build_summary_prompt()
+  build_summary_update()
+  load_user_memories()
+  write_user_memory()
+  update_user_memory()
+  forget_user_memory()
+  save_source_event()
+  search_source_events()
+  save_compaction_run()
+
+app/agent/langgraph_store.py
+  langgraph_store_context()
+  memory / postgres store backend
+
+app/agent/checkpoint.py
+  checkpointer_context()
+  memory / sqlite / postgres checkpointer backend
+
+app/agent/tools/context_memory.py
+  memory_search
+  memory_write
+  memory_update
+  memory_forget
+  source_event_search
+
+app/domain/context/service.py
+  ContextService.build_debug_snapshot()
 ```
 
 ## 3. 总体架构
 
 ```mermaid
-flowchart TB
-    User["User Message"] --> SmartEatsGraph["SmartEats Graph"]
-    SmartEatsGraph --> PrepareNode["prepare_node"]
-    PrepareNode --> ContextEngine["ContextEngine.prepare()"]
-
-    ContextEngine --> Store["ConversationStore"]
-    ContextEngine --> Providers["ContextProviders"]
-    ContextEngine --> MemoryStore["MemoryStore"]
-    ContextEngine --> Budget["BudgetManager"]
-
-    Store --> Events["context_events"]
-    Store --> Condensations["context_condensations"]
-    Store --> Runs["context_compaction_runs"]
-    Store --> EventEmbeddings["context_event_embeddings"]
-
-    Providers --> BusinessFacts["business_facts"]
-    MemoryStore --> Memories["retrieved memories"]
-    Budget --> Condenser["Condenser"]
-    Condenser --> Summarizer["LLMStructuredSummarizer"]
-    Summarizer --> Prompt["condense_v1.md"]
-    Condenser --> MemoryExtractor["MemoryExtractor"]
-    MemoryExtractor --> MemoryStore
-    Condenser --> Runs
-    Condenser --> Condensations
-
-    ContextEngine --> Prepared["PreparedContext"]
-    Prepared --> NativeMessages["native LangChain messages"]
-    NativeMessages --> Planner["OpenAIPlanner / AnthropicPlanner"]
-    Planner --> Tools["ToolNode"]
-    Tools --> ToolEvents["tool_result event with preview"]
-    ToolEvents --> Store
-
-    Planner --> Final["Final Answer"]
-    Final --> AssistantEvent["assistant event"]
-    AssistantEvent --> Store
-```
-
-从图中可以看到，Context Engine 不是一个简单的 prompt 拼接器，而是一个围绕事件账本构建的上下文操作层。
-
-## 4. 核心概念
-
-### 4.1 ContextRequest
-
-`ContextRequest` 是一次 prepare 的输入：
-
-```python
-ContextRequest(
-    thread_id="session id",
-    user_id="user id",
-    message="current user message",
-    scene="chat",
-    system_prompt="rendered system prompt",
-    provider="llm provider",
-    metadata={},
-    context_overrides={},
-)
-```
-
-关键点：
-
-- `thread_id` 对应一个对话线程。
-- `user_id` 用于 memory namespace，当前实现使用 `("user", user_id)`。
-- `message` 是当前用户消息。如果该消息已经通过 `append_user_message()` 持久化，prepare 时可以传 `None`，避免重复添加。
-- `system_prompt` 由业务层构造，Context Engine 不关心 SmartEats 业务 prompt 的内部结构。
-
-### 4.2 ContextEvent
-
-`ContextEvent` 是短期上下文的最小持久化单位：
-
-```python
-ContextEvent(
-    id="uuid",
-    thread_id="session id",
-    type="message | tool_result | ...",
-    role="user | assistant | tool | system",
-    content="preview or textual content",
-    payload={},
-    token_estimate=0,
-    pinned=False,
-    critical=False,
-)
-```
-
-当前主要事件类型：
-
-- 用户消息：`type="message", role="user"`
-- assistant 回复：`type="message", role="assistant"`
-- 工具结果：`type="tool_result", role="tool"`
-- condensation 是 view 层合成的 synthetic event，不直接作为普通 event 写入 `context_events`。
-
-`pinned` 和 `critical` 用于阻止压缩。后续如果某些事件必须原文保留，例如法律确认、支付确认、用户明确指令，可以将其标记为不可压缩。
-
-### 4.3 ContextBlock
-
-`ContextBlock` 是非对话事件类上下文，例如业务事实、长期记忆、客户端 overrides：
-
-```python
-ContextBlock(
-    kind="business_facts | memory | client_context | runtime_current_state",
-    source="provider name",
-    content="rendered text/json",
-    priority=85,
-    metadata={},
-    safe_to_send=True,
-)
-```
-
-它们最终会被放进 system message 的 `<context_blocks>` 中。
-
-### 4.4 ContextCondensation
-
-`ContextCondensation` 是一次历史中段压缩结果：
-
-```python
-ContextCondensation(
-    id="uuid",
-    thread_id="session id",
-    summary="rendered summary text",
-    summary_json={...structured schema...},
-    covered_event_ids=["event id"],
-    summary_offset=2,
-    status="completed | failed",
-    model="provider/model marker",
-    prompt_version="context-condense-v1",
-    token_before=1000,
-    token_after=200,
-)
-```
-
-最重要的是 `covered_event_ids`。它告诉 `ViewBuilder`：这些原始 event 在 LLM view 中应该被 summary 替代。
-
-失败的 condensation 不会覆盖事件：
-
-```text
-status = failed
-covered_event_ids = []
-```
-
-这样即使 LLM 摘要失败，也不会丢历史。
-
-## 5. 每次调用大模型时到底发送什么
-
-最终给 planner 的是 `PreparedContext.messages`，即原生消息数组：
-
-```text
-SystemMessage:
-  system_prompt
-  <context_blocks>
-    business_facts
-    memory
-    client_context
-  </context_blocks>
-
-SystemMessage:
-  <conversation_summary scope="historical_middle_segment">
-  ...
-  </conversation_summary>
-
-HumanMessage / AIMessage / ToolMessage:
-  head raw events
-  tail raw events
-
-HumanMessage:
-  current user message, if not already persisted
-```
-
-更准确地说，conversation view 是：
-
-```text
-head 原始事件
-+ historical middle condensation summaries
-+ tail 原始事件
-+ current user message
-```
-
-注意：
-
-- summary 只代表历史中段。
-- summary 之后的 tail 原始消息更权威。
-- `task_state_at_segment_end` 不是全局最新状态。
-- 当前任务状态应该由 tail 原文和业务 runtime context 表达。
-
-## 6. prepare 主流程
-
-```mermaid
 flowchart TD
-    A["ContextEngine.prepare(request)"] --> B["ensure_thread(thread_id)"]
-    B --> C["collect provider blocks"]
-    C --> D["retrieve memories by user/message"]
-    D --> E["merge blocks + memory blocks"]
-    E --> F["BudgetManager.fit_thread()"]
-    F --> G{"over hard limit?"}
-    G -- "yes" --> H["Condenser.condense()"]
-    H --> I["ViewBuilder rebuild view"]
-    G -- "no" --> I
-    I --> J{"still over max?"}
-    J -- "yes" --> K["drop low priority blocks and head/tail truncate events"]
-    J -- "no" --> L["compose native messages"]
-    K --> L
-    L --> M["return PreparedContext(messages, runtime, budget_report)"]
+    API["Chat API / SSE request"] --> Runner["run_chat_stream"]
+    Runner --> CP["checkpointer_context"]
+    Runner --> StoreCtx["langgraph_store_context"]
+    Runner --> Compile["StateGraph.compile(checkpointer, store)"]
+
+    Compile --> Prepare["prepare_node"]
+    Prepare --> Init["append pending HumanMessage"]
+    Prepare --> Biz["build SmartEats business context"]
+    Prepare --> MemSearch["store.search ('memories', user_id)"]
+    Prepare --> Route{"should_summarize?"}
+
+    Route -->|yes| Summarize["summarize_node"]
+    Summarize --> LLMCompact["LLM summary"]
+    Summarize --> Remove["RemoveMessage old messages"]
+    Summarize --> CompactionStore["store.put ('compaction_runs', thread_id)"]
+    Remove --> Agent["agent_node"]
+
+    Route -->|no| Agent
+    Agent --> BuildInput["build_model_messages"]
+    BuildInput --> Planner["Planner LLM + tools"]
+    Planner -->|AIMessage.tool_calls| ToolState["append AIMessage"]
+    ToolState --> Tools["tools_node / ToolNode"]
+    Tools --> FullResult["full tool result"]
+    Tools --> SourceStore["store.put ('source_events', thread_id)"]
+    Tools --> Preview["append preview ToolMessage"]
+    Preview --> Agent
+
+    Planner -->|final answer| Final["final_json"]
+    Final --> SSE["thinking / delta / final"]
+    Final --> ProductHistory["save assistant message"]
 ```
 
-对应代码入口：
+这套架构的核心变化是：上下文不再先被自研引擎拼成 `PreparedContext.messages`，再覆盖 graph state。现在 graph state 自己就是短期上下文载体，模型输入只是基于 state 临时渲染出来的一次性 view。
 
-- `ContextEngine.prepare()`：`app/context_engine/engine.py`
-- `BudgetManager.fit_thread()`：`app/context_engine/budget.py`
-- `Condenser.condense()`：`app/context_engine/condenser.py`
-- `ViewBuilder.build()`：`app/context_engine/view.py`
+## 4. State 设计
 
-## 7. ViewBuilder 机制
-
-`ViewBuilder` 的职责是把：
-
-```text
-raw events + completed condensations
-```
-
-转换成：
-
-```text
-LLM view events
-```
-
-核心规则：
-
-1. 读取线程所有 `context_events`。
-2. 读取线程所有 `context_condensations`。
-3. 只使用 `status="completed"` 且 `covered_event_ids` 非空的 condensation。
-4. 对每个 condensation，在其覆盖的第一个 event 位置插入一个 synthetic `ContextEvent`：
+当前 `SmartEatsGraphState` 是 `TypedDict`，其中最关键的是：
 
 ```python
-ContextEvent(
-    id="summary:first_id:last_id",
-    type="condensation",
-    role="system",
-    content=condensation.summary,
-    payload={
-        "summary_json": condensation.summary_json,
-        "covered_event_ids": ids,
-    },
-)
+class SmartEatsGraphState(TypedDict, total=False):
+    messages: Annotated[list[Any], add_messages]
+    session_id: str
+    user_id: str | None
+    message: str | None
+    context: dict[str, Any] | None
+    summary: str | None
+    context_budget: dict[str, Any]
+    retrieved_memories: list[dict[str, Any]]
+    source_refs: list[dict[str, Any]]
 ```
 
-5. 被覆盖的原始 event 不再出现在 view 中。
-6. 未被覆盖的 event 原样保留。
+字段职责：
 
-示例：
+- `messages`：短期对话历史，保存 `HumanMessage`、`AIMessage`、preview `ToolMessage`。这是 LLM raw history 的唯一来源。
+- `summary`：被压缩旧消息的结构化摘要文本。它是 state 字段，不是 message。
+- `context`：本轮 SmartEats 业务上下文和 system prompt 的暂存区。
+- `context_budget`：本轮上下文统计，包括消息数、压缩状态、压缩前后 token 估算等。
+- `retrieved_memories`：本轮从长期记忆 namespace 检索出的 memory 引用。
+- `source_refs`：本轮工具源事件写入 store 后返回的引用。
 
-```text
-raw events:
-  e1 e2 e3 e4 e5 e6 e7
+`SmartEatsState` 是业务 dataclass，节点内部用它做业务状态处理；`SmartEatsGraphState` 是 LangGraph 持久化 state schema。
 
-condensation covers:
-  e3 e4 e5
-
-view:
-  e1 e2 summary:e3:e5 e6 e7
-```
-
-这就是“原始事件不删除，view 层替代”的关键。
-
-## 8. 压缩触发机制
-
-`BudgetManager` 使用 token budget 决定是否压缩和裁剪。
-
-默认参数：
-
-```python
-soft_ratio = 0.7
-hard_ratio = 0.85
-hard_limit = max_tokens * 0.85
-```
-
-当前流程：
-
-```text
-event_tokens = sum(count_event(view.events))
-block_tokens = sum(count_block(blocks))
-total = event_tokens + block_tokens
-
-if total > hard_limit:
-    condenser.condense(thread_id)
-    rebuild view
-
-if total > max_tokens:
-    drop lower priority blocks
-
-if still total > max_tokens:
-    head/tail truncate events
-```
-
-`BudgetReport` 会记录：
-
-```python
-BudgetReport(
-    total_tokens=...,
-    max_tokens=...,
-    buckets={
-        "system": ...,
-        "current_user": ...,
-        "recent_messages": ...,
-        "tool_preview": ...,
-        "memories": ...,
-        "business_facts": ...,
-        "summaries": ...,
-    },
-    dropped_blocks=[...],
-    dropped_event_ids=[...],
-    condensation_triggered=True,
-    status="ok | condensed | truncated",
-)
-```
-
-## 9. 压缩算法
-
-### 9.1 压缩对象选择
-
-压缩只发生在历史中段：
-
-```python
-middle = events[keep_head : len(events) - keep_tail]
-```
-
-默认：
-
-```python
-keep_head = 2
-keep_tail = 8
-min_events = 3
-```
-
-候选事件必须满足：
-
-- 不在已有 `covered_event_ids` 中。
-- `pinned=False`。
-- `critical=False`。
-- `event.type != "condensation"`。
-
-然后从中间段里选择最长的连续未覆盖 segment。
-
-### 9.2 伪代码
-
-```python
-def select_candidate(events, covered):
-    if len(events) <= keep_head + keep_tail:
-        return []
-
-    middle = events[keep_head : len(events) - keep_tail]
-    segments = []
-    current = []
-
-    for event in middle:
-        blocked = (
-            event.id in covered
-            or event.pinned
-            or event.critical
-            or event.type == "condensation"
-        )
-        if blocked:
-            if current:
-                segments.append(current)
-                current = []
-            continue
-        current.append(event)
-
-    if current:
-        segments.append(current)
-
-    return longest(segments)
-```
-
-### 9.3 为什么只压缩中段
-
-最终上下文结构是：
-
-```text
-head raw
-+ middle summary
-+ tail raw
-+ current user
-```
-
-这样做的原因：
-
-- head 通常包含初始目标、角色、任务背景，保留原文价值高。
-- tail 包含最新消息、最新工具结果、当前任务状态，必须原文保留。
-- middle 往往是已发生的历史过程，适合压缩成 summary。
-
-最重要的是：summary 不负责表达全局最新状态。
-
-## 10. LLM 结构化摘要机制
-
-### 10.1 组件关系
-
-```mermaid
-flowchart LR
-    Condenser["Condenser"] --> Summarizer["LLMStructuredSummarizer"]
-    Summarizer --> Prompt["prompts/condense_v1.md"]
-    Summarizer --> Model["CondenseModel Protocol"]
-    Model --> WriterModel["WriterCondenseModel"]
-    WriterModel --> OpenAIWriter["OpenAIWriter"]
-    OpenAIWriter --> LLM["LLM Provider"]
-    LLM --> JSON["structured JSON"]
-    JSON --> Normalize["Condenser._normalize_summary"]
-    Normalize --> Renderer["render_condensation_summary"]
-```
-
-### 10.2 CondenseModel 抽象
-
-`CondenseModel` 是通用模型接口：
-
-```python
-class CondenseModel(Protocol):
-    async def summarize(
-        self,
-        *,
-        system: str,
-        messages: list[dict[str, Any]],
-        response_schema: dict[str, Any],
-        timeout_seconds: float,
-    ) -> dict[str, Any]:
-        ...
-```
-
-通用层只依赖这个协议，不直接绑定某个供应商。
-
-当前 `WriterCondenseModel` 通过 `OpenAIWriter.stream()` 调用已有 writer 模型，并解析 JSON。
-
-### 10.3 压缩提示词
-
-提示词文件：
-
-```text
-app/context_engine/prompts/condense_v1.md
-```
-
-核心要求：
-
-- 只总结历史中间片段。
-- 不代表完整对话。
-- 不代表全局最新状态。
-- 后续原始消息比摘要更权威。
-- 输出合法 JSON。
-- 不输出 Markdown。
-- 不保留完整工具原始结果。
-- 输出 `memory_candidates` 供长期记忆抽取。
-
-### 10.4 摘要 schema
-
-```json
-{
-  "segment_summary": "string",
-  "user_goals": ["string"],
-  "stable_preferences": ["string"],
-  "decisions": ["string"],
-  "tool_results": ["string"],
-  "open_questions_at_segment_end": ["string"],
-  "task_state_at_segment_end": ["string"],
-  "important_entities": ["string"],
-  "do_not_repeat": ["string"],
-  "memory_candidates": [
-    {
-      "kind": "preference|fact|constraint|profile|habit",
-      "content": "string",
-      "confidence": 0.0,
-      "ttl": "none|session|days_30",
-      "source_event_ids": ["string"]
-    }
-  ]
-}
-```
-
-字段语义：
-
-- `segment_summary`：这段中间历史发生了什么。
-- `user_goals`：这段里出现过的用户目标。
-- `stable_preferences`：可复用偏好。
-- `decisions`：已确定的选择。
-- `tool_results`：工具结果结论，不是完整工具 payload。
-- `open_questions_at_segment_end`：截至该片段结束仍未解决的问题。
-- `task_state_at_segment_end`：截至该片段结束的任务状态，不是全局最新状态。
-- `important_entities`：地点、餐厅、菜品、时间、对象等。
-- `do_not_repeat`：已经失败或不应重复的动作。
-- `memory_candidates`：可能进入长期记忆的候选项。
-
-### 10.5 渲染给模型的 summary
-
-`render_condensation_summary()` 会将 JSON 渲染成：
-
-```text
-<conversation_summary scope="historical_middle_segment">
-This summary covers older middle events only. Newer raw messages after this summary are authoritative.
-
-Segment summary:
-...
-
-Stable preferences:
-- ...
-
-Task state at segment end:
-- ...
-</conversation_summary>
-```
-
-这个 scope 标注很重要。它告诉模型：summary 是旧中段，不是当前最新状态。
-
-## 11. 压缩失败策略
-
-LLM 摘要可能失败，例如超时、返回非 JSON、返回空对象、网络异常。
-
-当前策略：
-
-```text
-try:
-    call summarizer
-    normalize summary_json
-    status = completed
-except Exception:
-    summary_json = {"segment_summary": "摘要生成失败：..."}
-    status = failed
-
-if status == completed:
-    covered_event_ids = candidate ids
-else:
-    covered_event_ids = []
-```
-
-失败时仍保存 condensation 和 compaction run，但不会覆盖原始事件。
-
-这样有两个好处：
-
-- debug 时能看到压缩失败原因。
-- view 不会丢掉任何原始历史。
-
-## 12. 长期记忆抽取机制
-
-### 12.1 为什么不能把 summary 全写入 memory
-
-summary 包含很多短期信息，例如：
-
-- 当前路线。
-- 当前餐厅搜索结果。
-- 当前 open question。
-- 当前任务状态。
-
-这些不应该进入长期 memory。长期 memory 应只保存稳定、可复用、未来对用户有帮助的信息。
-
-### 12.2 MemoryPolicy
-
-`MemoryPolicy` 的当前规则：
-
-```python
-writable_kinds = {
-    "preference",
-    "fact",
-    "constraint",
-    "profile",
-    "habit",
-}
-
-min_confidence = 0.6
-```
-
-候选项会被拒绝的情况：
-
-- 非 dict。
-- `kind` 不在允许列表。
-- `content` 为空。
-- `confidence < 0.6`。
-- `ttl == "session"`。
-
-允许写入的示例：
-
-```json
-{
-  "kind": "preference",
-  "content": "用户偏好清淡口味",
-  "confidence": 0.92,
-  "ttl": "none",
-  "source_event_ids": ["event-id"]
-}
-```
-
-写入 memory 时会附带 metadata：
-
-```json
-{
-  "kind": "preference",
-  "source": "condensation",
-  "confidence": 0.92,
-  "ttl": "none",
-  "source_event_ids": ["event-id"],
-  "source_condensation_id": "condensation-id",
-  "status": "active"
-}
-```
-
-### 12.3 MemoryExtractor 流程
-
-```mermaid
-flowchart TD
-    A["summary_json.memory_candidates"] --> B["MemoryPolicy.normalize_candidate"]
-    B --> C{"accepted?"}
-    C -- "no" --> D["reject"]
-    C -- "yes" --> E["metadata_for(candidate)"]
-    E --> F["memory_store.put(namespace, content, metadata)"]
-    F --> G["context_memories"]
-```
-
-## 13. MemoryStore 机制
-
-当前有两个实现：
-
-- `InMemoryVectorMemoryStore`：测试和 SQLite fake 场景使用。
-- `PgVectorMemoryStore`：SQL 后端，Postgres 下可用 pgvector 列和索引。
-
-### 13.1 namespace
-
-当前用户长期记忆 namespace：
-
-```python
-("user", user_id)
-```
-
-这意味着不同用户的 memory 完全隔离。
-
-### 13.2 embedding 与 scoring
-
-当前实现包含两个 embedding 路径：
-
-- `_embed()`：稀疏 token/中文字符向量，用于本地 deterministic scoring。
-- `_embed_dense()`：确定性 dense vector，维度 384，用于写入 Postgres `vector(384)` 列。
-
-当前检索仍走 portable 本地 scoring：
-
-```python
-score = cosine(_embed(query), _embed(content))
-```
-
-Postgres 中已经准备了 `embedding vector(384)` 和 ivfflat index，后续可以将检索替换为原生 pgvector distance。
-
-### 13.3 update/delete
-
-agentic memory tools 需要支持修改和删除。
-
-当前删除不是物理删除，而是 metadata 标记：
-
-```json
-{"status": "deleted"}
-```
-
-检索时只返回：
-
-```text
-status == active
-```
-
-## 14. 源事件检索机制
-
-summary 一定会丢细节，所以必须保留原始事件检索能力。
-
-### 14.1 事件写入时同步 embedding 记录
-
-`SqlConversationStore.append_event()` 会写两张表：
-
-```text
-context_events
-context_event_embeddings
-```
-
-`context_event_embeddings` 保存：
-
-- event_id
-- thread_id
-- namespace
-- content_preview
-- embedding_json
-- metadata_json
-- Postgres vector column
-
-### 14.2 SourceEventRetriever
-
-`SourceEventRetriever.search_events()` 当前读取原始 events 并做本地 scoring。
-
-检索逻辑：
-
-```text
-1. resolve thread_id
-2. list raw events
-3. apply metadata_filter
-4. calculate score
-5. if query is substring of content, boost score
-6. filter weak matches
-7. sort by score
-8. return top_k SourceEventHit
-```
-
-返回的是 preview，不是完整 payload：
-
-```python
-SourceEventHit(
-    event_id="...",
-    thread_id="...",
-    content_preview="first 500 chars",
-    score=0.8,
-    metadata={...},
-)
-```
-
-这样既能找回源事件，又避免默认泄露完整工具结果。
-
-## 15. Agentic Memory Tools
-
-新增工具：
-
-```text
-memory_search
-memory_write
-memory_update
-memory_forget
-source_event_search
-```
-
-### 15.1 工具职责
-
-```mermaid
-flowchart LR
-    Agent["Agent"] --> Search["memory_search"]
-    Agent --> Write["memory_write"]
-    Agent --> Update["memory_update"]
-    Agent --> Forget["memory_forget"]
-    Agent --> SourceSearch["source_event_search"]
-
-    Search --> MemoryStore["context_memories"]
-    Write --> Policy["MemoryPolicy"]
-    Policy --> MemoryStore
-    Update --> MemoryStore
-    Forget --> MemoryStore
-    SourceSearch --> Events["context_events"]
-```
-
-工具说明：
-
-- `memory_search`：当前任务需要用户长期偏好时主动检索。
-- `memory_write`：用户明确表达长期偏好/约束时写入。
-- `memory_update`：用户更正旧记忆时更新。
-- `memory_forget`：用户要求忘记时删除。
-- `source_event_search`：summary 不够详细时检索源事件。
-
-### 15.2 安全边界
-
-工具写 memory 必须经过 `MemoryPolicy`：
-
-- 只允许明确的长期事实、偏好、约束。
-- 不允许写 session 临时状态。
-- 不允许写低置信度内容。
-- 删除使用 soft delete，便于审计。
-
-后续可继续增强：
-
-- 敏感信息分类。
-- 用户确认机制。
-- memory conflict resolution。
-- memory TTL 清理任务。
-
-## 16. 可观测性机制
-
-每次压缩都会写 `context_compaction_runs`。
-
-字段包括：
-
-```text
-id
-thread_id
-condensation_id
-trigger_reason
-model
-prompt_version
-input_event_count
-input_token_estimate
-output_token_estimate
-compression_ratio
-latency_ms
-status
-error_type
-error_message
-quality_score
-metadata_json
-created_at
-```
-
-### 16.1 compression_ratio
-
-```python
-compression_ratio = output_token_estimate / input_token_estimate
-```
-
-越低表示压缩越强，但过低可能丢信息。
-
-### 16.2 quality_score
-
-当前是规则评分：
-
-```text
-quality_score = filled_schema_fields / total_schema_fields
-```
-
-它不是语义质量的最终判断，只是一个可观测起点。
-
-后续可以升级为：
-
-- LLM judge。
-- 源事件事实一致性校验。
-- tail 冲突检测。
-- 用户反馈回传。
-
-### 16.3 Debug Snapshot
-
-`ContextService.build_debug_snapshot()` 返回脱敏视图：
-
-```json
-{
-  "thread_id": "...",
-  "event_count": 3,
-  "events": [
-    {
-      "id": "...",
-      "type": "message",
-      "role": "user",
-      "content_preview": "...",
-      "token_estimate": 12
-    }
-  ],
-  "compaction_runs": [
-    {
-      "status": "completed",
-      "compression_ratio": 0.23,
-      "quality_score": 0.66
-    }
-  ]
-}
-```
-
-不会返回：
-
-- system prompt
-- 完整 memory
-- 完整 tool result payload
-- 完整 source event payload
-
-## 17. 数据库架构
-
-```mermaid
-erDiagram
-    context_threads {
-        string id PK
-        string user_id
-        string scene
-        json metadata_json
-        datetime created_at
-        datetime updated_at
-    }
-
-    context_events {
-        string id PK
-        string thread_id
-        string type
-        string role
-        text content
-        json payload_json
-        int token_estimate
-        bool pinned
-        bool critical
-        datetime created_at
-    }
-
-    context_condensations {
-        string id PK
-        string thread_id
-        text summary
-        json summary_json
-        json covered_event_ids
-        int summary_offset
-        string status
-        string model
-        string prompt_version
-        int token_before
-        int token_after
-        datetime created_at
-    }
-
-    context_memories {
-        string id PK
-        json namespace
-        text content
-        json metadata_json
-        json embedding_json
-        string source
-        float confidence
-        datetime created_at
-        datetime updated_at
-    }
-
-    context_compaction_runs {
-        string id PK
-        string thread_id
-        string condensation_id
-        string trigger_reason
-        string model
-        string prompt_version
-        int input_event_count
-        int input_token_estimate
-        int output_token_estimate
-        float compression_ratio
-        int latency_ms
-        string status
-        string error_type
-        text error_message
-        float quality_score
-        json metadata_json
-        datetime created_at
-    }
-
-    context_event_embeddings {
-        string id PK
-        string event_id
-        string thread_id
-        json namespace
-        text content_preview
-        json embedding_json
-        json metadata_json
-        datetime created_at
-    }
-
-    context_threads ||--o{ context_events : owns
-    context_threads ||--o{ context_condensations : owns
-    context_threads ||--o{ context_compaction_runs : owns
-    context_events ||--o{ context_event_embeddings : indexed_by
-    context_condensations ||--o{ context_compaction_runs : observed_by
-```
-
-Postgres 初始化还会执行：
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-ALTER TABLE context_memories ADD COLUMN IF NOT EXISTS embedding vector(384);
-CREATE INDEX IF NOT EXISTS ix_context_memories_embedding
-  ON context_memories USING ivfflat (embedding vector_cosine_ops);
-
-ALTER TABLE context_event_embeddings ADD COLUMN IF NOT EXISTS embedding vector(384);
-CREATE INDEX IF NOT EXISTS ix_context_event_embeddings_embedding
-  ON context_event_embeddings USING ivfflat (embedding vector_cosine_ops);
-```
-
-SQLite 测试环境使用 JSON embedding 和 fake/local scoring。
-
-## 18. SmartEats 接入时序
+## 5. 一轮对话的执行流程
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant G as SmartEats Graph
+    participant R as run_chat_stream
+    participant C as Checkpointer
+    participant G as StateGraph
     participant P as prepare_node
-    participant CE as ContextEngine
-    participant S as ConversationStore
-    participant M as MemoryStore
-    participant L as LLM Planner
-    participant T as ToolNode
+    participant S as Store
+    participant M as summarizer
+    participant A as agent_node
+    participant L as LLM
+    participant T as tools_node
+    participant H as Product history
 
-    U->>G: message
-    G->>P: ChatState
-    P->>CE: append_user_message()
-    CE->>S: save context_event(user)
-    P->>CE: prepare(ContextRequest)
-    CE->>S: load events + condensations
-    CE->>M: search user memories
-    CE->>CE: collect provider blocks
-    CE->>CE: budget check and maybe condense
-    CE-->>P: PreparedContext(messages)
-    P-->>G: state.messages = PreparedContext.messages
-    G->>L: ainvoke_with_tools(messages, tools)
-    L-->>G: AIMessage(tool_calls)
-    G->>T: execute tool calls
-    T-->>G: ToolMessage
-    G->>CE: append_tool_result(preview + full payload)
-    CE->>S: save context_event(tool_result)
-    G->>CE: prepare() for next planner step
-    CE-->>G: refreshed messages
-    G->>L: continue planning
-    L-->>G: final answer
-    G->>CE: append_assistant_message(final)
+    U->>R: message + session_id
+    R->>C: load checkpoint by thread_id
+    R->>G: graph.astream(input, config)
+    G->>P: current state
+    P->>P: _initialize_graph_state()
+    P->>G: append pending HumanMessage
+    P->>S: search ("memories", user_id)
+    P->>P: build business context and system_prompt
+    alt context too long
+        G->>M: summarize_node
+        M->>L: summary prompt
+        L-->>M: new summary
+        M->>G: summary + RemoveMessage updates
+        M->>S: put ("compaction_runs", thread_id)
+    end
+    G->>A: agent_node
+    A->>A: build_model_messages()
+    A->>L: SystemMessage + summary + messages
+    L-->>A: AIMessage or final text
+    alt tool calls
+        A->>G: append AIMessage(tool_calls)
+        G->>T: ToolNode executes
+        T->>S: put full source event
+        T->>G: append preview ToolMessage
+        G->>A: continue
+    else final
+        A->>R: final_json
+        R->>H: save assistant product message
+        R-->>U: SSE final
+    end
 ```
 
-几个兼容细节：
+## 6. 每次调用大模型时到底给什么
 
-- 如果 `db is None` 或测试里传入 mock db，SmartEats 会回退到旧 `_refresh_observation_context()`。
-- 只有 `state.context["prepared_context"] is True` 时，agent node 才会使用 `state["messages"]` 作为新 native context。
-- 旧 fallback 链路继续使用 `[SystemMessage, HumanMessage]`，避免破坏已有测试和旧逻辑。
+`agent_node` 不直接把 `state.context` 或 store 里的数据整体塞给模型，而是调用 `build_model_messages()` 生成临时输入：
 
-## 19. LLM 调用适配
-
-`OpenAIPlanner.ainvoke_with_tools()` 支持两种路径：
-
-```text
-简单 system/user 两条消息:
-  走 plan_tool_calls(system, user, tools)
-  兼容旧测试和旧调用方式
-
-PreparedContext 多消息:
-  走 plan_native_messages_with_tools(messages, tools)
-  保留 System/Human/AI/ToolMessage 结构
-```
-
-这样既能引入 native messages，又不会破坏旧单元测试和旧 fallback 路径。
-
-## 20. 工具结果处理
-
-工具结果处理的原则：
-
-```text
-完整工具结果写 event payload
-给模型的 content 默认是 result_preview
-SSE tool_call 事件也只返回 result_preview
-```
-
-在 `SmartEats._apply_official_tool_postprocess()` 中：
-
-```text
-tool message -> decode result
-result_preview = _build_result_preview(...)
-history.save_tool_message(...)
-context_engine.append_tool_result(
-    content=json.dumps(result_preview),
-    payload={"args": args, "result": result},
-    preview=result_preview
+```python
+planner_messages = build_model_messages(
+    system_prompt=system,
+    summary=chat_state.summary,
+    messages=state_messages,
+    memories=chat_state.retrieved_memories,
 )
 ```
 
-这样模型下一轮能看到关键事实，但不会被完整工具 payload 挤爆上下文。
+最终传给 planner 的顺序是：
 
-## 21. 完整压缩时序
+```text
+1. SystemMessage
+   - SmartEats system prompt
+   - 当前业务上下文
+   - runtime skill prompt
+   - <long_term_memories>...</long_term_memories>
+
+2. 可选 SystemMessage
+   - <conversation_summary>...</conversation_summary>
+   - "Recent raw messages after this summary are authoritative."
+
+3. state["messages"]
+   - HumanMessage
+   - AIMessage
+   - preview ToolMessage
+```
+
+不会直接给模型的内容：
+
+- LangGraph store 里的完整 memory 集合。
+- `source_events` 里的完整工具 payload。
+- `compaction_runs` 里的压缩观测记录。
+- 产品聊天记录表里的历史消息。
+- debug snapshot。
+- 未被检索命中的长期记忆。
+- 工具返回的完整大 JSON。
+
+所以，模型每次看到的是“当前 system view + 可选历史摘要 + checkpointer 恢复出的短期原生 messages + 本轮检索命中的 memory preview”。
+
+## 7. prepare_node 机制
+
+`prepare_node` 做三件事：
+
+1. `_initialize_graph_state()`：把当前 `state.message` 转成待追加的 `HumanMessage`。如果 checkpoint 中最新 human message 已经是当前内容，则不重复追加。
+2. `_prepare_langgraph_context()`：构造本轮业务上下文、系统提示词、工具 allowlist、长期记忆检索结果和 budget 统计。
+3. 返回 `output["messages"] = pending_messages`，让 LangGraph 的 `add_messages` reducer 追加消息。
+
+关键点：
+
+- 它不会把历史 `messages` 重写为自研 engine 输出。
+- 它会把 `state.history` 清空，避免旧 history 链路参与 prompt。
+- 它会从 Redis 读取位置和餐厅缓存，再合并到业务上下文。
+- 它会从 store 的 `("memories", user_id)` namespace 召回长期记忆。
+- 它会把 `langgraph_native=True`、`context_budget`、`allowed_tools`、`system_prompt` 放入 `state.context`。
+
+## 8. agent_node 机制
+
+`agent_node` 的职责是把当前 state 渲染成一次 LLM 调用，并规范化返回结果。
 
 ```mermaid
-sequenceDiagram
-    participant CE as ContextEngine.prepare
-    participant B as BudgetManager
-    participant V as ViewBuilder
-    participant C as Condenser
-    participant S as LLMStructuredSummarizer
-    participant ME as MemoryExtractor
-    participant Store as ConversationStore
-
-    CE->>B: fit_thread(thread_id, blocks)
-    B->>V: build(thread_id)
-    V->>Store: list_events()
-    V->>Store: list_condensations()
-    V-->>B: current view
-    B->>B: estimate event_tokens + block_tokens
-    alt total > hard_limit
-        B->>C: condense(thread_id, memory_namespace)
-        C->>Store: list_events()
-        C->>V: build(thread_id)
-        C->>C: select longest uncovered middle segment
-        C->>S: summarize(candidate events, previous summaries)
-        S-->>C: structured summary_json
-        C->>C: normalize + render summary
-        C->>Store: save_condensation()
-        C->>ME: persist memory_candidates
-        ME->>Store: memory_store.put()
-        C->>Store: save_compaction_run()
-        C-->>B: condensation
-        B->>V: rebuild view
-    end
-    alt still total > max_tokens
-        B->>B: drop lower priority blocks
-        B->>B: head/tail truncate events
-    end
-    B-->>CE: BudgetReport
+flowchart TD
+    A["agent_node"] --> B["read chat_state.context.system_prompt"]
+    B --> C["resolve allowed_tools"]
+    C --> D["build LangChain tools"]
+    D --> E["build_model_messages"]
+    E --> F["planner.ainvoke_with_tools"]
+    F --> G{"LLM returns tool_calls?"}
+    G -->|yes| H["normalize tool calls"]
+    H --> I["append AIMessage(tool_calls)"]
+    G -->|no| J["parse final action"]
+    J --> K["state.final_json"]
 ```
 
-## 22. Head/Tail 裁剪兜底
+`OpenAIPlanner.ainvoke_with_tools()` 支持两种模式：
 
-当 LLM condensation 后仍超限时，`BudgetManager` 会做 deterministic head/tail truncation。
+- 简单 `SystemMessage + HumanMessage` 或测试 monkeypatch 场景：降级为 legacy `system/user` 调用。
+- 多消息上下文场景：走 `plan_native_messages_with_tools()`，保留原生 message 结构。
 
-当前策略：
+这保证当前主链路是 native messages，同时兼容已有测试和部分旧调用。
+
+## 9. tools_node 机制
+
+工具执行仍然使用 LangGraph 官方 `ToolNode` 和原生工具调用格式：
+
+```text
+AIMessage.tool_calls -> ToolNode -> ToolMessage
+```
+
+但工具结果被拆成两层：
+
+```mermaid
+flowchart LR
+    ToolNode["ToolNode full result"] --> Postprocess["_apply_official_tool_postprocess"]
+    ToolNode --> Preview["_preview_tool_messages"]
+    Postprocess --> SourceStore["store.put full result to source_events"]
+    Postprocess --> BusinessState["update observations/context/final_json"]
+    Preview --> Messages["append preview ToolMessage to state.messages"]
+```
+
+具体策略：
+
+- `_apply_official_tool_postprocess()` 使用完整工具结果更新业务状态，例如位置、餐厅、路线、菜谱、fallback final。
+- `save_source_event()` 把完整工具结果写入 `("source_events", thread_id)`。
+- `_preview_tool_messages()` 生成 preview `ToolMessage`，只把摘要、关键 facts 或裁剪后的内容写回 `state.messages`。
+- 下一轮模型默认只看到 preview，不看到完整 payload。
+- 如果模型需要追溯细节，可以调用 `source_event_search` 检索源事件 preview。
+
+## 10. 压缩机制
+
+当前压缩是 LangGraph-native 的 `summary + RemoveMessage`，不是旧版 condensation event。
+
+### 10.1 触发条件
+
+`prepare_node` 先生成 `active_context` budget report，`_route_after_prepare()` 再读取 `context_budget["should_compact"]`：
 
 ```python
-head_count = min(2, len(events))
-kept = events[:head_count]
-
-for event in reversed(events[head_count:]):
-    if used + event_cost <= token_budget:
-        insert after head
-    else:
-        dropped.append(event.id)
+active_report = build_active_context_report(
+    system_prompt=system_prompt,
+    messages=visible_messages,
+    summary=state.summary,
+    memories=state.retrieved_memories,
+    model_context_window=resolve_model_context_window(...),
+    trigger_ratio=settings.CHAT_COMPACT_TRIGGER_RATIO,
+    hard_ratio=settings.CHAT_COMPACT_HARD_RATIO,
+    reserved_output_tokens=settings.CHAT_COMPACT_RESERVED_OUTPUT_TOKENS,
+    reserved_tool_tokens=settings.CHAT_COMPACT_RESERVED_TOOL_TOKENS,
+)
 ```
 
-含义：
-
-- 先保留开头 2 条事件。
-- 从尾部往前尽可能保留最近事件。
-- 中间放不下的事件进入 `dropped_event_ids`。
-- `_compose_messages()` 会跳过这些 dropped events。
-
-这个兜底不追求语义完美，只保证永不超窗。
-
-## 23. 与业界优秀 Agent 方案的对应关系
-
-这套方案对应了主流 agent memory/context 系统里的几个关键能力：
+当前配置默认值：
 
 ```text
-短期上下文:
-  recent raw messages + historical summaries
-
-长期记忆:
-  memory extraction + vector retrieval
-
-可追溯性:
-  source events preserved + covered_event_ids
-
-可控压缩:
-  token budget + hard limit + fallback truncation
-
-可观测:
-  compaction runs + compression ratio + quality score
-
-agentic memory:
-  memory_search/write/update/forget + source_event_search
+LLM_MODEL_CONTEXT_SIZE = 128000
+LLM_MODEL_CONTEXT_WINDOWS = qwen:qwen3.5-flash=128000,...
+CHAT_COMPACT_TRIGGER_RATIO = 0.8
+CHAT_COMPACT_HARD_RATIO = 0.92
+CHAT_COMPACT_MIN_MESSAGES = 3
+CHAT_COMPACT_TAIL_RATIO = 0.2
+CHAT_COMPACT_RESERVED_OUTPUT_TOKENS = 8000
+CHAT_COMPACT_RESERVED_TOOL_TOKENS = 16000
 ```
 
-和更完整的 agentic memory 系统相比，当前仍有可继续演进的点：
+也就是说，压缩不再用固定 8K 窗口，也不只看 `messages`。当前会先按 provider/model 解析上下文窗口，然后为输出和工具调用预留 headroom，再看 active context 是否超过可用窗口的 80%。
 
-- 还没有 LLM judge 做 hallucination check。
-- pgvector 原生相似度查询还未替换 portable scoring。
-- memory conflict resolution 仍比较基础。
-- sensitive memory policy 还需要增强。
-- memory TTL 清理任务还未实现。
-- source event retrieval 目前默认返回 preview，必要时可增加更严格的权限控制读取完整 payload。
+active context 当前计入：
 
-## 24. 当前测试覆盖
+- `system`：system prompt，里面包含业务上下文和 skill prompt。
+- `summary`：已有历史摘要。
+- `messages`：LangGraph state 中保留的原生消息。
+- `memories`：本轮召回的长期记忆。
+- `business_context`：额外业务上下文预算，当前主要已包含在 system prompt 内。
 
-新增/相关测试位于：
+### 10.2 token 估算
+
+`estimate_text_tokens()` 是轻量估算：
+
+- ASCII 字符按约 4 字符 1 token。
+- 非 ASCII 字符按约 1 字符 1 token。
+- 每段文本额外加 4 token 的消息开销。
+
+这不是精确 tokenizer，但适合作为触发压缩的保守近似。
+
+### 10.3 选择压缩范围
+
+`summarize_node` 先按比例保留 tail，并额外计算最近 user turns：
+
+```python
+keep_recent = max(2, int(len(messages) * CHAT_COMPACT_TAIL_RATIO))
+keep_recent = max(keep_recent, 4)
+keep_recent_turns = max(2, int(user_turn_count * CHAT_COMPACT_TAIL_RATIO))
+removable = messages[: max(0, len(messages) - keep_recent)]
+```
+
+随后 `build_summary_update()` 内部通过 `_protected_recent_start()` 进一步保护最近工具调用片段：
+
+- 以最近完整 user turn 为边界，避免只保留半个用户回合。
+- 如果 tail 中有 `AIMessage.tool_calls`，保护对应 tool call。
+- 如果 tail 中有 `ToolMessage.tool_call_id`，向前找到配对的 `AIMessage.tool_calls`。
+- 防止删除半截工具调用链，避免 LangGraph/OpenAI messages 格式不合法。
+
+最终删除的是 “旧完整 turn 段”，保留的是 “最近完整 turn + 最近原文 tail + 必要 tool-call 配对片段”。
+
+### 10.4 摘要提示词
+
+当前摘要提示词由 `build_summary_prompt()` 生成：
 
 ```text
-app/tests/test_context_engine.py
-app/tests/test_smart_eats_graph_builder.py
-app/tests/test_smart_eats_tool_postprocess.py
-app/tests/test_tools_registry_langchain.py
+你在为 SmartEats agent 生成 Claude-Code-like working-state compact summary。
+下一个模型看不到被压缩的旧消息，只能看到你的 JSON、保留的最近原文消息、长期记忆和可检索 source refs。
+请把下面旧对话压缩为严格 JSON 对象。只总结旧消息，不要虚构最新状态。
+必须只输出 JSON，不要 Markdown，不要解释。
+JSON 字段必须包含：summary, latest_user_intent, task_state, user_goals,
+stable_preferences, user_preferences, decisions, tool_results, open_questions,
+next_steps, avoid_repeating, current_task_state, coverage。
+
+字段含义：
+- summary: 旧消息段的工作状态总览，面向继续执行任务的模型。
+- latest_user_intent: 旧消息段内最后明确出现的用户意图；不要覆盖后续未压缩消息。
+- task_state: 对象，包含 stage、next_action、blocked_by。
+- user_goals: 用户在旧消息段中表达过的目标。
+- stable_preferences: 可长期复用且高置信的稳定偏好；临时想法不要放这里。
+- user_preferences: 偏好对象数组，包含 content、scope、confidence、evidence。
+- decisions: 对象数组，保留已确认/暂定/已废弃的选择、约束或结论及 evidence。
+- tool_results: 对象数组，保留 tool_name、tool_call_id、source_event_id、key_facts、error。
+- open_questions: 对象数组，旧消息段结束时仍未解决的问题、blocked_by、ask_user。
+- next_steps: 对象数组，继续任务最应该做的动作、原因和优先级。
+- avoid_repeating: 对象数组，已经完成/失败/用户拒绝的动作，避免重复。
+- current_task_state: 旧消息段结束时的任务状态；不要覆盖后续最新消息。
+- coverage: 对象，包含 covered_message_ids、covered_source_event_ids、authoritative_tail_starts_after。
+
+已有摘要：
+{previous_summary 或 无}
+
+待压缩消息：
+[1] human: ...
+[2] ai: ...
+[3] tool: ...
 ```
 
-覆盖点：
+注意这里明确要求“只总结旧消息，不要虚构最新状态”。最新状态由保留下来的 tail 原文承担。因此 summary 的职责不是替代整个对话，而是替代被删除的旧消息段。
 
-- condensation view 替换 covered events。
-- 已覆盖事件不会重复压缩。
-- budget 超限触发 condensation。
-- native messages 输出。
-- structured condensation 渲染 scope。
-- compaction metrics 写入。
-- failed condensation 不覆盖事件。
-- memory candidate 写入策略。
-- source event 检索已被 summary 覆盖的原始事件。
-- agentic memory write/search/update/forget。
-- SmartEats fallback 兼容。
-- 工具后处理不回归。
+LLM 输出后会进入 `normalize_summary_output()`：
 
-最近完整测试结果：
+- 支持剥离 ```json fenced block。
+- 从混杂文本中提取 JSON object。
+- 补齐缺失 schema 字段。
+- 把 list 字段统一成数组。
+- 生成 canonical JSON 字符串写入 `summary`。
+
+如果第一次输出不是合法 JSON，`summarize_node` 会用 `build_summary_repair_prompt()` 触发一次 repair 调用，要求模型只输出目标 JSON。
+
+### 10.5 摘要写回
+
+LLM 返回的新摘要会写入：
+
+```python
+chat_state.summary = update["summary"]
+chat_state.context_budget = update["context_budget"]
+output["messages"] = update["messages"]  # RemoveMessage list
+```
+
+`RemoveMessage` 会交给 LangGraph 的 `add_messages` reducer，从 checkpointed `messages` 中删除对应旧消息。
+
+`context_budget` 还会记录：
+
+- `covered_message_ids`：本次被 summary 覆盖并删除的 message ids。
+- `source_refs`：被覆盖消息段中关联到的工具源事件引用。
+- `summary_memory_write_count`：从摘要中沉淀到长期 memory 的条数。
+- `last_compaction_reduction_ratio`：本次压缩实际减少比例。
+- `compact_attempts`：连续低收益压缩次数，用于 thrash guard。
+
+同时，保留 tail 中较旧的 `ToolMessage` 会进入 tool output tiering：只保留最近少量工具 preview 原文，更旧的工具 preview 会替换成 `archived_tool_preview` JSON，并提示可通过 `source_event_search` 找回完整源事件。
+
+### 10.6 失败降级
+
+如果摘要 LLM 调用失败：
+
+- 记录 `langgraph_summary_failed` 日志。
+- `new_summary` 为空时使用 prompt 前 1600 字符做保底输入，再由 `normalize_summary_output()` 包装成固定 schema。
+- 如果模型输出不是合法 JSON，会追加一次 repair 调用。
+- 仍然执行 `build_summary_update()`，避免长上下文继续无限膨胀。
+
+当前 `save_compaction_run()` 默认记录 `status="completed"`，并保存 `summary_json` 和 budget。后续还可以继续补充 fallback 标记、summary 质量评分和事实一致性评分。
+
+### 10.7 压缩观测
+
+每次压缩会写入 store：
 
 ```text
-python -m pytest app/tests -q
-179 passed
+namespace = ("compaction_runs", thread_id)
+value = {
+  "status": "completed",
+  "error_type": None,
+  "summary_present": true,
+  "summary_json": {...},
+  "budget": {
+    "status": "summarized",
+    "removed_message_count": ...,
+    "covered_message_ids": [...],
+    "source_refs": [...],
+    "token_before": ...,
+    "token_after": ...,
+    "last_compaction_reduction_ratio": ...,
+    "compression_ratio": ...,
+    "previous_summary_present": ...
+  },
+  "created_at": ...
+}
 ```
 
-## 25. 常见问题
+### 10.8 Thrash Guard
 
-### 25.1 history 和 condensation 有什么区别
-
-`history` 是传统意义上的对话消息列表，通常是直接给模型或简单压缩后给模型。
-
-`condensation` 是 Context Engine 的持久化压缩对象：
-
-- 它记录覆盖了哪些 event。
-- 它有结构化 `summary_json`。
-- 它有 `status`。
-- 它能被 `ViewBuilder` 用来替代原始事件。
-- 它不删除原始事件。
-- 它有对应 compaction metrics。
-
-### 25.2 压缩摘要是不是全局最新状态
-
-不是。
-
-摘要只覆盖历史中段。最新状态由：
-
-- tail 原始事件
-- current user message
-- business/runtime context blocks
-
-共同表达。
-
-### 25.3 为什么工具结果不完整给模型
-
-完整工具结果可能很大，也可能包含不需要暴露给模型的字段。当前策略是：
-
-- 完整结果写入 event payload。
-- 模型只看 preview/facts。
-- 需要细节时通过 `source_event_search` 找回源事件 preview。
-
-### 25.4 为什么 failed condensation 也要保存
-
-因为它是可观测性的一部分。保存失败记录可以回答：
-
-- 哪次压缩失败了。
-- 为什么失败。
-- 失败时输入规模多大。
-- 是否影响用户请求。
-
-但 failed condensation 不覆盖 event，所以不会丢上下文。
-
-### 25.5 为什么 memory delete 是软删除
-
-软删除便于审计和避免误删恢复困难。检索默认只返回 `status=active` 的 memory。
-
-如果未来有合规要求，可以增加物理删除接口。
-
-## 26. 后续优化建议
-
-优先级从高到低：
-
-1. 使用真实 embedding 模型替换 deterministic embedding。
-2. 将 memory/source event 检索切到原生 pgvector distance SQL。
-3. 增加 LLM judge，评估 summary 是否遗漏关键事实或产生幻觉。
-4. 增加 memory conflict resolution，例如新偏好 supersede 旧偏好。
-5. 增加敏感 memory policy，例如健康、位置、身份信息需要更严格授权。
-6. 增加 TTL cleanup job，清理过期 memory。
-7. 增加 full source event fetch 的权限门，只在明确需要时读取完整 payload。
-8. 增加 context replay/eval，用长对话回归测试 summary 是否影响 final_json。
-9. 增加 dashboard 展示 compaction runs、compression ratio、memory write count。
-10. 将 Context Engine 包装为更独立的库接口，供非 SmartEats agent 复用。
-
-## 27. 一句话总结
-
-当前 Context Engine v2 的本质是：
+`detect_compact_thrash()` 会阻止反复低收益压缩：
 
 ```text
-用事件账本保证可追溯，用结构化摘要压缩历史中段，用 tail 原文保证最新状态，用长期 memory 保留稳定事实，用源事件检索弥补摘要丢失，用 compaction metrics 让压缩质量可观测，用 agentic memory tools 让 agent 能主动管理记忆。
+如果 active_context 已超过 hard_limit，
+并且 compact_attempts >= CHAT_COMPACT_MAX_ATTEMPTS，
+并且 last_compaction_reduction_ratio < CHAT_COMPACT_MIN_REDUCTION_RATIO，
+则设置 compact_blocked。
 ```
 
+默认值：
+
+```text
+CHAT_COMPACT_MAX_ATTEMPTS = 2
+CHAT_COMPACT_MIN_REDUCTION_RATIO = 0.05
+```
+
+这样可以避免某个超大 system/business context 或单个巨大工具 preview 导致“压缩后立刻又超限”的循环。
+
+## 11. 长期记忆机制
+
+长期记忆基于 LangGraph store，不再使用旧 `context_memories` 表。
+
+namespace：
+
+```text
+("memories", user_id)
+```
+
+数据结构：
+
+```json
+{
+  "content": "用户不吃香菜",
+  "kind": "preference",
+  "confidence": 0.9,
+  "metadata": {"source": "agent_tool"},
+  "updated_at": "..."
+}
+```
+
+读写入口：
+
+- `load_user_memories()`：prepare 阶段按当前 query 自动召回。
+- `memory_search`：agent 主动检索长期记忆。
+- `memory_write`：agent 在用户明确要求记住或判断为稳定偏好时写入。
+- `memory_update`：用户纠正或覆盖已有记忆时更新。
+- `memory_forget`：用户要求忘记时删除。
+- `persist_summary_memories()`：压缩摘要中 `stable_preferences` 的高置信条目会自动写入长期记忆。
+
+模型并不会看到整个 memory namespace。每轮只看到 `load_user_memories()` 召回的少量记录，且格式为：
+
+```text
+<long_term_memories>
+- id=m1 kind=preference confidence=0.9: 用户不吃香菜
+</long_term_memories>
+```
+
+## 12. 源事件机制
+
+工具源事件解决的问题是：prompt 中只放工具 preview，但完整工具结果仍然需要可追溯。
+
+namespace：
+
+```text
+("source_events", thread_id)
+```
+
+写入内容：
+
+```json
+{
+  "tool_name": "search_restaurants",
+  "tool_call_id": "call_1",
+  "args": {"query": "火锅"},
+  "result": {"restaurants": [...]},
+  "preview": {"names": ["山城火锅"]},
+  "content_preview": "...",
+  "checkpoint_id": null,
+  "created_at": "..."
+}
+```
+
+检索入口：
+
+- `source_event_search` tool：agent 在 summary 或 preview 不够详细时主动查。
+- `ContextService.build_debug_snapshot()`：debug API 返回 source event preview 和 metadata。
+
+安全边界：
+
+- LLM 默认只看 preview `ToolMessage`。
+- debug snapshot 只返回 `content_preview`，不返回完整 `result`。
+- 完整 payload 留在 store 中供内部追溯，不直接暴露给前端上下文调试接口。
+
+## 13. Checkpointer 与 Store
+
+### 13.1 Checkpointer
+
+`checkpointer_context()` 支持：
+
+```text
+LANGGRAPH_CHECKPOINT_BACKEND=memory
+LANGGRAPH_CHECKPOINT_BACKEND=sqlite
+LANGGRAPH_CHECKPOINT_BACKEND=postgres
+```
+
+默认配置：
+
+```text
+LANGGRAPH_CHECKPOINT_BACKEND=sqlite
+LANGGRAPH_CHECKPOINT_DB=.langgraph_checkpoints.sqlite
+LANGGRAPH_DURABILITY=async
+```
+
+作用：
+
+- 按 `configurable.thread_id = session_id` 持久化 graph state。
+- 自动恢复上一轮 `messages`、`summary`、业务状态。
+- 支持 checkpoint resume/replay。
+
+### 13.2 Store
+
+`langgraph_store_context()` 支持：
+
+```text
+LANGGRAPH_STORE_BACKEND=memory
+LANGGRAPH_STORE_BACKEND=postgres
+LANGGRAPH_STORE_BACKEND=disabled
+```
+
+当前配置默认：
+
+```text
+LANGGRAPH_STORE_BACKEND=postgres
+LANGGRAPH_STORE_DB=None  # 默认复用 DATABASE_URL
+```
+
+作用：
+
+- 长期记忆：`("memories", user_id)`。
+- 源事件：`("source_events", thread_id)`。
+- 压缩记录：`("compaction_runs", thread_id)`。
+
+Postgres URI 会把 SQLAlchemy 风格的 `postgresql+asyncpg://` 或 `postgresql+psycopg://` 规范化为 `postgresql://`，以兼容 LangGraph Postgres saver/store。
+
+## 14. Debug Snapshot
+
+`ContextService.build_debug_snapshot()` 当前返回：
+
+```json
+{
+  "thread_id": "...",
+  "runtime": "langgraph_native",
+  "source_event_count": 2,
+  "source_events": [
+    {
+      "id": "...",
+      "tool_name": "search_restaurants",
+      "content_preview": "...",
+      "metadata": {
+        "tool_call_id": "...",
+        "checkpoint_id": null,
+        "namespace": ["source_events", "..."]
+      }
+    }
+  ],
+  "compaction_runs": [
+    {
+      "id": "...",
+      "status": "completed",
+      "error_type": null,
+      "budget": {...}
+    }
+  ]
+}
+```
+
+它不会返回：
+
+- 完整 system prompt。
+- 完整 memory。
+- 完整工具 payload。
+- checkpointer 中的全部 `messages`。
+
+## 15. 和旧 Context Engine 的差异
+
+| 维度 | 旧 Context Engine | 当前 LangGraph-native |
+| --- | --- | --- |
+| 短期历史来源 | `context_events` + view builder | `state.messages` + checkpointer |
+| 模型输入 | `PreparedContext.messages` | 临时 `build_model_messages()` |
+| 压缩形态 | condensation 覆盖事件段 | `summary` state + `RemoveMessage` |
+| 工具结果 | event + preview | preview `ToolMessage` + source event store |
+| 长期记忆 | `context_memories` / pgvector | LangGraph store `("memories", user_id)` |
+| 可追溯源 | `context_events` / embeddings | store `("source_events", thread_id)` |
+| 业务耦合 | 通用层 + providers | SmartEats context node + LangGraph primitives |
+| 主链路复杂度 | 自研 prepare/view/budget | LangGraph state/checkpointer/store |
+
+当前方案更干净的地方：
+
+- 短期历史不再有两套真相源。
+- 不再把自研上下文 view 覆盖回 graph state。
+- 更贴近 LangGraph 官方的 state、checkpointer、store、RemoveMessage 模式。
+- 工具结果进入模型的策略更明确：state 只存 preview，store 存 full payload。
+
+当前方案仍可继续优化的地方：
+
+- 摘要已经有 schema normalize 和一次 repair，但还没有 LLM judge 做事实一致性评分。
+- 压缩失败 fallback 已经会包装成固定 schema，但还没有明确记录 fallback 标记。
+- `compaction_runs` 已记录 `summary_json`、covered ids 和 source refs，但还没有质量评分。
+- summary 中的高置信 `stable_preferences` 已自动沉淀到 LangGraph store；后续还需要 memory conflict resolution 和过期策略。
+- `source_event_search` 依赖 store search 能力；如果 backend 是 memory，检索语义能力有限。
+
+## 16. 测试覆盖
+
+当前核心测试位于：
+
+```text
+app/tests/test_langgraph_native_context.py
+```
+
+已覆盖：
+
+- `build_model_messages()` 会临时注入 system/summary/memories，且不修改 state messages。
+- `build_summary_update()` 会删除旧消息，并保留最近工具调用配对片段。
+- `build_summary_update()` 会按完整 turn 边界压缩，并记录 covered message ids/source refs。
+- `build_active_context_report()` 会统计 system/summary/messages/memories/reserved headroom。
+- `resolve_model_context_window()` 会按 provider/model 解析上下文窗口。
+- `tier_tool_messages()` 会把较旧工具 preview 降级为 archived preview。
+- `detect_compact_thrash()` 会阻止重复低收益压缩。
+- `normalize_summary_output()` 会解析/修复摘要 JSON schema。
+- `persist_summary_memories()` 会把高置信稳定偏好写入长期记忆。
+- `memory_search/write/update/forget` 使用 LangGraph store namespace。
+- `source_event_search` 从 LangGraph store 检索源事件。
+- `load_user_memories()` 返回脱敏后的 memory records。
+
+建议后续增加：
+
+- 多轮 chat 集成测试：第二轮不依赖产品 history，也能从 checkpoint 恢复上一轮 messages。
+- 长历史集成测试：触发 summary 后下一轮模型收到 summary + tail messages。
+- 工具大 payload 测试：完整结果不进入 `state.messages`，只进入 source event store。
+- 压缩质量测试：用 LLM judge 或规则 eval 验证关键事实不丢失。
+- Postgres store/checkpointer 初始化幂等测试。
+
+## 17. 配置速查
+
+```text
+LLM_MODEL_CONTEXT_SIZE=128000
+LLM_MODEL_CONTEXT_WINDOWS=qwen:qwen3.5-flash=128000,qwen:qwen3.5-plus=128000,deepseek:deepseek-chat=64000,gpt-4.1=1047576,gpt-5=400000
+CHAT_COMPACT_TRIGGER_RATIO=0.8
+CHAT_COMPACT_HARD_RATIO=0.92
+CHAT_COMPACT_MIN_MESSAGES=3
+CHAT_COMPACT_TAIL_RATIO=0.2
+CHAT_COMPACT_RESERVED_OUTPUT_TOKENS=8000
+CHAT_COMPACT_RESERVED_TOOL_TOKENS=16000
+CHAT_COMPACT_MAX_ATTEMPTS=2
+CHAT_COMPACT_MIN_REDUCTION_RATIO=0.05
+
+LANGGRAPH_CHECKPOINT_BACKEND=sqlite
+LANGGRAPH_CHECKPOINT_DB=.langgraph_checkpoints.sqlite
+LANGGRAPH_DURABILITY=async
+
+LANGGRAPH_STORE_BACKEND=postgres
+LANGGRAPH_STORE_DB=
+```
+
+本地测试如果不想连接 Postgres，可以把 store backend 调成 memory 或 disabled；但长期记忆、源事件、压缩记录就不会具备生产持久化能力。
+
+## 18. 心智模型
+
+可以把当前系统理解为三层：
+
+```mermaid
+flowchart TB
+    L1["Layer 1: LangGraph messages"]
+    L2["Layer 2: Runtime model view"]
+    L3["Layer 3: LangGraph store"]
+
+    L1 -->|"raw short-term conversation"| L2
+    L3 -->|"retrieved memories and source refs"| L2
+    L2 -->|"temporary messages only"| LLM["LLM"]
+    LLM -->|"AIMessage"| L1
+    LLM -->|"tool calls"| Tools["ToolNode"]
+    Tools -->|"preview ToolMessage"| L1
+    Tools -->|"full payload"| L3
+```
+
+一句话总结：
+
+```text
+messages 负责最近原文，summary 负责旧历史压缩，store 负责长期记忆和源事件，model_messages 只是每次调用模型时临时生成的视图。
+```

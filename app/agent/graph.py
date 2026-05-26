@@ -18,6 +18,7 @@ except ImportError:
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.checkpoint import checkpointer_context
+from app.agent.langgraph_store import langgraph_store_context
 from app.agent.agents.smart_eats import (
     _fallback_final,
     _state_from_dict,
@@ -178,7 +179,7 @@ async def run_chat_stream(
     history_cache = history.create_history_cache()
     history.set_current_cache(history_cache)
     try:
-        async with checkpointer_context() as checkpointer:
+        async with checkpointer_context() as checkpointer, langgraph_store_context() as store:
             logger.info(
                 "agent_runtime_dispatch session_id=%s trace_id=%s runtime_path=%s agent_type=%s",
                 state.session_id,
@@ -191,7 +192,7 @@ async def run_chat_stream(
                 redis_client=redis_client,
                 provider=provider,
                 resolved_model_config=state.resolved_model_config,
-            ).compile(checkpointer=checkpointer)
+            ).compile(checkpointer=checkpointer, store=store)
             latest_state = state
             last_final_json: dict[str, Any] | None = None
             config = _build_graph_config(state)
@@ -298,17 +299,6 @@ async def run_chat_stream(
                 answer_text,
                 latest_state.final_json,
             )
-            if db is not None and hasattr(db, "add") and hasattr(db, "execute"):
-                try:
-                    from app.context_engine.factory import build_context_engine
-
-                    await build_context_engine(db=db, providers=[]).append_assistant_message(
-                        thread_id=latest_state.session_id,
-                        content=answer_text,
-                        payload={"final_json": latest_state.final_json},
-                    )
-                except Exception:
-                    logger.exception("context_engine_assistant_event_failed session_id=%s", latest_state.session_id)
             await _apply_turn_preference_extraction(
                 db,
                 user_id=latest_state.user_id,
@@ -323,17 +313,6 @@ async def run_chat_stream(
                 answer_text,
                 temp_state.final_json,
             )
-            if db is not None and hasattr(db, "add") and hasattr(db, "execute"):
-                try:
-                    from app.context_engine.factory import build_context_engine
-
-                    await build_context_engine(db=db, providers=[]).append_assistant_message(
-                        thread_id=temp_state.session_id,
-                        content=answer_text,
-                        payload={"final_json": temp_state.final_json},
-                    )
-                except Exception:
-                    logger.exception("context_engine_assistant_event_failed session_id=%s", temp_state.session_id)
             await _apply_turn_preference_extraction(
                 db,
                 user_id=temp_state.user_id,

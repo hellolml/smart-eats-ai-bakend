@@ -18,37 +18,43 @@ class ContextService:
         *,
         thread_id: str,
     ) -> dict[str, Any]:
-        from app.context_engine.stores import SqlConversationStore
-        from app.context_engine.view import ViewBuilder
+        from app.agent.langgraph_context import search_source_events, store_search
+        from app.agent.langgraph_store import langgraph_store_context
 
-        store = SqlConversationStore(db)
-        view = await ViewBuilder(store).build(thread_id)
-        runs = await store.list_compaction_runs(thread_id)
+        async with langgraph_store_context() as store:
+            source_events = await search_source_events(
+                store,
+                thread_id=thread_id,
+                query="",
+                top_k=20,
+            )
+            compaction_runs = await store_search(
+                store,
+                ("compaction_runs", thread_id),
+                query=None,
+                limit=20,
+            )
         return {
             "thread_id": thread_id,
-            "event_count": len(view.events),
-            "events": [
+            "runtime": "langgraph_native",
+            "source_event_count": len(source_events),
+            "source_events": [
                 {
-                    "id": item.id,
-                    "type": item.type,
-                    "role": item.role,
-                    "content_preview": (item.content or "")[:200],
-                    "token_estimate": item.token_estimate,
+                    "id": item.get("event_id"),
+                    "tool_name": item.get("tool_name"),
+                    "content_preview": item.get("content_preview"),
+                    "metadata": item.get("metadata"),
                 }
-                for item in view.events
+                for item in source_events
             ],
             "compaction_runs": [
                 {
-                    "id": item.id,
-                    "condensation_id": item.condensation_id,
-                    "status": item.status,
-                    "input_event_count": item.input_event_count,
-                    "compression_ratio": item.compression_ratio,
-                    "latency_ms": item.latency_ms,
-                    "quality_score": item.quality_score,
-                    "error_type": item.error_type,
+                    "id": getattr(item, "key", None),
+                    "status": (getattr(item, "value", {}) or {}).get("status"),
+                    "error_type": (getattr(item, "value", {}) or {}).get("error_type"),
+                    "budget": (getattr(item, "value", {}) or {}).get("budget"),
                 }
-                for item in runs
+                for item in compaction_runs
             ],
         }
 
@@ -138,7 +144,7 @@ class ContextService:
             snapshot = _merge_overrides(snapshot, overrides)
 
         if session_id:
-            snapshot["context_engine"] = await ContextService.build_debug_snapshot(
+            snapshot["langgraph_context"] = await ContextService.build_debug_snapshot(
                 db,
                 thread_id=session_id,
             )

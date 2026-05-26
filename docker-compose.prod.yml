@@ -45,6 +45,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-smart_eats}
       REDIS_URL: redis://redis:6379/0
       LANGGRAPH_CHECKPOINT_DB: /app/.langgraph/.langgraph_checkpoints.sqlite
+      LANGGRAPH_STORE_BACKEND: postgres
     depends_on:
       postgres:
         condition: service_healthy

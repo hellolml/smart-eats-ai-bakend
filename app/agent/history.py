@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.config import settings
 from app.infra.models.chat import ChatMessage, ChatSession
-from app.agent.chat_history_compactor import compact_history
 
 _DEFAULT_LOCAL_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _CURRENT_CACHE: ContextVar["_HistoryCache | None"] = ContextVar("chat_history_cache", default=None)
@@ -85,12 +84,6 @@ def clear_current_cache() -> None:
     _CURRENT_CACHE.set(None)
 
 
-def _trim_history(history: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    if len(history) <= limit:
-        return history
-    return history[-limit:]
-
-
 def _cache_mode() -> str:
     mode = (settings.CHAT_HISTORY_CACHE_MODE or "local_validate").lower()
     if mode not in {"local_first", "local_validate", "redis_only"}:
@@ -106,154 +99,12 @@ def _format_tool_payload(payload: dict[str, Any] | None) -> str:
     return ""
 
 
-def _tool_history_allowlist() -> set[str]:
-    raw = settings.TOOL_HISTORY_ALLOW or ""
-    items = [item.strip() for item in raw.split(",") if item.strip()]
-    return set(items)
-
-
-def _tool_history_keep() -> int:
-    value = settings.TOOL_HISTORY_KEEP
-    if value < 0:
-        return 0
-    return value
-
-
-def _prune_tool_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    allow = _tool_history_allowlist()
-    keep = _tool_history_keep()
-    tool_indices: list[int] = []
-    for idx, item in enumerate(history):
-        if item.get("role") != "tool":
-            continue
-        name = item.get("name")
-        if name == "planner":
-            continue
-        if name in allow:
-            tool_indices.append(idx)
-    keep_tool_indices = set(tool_indices[-keep:]) if keep else set()
-    pruned: list[dict[str, Any]] = []
-    for idx, item in enumerate(history):
-        if item.get("role") != "tool":
-            pruned.append(item)
-            continue
-        name = item.get("name")
-        if name == "planner":
-            continue
-        if name in allow and idx in keep_tool_indices:
-            pruned.append(item)
-    return pruned
-
-
 def _history_signature(history: list[dict[str, Any]]) -> str:
     if not history:
         return "0"
     last = history[-1]
     content = (last.get("content") or "")[:64]
     return f"{len(history)}:{last.get('role')}:{content}"
-
-
-async def load_history(
-    db: AsyncSession,
-    redis_client: redis.Redis | None,
-    session_id: str,
-    limit: int,
-    current_message: str | None,
-    local_cache: _HistoryCache | None = None,
-) -> list[dict[str, Any]]:
-    local_cache = local_cache or get_current_cache() or _default_local_cache()
-    mode = _cache_mode()
-    version_key = f"chat:history:{session_id}:sig"
-    if mode != "redis_only":
-        cached_local = local_cache.get(session_id)
-        if cached_local is not None:
-            local_history, local_version = cached_local
-            if mode == "local_validate" and redis_client:
-                    remote_version = await redis_client.get(version_key)
-                    if remote_version and remote_version != local_version:
-                        cached_local = None
-                    else:
-                        if current_message and local_history:
-                            last = local_history[-1]
-                            if last.get("role") == "user" and last.get("content") == current_message:
-                                local_history = local_history[:-1]
-                        return _trim_history(_prune_tool_history(local_history), limit)
-            elif mode == "local_first":
-                if current_message and local_history:
-                    last = local_history[-1]
-                    if last.get("role") == "user" and last.get("content") == current_message:
-                        local_history = local_history[:-1]
-                return _trim_history(_prune_tool_history(local_history), limit)
-
-    cache_limit = max(limit, settings.CHAT_HISTORY_CACHE_LIMIT)
-    cache_key = f"chat:history:{session_id}"
-    if redis_client:
-        cached = await redis_client.get(cache_key)
-        if cached:
-            try:
-                history = json.loads(cached)
-            except json.JSONDecodeError:
-                history = []
-            if isinstance(history, list):
-                if current_message and history:
-                    last = history[-1]
-                    if last.get("role") == "user" and last.get("content") == current_message:
-                        history = history[:-1]
-                history = _trim_history(_prune_tool_history(history), limit)
-                version = await redis_client.get(version_key)
-                if not version:
-                    version = _history_signature(history)
-                    await redis_client.set(version_key, version, ex=settings.CHAT_HISTORY_CACHE_TTL_SECONDS)
-                if mode != "redis_only":
-                    local_cache.set(session_id, history, version)
-                return history
-
-    stmt = (
-        select(ChatMessage)
-        .where(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.created_at.desc())
-        .limit(limit + 1)
-    )
-    result = await db.execute(stmt)
-    rows = list(reversed(result.scalars().all()))
-    history: list[dict[str, Any]] = []
-    for row in rows:
-        if row.role == "tool":
-            payload_text = _format_tool_payload(row.tool_payload_json)
-            history.append(
-                {
-                    "role": "tool",
-                    "name": row.tool_name,
-                    "content": payload_text or "",
-                }
-            )
-        else:
-            history.append(
-                {
-                    "role": row.role,
-                    "content": row.content or "",
-                }
-            )
-    if current_message and history:
-        last = history[-1]
-        if last.get("role") == "user" and last.get("content") == current_message:
-            history = history[:-1]
-    history = _trim_history(_prune_tool_history(history), limit)
-    version = _history_signature(history)
-    if mode != "redis_only":
-        local_cache.set(session_id, history, version)
-    if redis_client:
-        await redis_client.set(
-            cache_key,
-            json.dumps(_trim_history(history, cache_limit), ensure_ascii=True),
-            ex=settings.CHAT_HISTORY_CACHE_TTL_SECONDS,
-        )
-        await redis_client.set(
-            version_key,
-            version,
-            ex=settings.CHAT_HISTORY_CACHE_TTL_SECONDS,
-        )
-    return history
 
 
 async def append_history_cache(
@@ -277,7 +128,7 @@ async def append_history_cache(
             if isinstance(history, list):
                 local_history = history
     local_history.append(item)
-    local_history = _trim_history(local_history, settings.CHAT_HISTORY_CACHE_LIMIT)
+    local_history = local_history[-settings.CHAT_HISTORY_CACHE_LIMIT:]
     version = _history_signature(local_history)
     if mode != "redis_only":
         local_cache.set(session_id, local_history, version)
@@ -296,15 +147,6 @@ async def append_history_cache(
         version,
         ex=settings.CHAT_HISTORY_CACHE_TTL_SECONDS,
     )
-
-
-async def maybe_compress_history(
-    redis_client: redis.Redis,
-    provider: str | None,
-    session_id: str,
-    history: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], str | None]:
-    return await compact_history(provider, history)
 
 
 async def clear_session_cache(

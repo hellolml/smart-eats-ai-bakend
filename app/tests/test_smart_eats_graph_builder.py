@@ -32,7 +32,7 @@ def test_build_smart_eats_graph_contains_native_long_term_nodes(override_redis):
     )
 
     node_names = set(getattr(graph, "nodes", {}).keys())
-    assert {"prepare", "agent", "tools"}.issubset(node_names)
+    assert {"prepare", "summarize", "agent", "tools"}.issubset(node_names)
     assert not {"initialize", "observe", "think", "tool_postprocess", "finalize"} & node_names
 
 
@@ -49,7 +49,8 @@ def test_initialize_graph_state_normalizes_api_payload_once():
 
     assert initialized["session_id"] == "s-init"
     assert initialized["message"] == "你好"
-    assert initialized["messages"] == []
+    assert isinstance(initialized["messages"][0], HumanMessage)
+    assert initialized["messages"][0].content == "你好"
     assert "_tool_messages" not in initialized
     assert "_tool_call_args" not in initialized
 
@@ -235,21 +236,14 @@ def test_build_smart_eats_graph_tools_node_merges_toolnode_and_postprocess_bound
 
 
 @pytest.mark.asyncio
-async def test_build_smart_eats_graph_think_node_short_circuits_intent_clarify(monkeypatch, override_redis):
+async def test_build_smart_eats_graph_agent_node_short_circuits_intent_clarify(monkeypatch, override_redis):
     planner_mock = AsyncMock()
 
     async def _noop_ensure_chat_session(db, state):
         return None
 
-    async def _clarify_refresh(db, redis_client, state, agent_config, emit_context_event=True):
-        state.context = {"system_prompt": "test system"}
-        state.intent_need_clarify = True
-        state.intent_confidence = 0.1
-        state.intent_clarify_question = "你是想出去吃，还是在家做饭？"
-
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", planner_mock)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _clarify_refresh)
 
     graph = build_smart_eats_graph(
         db=None,
@@ -257,7 +251,11 @@ async def test_build_smart_eats_graph_think_node_short_circuits_intent_clarify(m
         provider=None,
     ).compile()
 
-    result = await graph.ainvoke(ChatState(session_id="s-smart-clarify", message="想吃点东西").__dict__)
+    state = ChatState(session_id="s-smart-clarify", message="想吃点东西")
+    state.intent_need_clarify = True
+    state.intent_confidence = 0.1
+    state.intent_clarify_question = "你是想出去吃，还是在家做饭？"
+    result = await graph.ainvoke(state.__dict__)
 
     assert result["final_json"]["recommendations"][0]["title"] == "你是想出去吃，还是在家做饭？"
     assert "next_action" not in result
@@ -265,7 +263,7 @@ async def test_build_smart_eats_graph_think_node_short_circuits_intent_clarify(m
 
 
 @pytest.mark.asyncio
-async def test_build_smart_eats_graph_think_node_skips_clarify_when_confident(monkeypatch, override_redis):
+async def test_build_smart_eats_graph_agent_node_skips_clarify_when_confident(monkeypatch, override_redis):
     async def _fake_plan_tool_calls(self, system, user, available_tools):
         return {
             "content": "",
@@ -288,15 +286,8 @@ async def test_build_smart_eats_graph_think_node_skips_clarify_when_confident(mo
     async def _noop_ensure_chat_session(db, state):
         return None
 
-    async def _confident_refresh(db, redis_client, state, agent_config, emit_context_event=True):
-        state.context = {"system_prompt": "test system"}
-        state.intent_need_clarify = True
-        state.intent_confidence = 0.95
-        state.intent_clarify_question = "你是想出去吃，还是在家做饭？"
-
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _confident_refresh)
 
     graph = build_smart_eats_graph(
         db=None,
@@ -304,7 +295,11 @@ async def test_build_smart_eats_graph_think_node_skips_clarify_when_confident(mo
         provider=None,
     ).compile()
 
-    result = await graph.ainvoke(ChatState(session_id="s-smart-confident", message="想吃点东西").__dict__)
+    state = ChatState(session_id="s-smart-confident", message="想吃点东西")
+    state.intent_need_clarify = True
+    state.intent_confidence = 0.95
+    state.intent_clarify_question = "你是想出去吃，还是在家做饭？"
+    result = await graph.ainvoke(state.__dict__)
 
     assert result["final_json"]["recommendations"][0]["reason"] == "confident_intent"
 
@@ -314,9 +309,6 @@ async def test_build_smart_eats_graph_tools_node_without_messages_returns_final_
     async def _noop_ensure_chat_session(db, state):
         return None
 
-    async def _refresh_without_messages(db, redis_client, state, agent_config, emit_context_event=True):
-        state.context = {"system_prompt": "test system"}
-
     async def _fake_plan_tool_calls(self, system, user, available_tools):
         return {
             "content": "直接回答",
@@ -325,7 +317,6 @@ async def test_build_smart_eats_graph_tools_node_without_messages_returns_final_
 
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _refresh_without_messages)
 
     graph = build_smart_eats_graph(
         db=None,
@@ -366,12 +357,8 @@ async def test_build_smart_eats_graph_roundtrip_without_graph_helpers(monkeypatc
     async def _noop_ensure_chat_session(db, state):
         return None
 
-    async def _noop_refresh_observation_context(db, redis_client, state, agent_config, emit_context_event=True):
-        state.context = {"system_prompt": "test system"}
-
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _noop_refresh_observation_context)
 
     graph = build_smart_eats_graph(
         db=None,
@@ -479,28 +466,11 @@ async def test_build_smart_eats_graph_route_result_is_used_in_submit_final_answe
     async def _noop_ensure_chat_session(db, state):
         return None
 
-    async def _test_refresh_observation_context(db, redis_client, state, agent_config, emit_context_event=True):
-        state.intent = smart_eats_module.smart_intent_resolver(state) or "unknown"
-        context = {"ui_scene": state.scene or "chat"}
-        context["user_message"] = state.message or ""
-        context["history"] = []
-        context["observations"] = list(state.observations)
-
-        extra = smart_eats_module.smart_context_extender(state)
-        if extra:
-            context = smart_eats_module._merge_context(context, extra)
-        if isinstance(state.context_overrides, dict) and state.context_overrides:
-            context = smart_eats_module._merge_context(context, state.context_overrides)
-
-        context["system_prompt"] = agent_config.system_prompt_builder({"context": context})
-        state.context = context
-
     async def _noop_save_tool_message(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr(smart_eats_module, "_refresh_observation_context", _test_refresh_observation_context)
     monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", _noop_save_tool_message)
 
     graph = build_smart_eats_graph(
@@ -523,18 +493,6 @@ async def test_build_smart_eats_graph_route_result_is_used_in_submit_final_answe
 async def test_build_smart_eats_graph_restaurant_confirm_injects_route_context_without_directive(monkeypatch, override_redis):
     async def _noop_ensure_chat_session(db, state):
         return None
-
-    async def _noop_save_user_message(*_args, **_kwargs):
-        return None
-
-    async def _noop_maybe_compress_history(_redis_client, _provider, _session_id, history):
-        return history, None
-
-    async def _fake_load_history(db, redis_client, session_id, limit, current_message):
-        return [{"role": "assistant", "content": "你可以试试：新疆阿布烤羊肉店、巴依老爷火锅。"}]
-
-    async def _fake_search_memories(db, user_id, message, redis_client=None):
-        return []
 
     async def _fake_load_cached_location(redis_client, session_id):
         return {"lat": 28.147883, "lng": 112.933349, "city": "长沙"}
@@ -572,17 +530,8 @@ async def test_build_smart_eats_graph_restaurant_confirm_injects_route_context_w
 
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_user_message", _noop_save_user_message)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.load_history", _fake_load_history)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.maybe_compress_history", _noop_maybe_compress_history)
-    monkeypatch.setattr("app.agent.agents.smart_eats.memory.search_memories", _fake_search_memories)
     monkeypatch.setattr("app.agent.agents.smart_eats.load_cached_location", _fake_load_cached_location)
     monkeypatch.setattr("app.agent.agents.smart_eats.load_cached_restaurants", _fake_load_cached_restaurants)
-
-    async def _noop_save_tool_message(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", _noop_save_tool_message)
 
     graph = build_smart_eats_graph(
         db=SimpleNamespace(),
@@ -679,26 +628,11 @@ async def test_build_smart_eats_graph_confirm_restaurant_routes_before_final(mon
         ),
     )
 
-    async def _fake_load_history(db, redis_client, session_id, limit, current_message):
-        return []
-
-    async def _noop_maybe_compress_history(redis_client, provider, session_id, history):
-        return history, None
-
-    async def _fake_search_memories(db, user_id, message, redis_client=None):
-        return []
-
     async def _fake_load_cached_location(redis_client, session_id):
         return dict(cached_location_store)
 
     async def _fake_load_cached_restaurants(redis_client, session_id):
         return [dict(item) for item in cached_restaurants_store] if cached_restaurants_store else None
-
-    async def _noop_save_user_message(*_args, **_kwargs):
-        return None
-
-    async def _noop_save_tool_message(*_args, **_kwargs):
-        return None
 
     async def _noop_ensure_chat_session(db, state):
         return None
@@ -860,11 +794,6 @@ async def test_build_smart_eats_graph_confirm_restaurant_routes_before_final(mon
 
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.load_history", _fake_load_history)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.maybe_compress_history", _noop_maybe_compress_history)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_user_message", _noop_save_user_message)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", _noop_save_tool_message)
-    monkeypatch.setattr("app.agent.agents.smart_eats.memory.search_memories", _fake_search_memories)
     monkeypatch.setattr("app.agent.agents.smart_eats.load_cached_location", _fake_load_cached_location)
     monkeypatch.setattr("app.agent.agents.smart_eats.load_cached_restaurants", _fake_load_cached_restaurants)
 
@@ -926,26 +855,11 @@ async def test_build_smart_eats_graph_confirm_restaurant_without_origin_guides_u
         ),
     )
 
-    async def _fake_load_history(db, redis_client, session_id, limit, current_message):
-        return []
-
-    async def _noop_maybe_compress_history(redis_client, provider, session_id, history):
-        return history, None
-
-    async def _fake_search_memories(db, user_id, message, redis_client=None):
-        return []
-
     async def _fake_load_cached_location(redis_client, session_id):
         return None
 
     async def _fake_load_cached_restaurants(redis_client, session_id):
         return [dict(item) for item in cached_restaurants_store] if cached_restaurants_store else None
-
-    async def _noop_save_user_message(*_args, **_kwargs):
-        return None
-
-    async def _noop_save_tool_message(*_args, **_kwargs):
-        return None
 
     async def _noop_ensure_chat_session(db, state):
         return None
@@ -1055,11 +969,6 @@ async def test_build_smart_eats_graph_confirm_restaurant_without_origin_guides_u
 
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.load_history", _fake_load_history)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.maybe_compress_history", _noop_maybe_compress_history)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_user_message", _noop_save_user_message)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", _noop_save_tool_message)
-    monkeypatch.setattr("app.agent.agents.smart_eats.memory.search_memories", _fake_search_memories)
     monkeypatch.setattr("app.agent.agents.smart_eats.load_cached_location", _fake_load_cached_location)
     monkeypatch.setattr("app.agent.agents.smart_eats.load_cached_restaurants", _fake_load_cached_restaurants)
 

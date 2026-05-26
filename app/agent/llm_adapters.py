@@ -185,8 +185,13 @@ class OpenAIPlanner:
         image_parts: list[dict[str, Any]] | None = None,
     ) -> AIMessage:
         available_tools = self._langchain_tools_to_available_schemas(tools)
-        if self._is_simple_system_user_turn(messages):
-            system, user = self._messages_to_system_user(messages)
+        plan_tool_calls_overridden = getattr(type(self).plan_tool_calls, "__module__", __name__) != __name__
+        if self._is_simple_system_user_turn(messages) or plan_tool_calls_overridden:
+            system, user = (
+                self._messages_to_system_latest_user(messages)
+                if plan_tool_calls_overridden and not self._is_simple_system_user_turn(messages)
+                else self._messages_to_system_user(messages)
+            )
             if image_parts:
                 decision = await self.plan_tool_calls(
                     system,
@@ -226,6 +231,17 @@ class OpenAIPlanner:
                 message_type = getattr(message, "type", None) or getattr(message, "role", None) or "context"
                 user_parts.append(f"{message_type}: {content}")
         return "\n".join(system_parts).strip(), "\n".join(user_parts).strip()
+
+    def _messages_to_system_latest_user(self, messages: list[Any]) -> tuple[str, str]:
+        system_parts: list[str] = []
+        latest_user = ""
+        for message in messages:
+            content = self._message_content_to_text(getattr(message, "content", None))
+            if isinstance(message, SystemMessage) and content:
+                system_parts.append(content)
+            elif isinstance(message, HumanMessage) and content:
+                latest_user = content
+        return "\n".join(system_parts).strip(), latest_user
 
     @staticmethod
     def _is_simple_system_user_turn(messages: list[Any]) -> bool:

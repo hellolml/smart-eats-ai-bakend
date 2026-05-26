@@ -73,9 +73,15 @@ class Settings(BaseSettings):
     TOOL_HISTORY_KEEP: int = 3
     TOOL_HISTORY_ALLOW: str = "get_ip_location,geocode_location,search_restaurants,plan_route,get_weather,rag_search_recipes,search_recipes"
     CHAT_COMPACT_MIN_MESSAGES: int = 3
-    CHAT_COMPACT_TRIGGER_RATIO: float = 0.9
+    CHAT_COMPACT_TRIGGER_RATIO: float = 0.8
+    CHAT_COMPACT_HARD_RATIO: float = 0.92
     CHAT_COMPACT_TAIL_RATIO: float = 0.2
-    LLM_MODEL_CONTEXT_SIZE: int = 8192
+    CHAT_COMPACT_RESERVED_OUTPUT_TOKENS: int = 8000
+    CHAT_COMPACT_RESERVED_TOOL_TOKENS: int = 16000
+    CHAT_COMPACT_MAX_ATTEMPTS: int = 2
+    CHAT_COMPACT_MIN_REDUCTION_RATIO: float = 0.05
+    LLM_MODEL_CONTEXT_SIZE: int = 128000
+    LLM_MODEL_CONTEXT_WINDOWS: str = "qwen:qwen3.5-flash=128000,qwen:qwen3.5-plus=128000,deepseek:deepseek-chat=64000,gpt-4.1=1047576,gpt-5=400000"
     CONTEXT_SNAPSHOT_TTL_SECONDS: int = 600
     MINIO_BUCKET: str = "smart-eats"
     MINIO_BASE_PATH: str = ".minio_stub"
@@ -107,6 +113,8 @@ class Settings(BaseSettings):
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"
     LANGGRAPH_CHECKPOINT_BACKEND: str = "sqlite"
+    LANGGRAPH_STORE_BACKEND: str = "postgres"
+    LANGGRAPH_STORE_DB: str | None = None
     CHAT_PAUSE_TTL: int = 600
     SEED_DEMO_USER_ID: str | None = None
     AMAP_SEARCH_CACHE_TTL_SECONDS: int = 180

@@ -47,7 +47,7 @@ async def test_apply_official_tool_postprocess_writes_final_from_submit_tool(mon
 
 
 @pytest.mark.asyncio
-async def test_apply_official_tool_postprocess_records_tool_observation_and_history(monkeypatch):
+async def test_apply_official_tool_postprocess_records_tool_observation_without_db_history(monkeypatch):
     chat_state = smart_eats_module.SmartEatsState(session_id="s-tool", steps_left=2)
     save_tool_message = AsyncMock()
     monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", save_tool_message)
@@ -80,7 +80,7 @@ async def test_apply_official_tool_postprocess_records_tool_observation_and_hist
     assert chat_state.context.get("location") == {"lat": 28.2, "lng": 112.9}
     assert chat_state.location_source == "geocode"
     assert chat_state.events and chat_state.events[0]["event"] == "tool_call"
-    save_tool_message.assert_awaited_once()
+    save_tool_message.assert_not_called()
 
 
 @pytest.mark.asyncio

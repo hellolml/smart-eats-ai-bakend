@@ -45,7 +45,7 @@ def test_initialize_graph_state_preserves_checkpoint_resume_shape():
     assert graph_state["checkpoint_ref"] == "cp_1"
     assert graph_state["replay_from_checkpoint"] is True
     assert graph_state["resume_payload"] == {"message": "继续上次"}
-    assert graph_state["messages"] == []
+    assert graph_state["messages"][0].content == "继续"
     assert "_tool_messages" not in graph_state
     assert "_tool_call_args" not in graph_state
 
