@@ -80,7 +80,7 @@ async def test_travel_skill_allowed_tools_filter_planner_visible_tools(monkeypat
 
     monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
     monkeypatch.setattr(smart_eats_module, "_ensure_chat_session", _noop_ensure_chat_session)
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", _noop_save_tool_message)
+    monkeypatch.setattr("app.agent.agents.smart_eats.conversation.save_tool_message", _noop_save_tool_message)
 
     graph = build_smart_eats_graph(
         db=None,

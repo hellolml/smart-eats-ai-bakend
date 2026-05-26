@@ -27,7 +27,7 @@ from app.agent.langgraph_context import (
     should_summarize_context,
 )
 from app.agent.schemas import FinalAction, FinalAnswer, FinalAnswerArgs
-from app.agent import history
+from app.agent import conversation
 from app.agent.tools.location_cache import load_cached_location
 from app.agent.tools.restaurant_cache import load_cached_restaurants
 from langgraph.graph.message import add_messages
@@ -399,7 +399,7 @@ async def _prepare_langgraph_context(
         }
     )
     if _should_persist_user_message(state) and db is not None and hasattr(db, "execute"):
-        await history.save_user_message(
+        await conversation.save_user_message(
             db,
             redis_client,
             state.session_id,
@@ -735,7 +735,7 @@ async def _apply_official_tool_postprocess(
             chat_state.final_json = handled
 
         if db is not None and hasattr(db, "execute"):
-            await history.save_tool_message(
+            await conversation.save_tool_message(
                 db,
                 redis_client,
                 chat_state.session_id,

@@ -76,7 +76,7 @@ async def test_run_chat_stream_resume_without_pending_checkpoint_uses_state_inpu
         def compile(self, **_kwargs):
             return _ResumeGraph()
 
-    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeStatefulCheckpointerContext())
     monkeypatch.setattr("app.agent.graph.build_smart_eats_graph", lambda **_kwargs: _ResumeGraphBuilder())
@@ -109,7 +109,7 @@ async def test_run_chat_stream_preserves_core_event_contract(monkeypatch):
         "warnings": [],
     }
 
-    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
@@ -140,7 +140,7 @@ async def test_run_chat_stream_cancellation_emits_single_stopped_final(monkeypat
         async def get(self, key):
             return b"1"
 
-    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(

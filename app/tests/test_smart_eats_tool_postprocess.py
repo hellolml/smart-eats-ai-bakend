@@ -15,7 +15,7 @@ from app.agent.agents.smart_eats import (
 async def test_apply_official_tool_postprocess_writes_final_from_submit_tool(monkeypatch):
     chat_state = smart_eats_module.SmartEatsState(session_id="s-submit", steps_left=2)
     save_tool_message = AsyncMock()
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", save_tool_message)
+    monkeypatch.setattr("app.agent.agents.smart_eats.conversation.save_tool_message", save_tool_message)
 
     message = SimpleNamespace(
         name="submit_final_answer",
@@ -50,7 +50,7 @@ async def test_apply_official_tool_postprocess_writes_final_from_submit_tool(mon
 async def test_apply_official_tool_postprocess_records_tool_observation_without_db_history(monkeypatch):
     chat_state = smart_eats_module.SmartEatsState(session_id="s-tool", steps_left=2)
     save_tool_message = AsyncMock()
-    monkeypatch.setattr("app.agent.agents.smart_eats.history.save_tool_message", save_tool_message)
+    monkeypatch.setattr("app.agent.agents.smart_eats.conversation.save_tool_message", save_tool_message)
 
     message = SimpleNamespace(
         name="geocode_location",

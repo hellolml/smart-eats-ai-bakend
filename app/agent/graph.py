@@ -28,7 +28,7 @@ from app.agent.metrics import record_agent_metric
 from app.agent.state import ChatState
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
-from app.agent import history
+from app.agent import conversation
 from app.domain.preferences.service import apply_extracted_preferences, extract_preferences_from_text
 
 logger = logging.getLogger("agent")
@@ -176,8 +176,8 @@ async def run_chat_stream(
     provider = state.provider or settings.LLM_PROVIDER
     cancel_key = f"chat:cancel:{state.session_id}"
     trace_id = state.trace_id or ""
-    history_cache = history.create_history_cache()
-    history.set_current_cache(history_cache)
+    conversation_cache = conversation.create_conversation_cache()
+    conversation.set_current_cache(conversation_cache)
     try:
         async with checkpointer_context() as checkpointer, langgraph_store_context() as store:
             logger.info(
@@ -292,7 +292,7 @@ async def run_chat_stream(
         await asyncio.sleep(0)
 
         if isinstance(latest_state, ChatState):
-            await history.save_assistant_message(
+            await conversation.save_assistant_message(
                 db,
                 redis_client,
                 latest_state.session_id,
@@ -306,7 +306,7 @@ async def run_chat_stream(
             )
         else:
             temp_state = _state_from_dict(latest_state)
-            await history.save_assistant_message(
+            await conversation.save_assistant_message(
                 db,
                 redis_client,
                 temp_state.session_id,
@@ -336,6 +336,6 @@ async def run_chat_stream(
         }
         return
     finally:
-        if history_cache:
-            history_cache.close()
-        history.clear_current_cache()
+        if conversation_cache:
+            conversation_cache.close()
+        conversation.clear_current_cache()

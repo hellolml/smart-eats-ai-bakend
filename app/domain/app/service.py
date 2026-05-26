@@ -20,7 +20,7 @@ from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.state import ChatState
-from app.agent import history
+from app.agent import conversation
 from app.agent.llm_adapters import ProviderRegistry
 from app.common.config import settings
 from app.common.errors import (
@@ -2455,7 +2455,7 @@ class AppBffService:
         session.deleted_at = datetime.utcnow()
         await db.commit()
 
-        await history.clear_session_cache(redis_client, session_id)
+        await conversation.clear_session_cache(redis_client, session_id)
 
         return {"deleted": True}
 

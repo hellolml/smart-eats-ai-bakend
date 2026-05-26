@@ -15,14 +15,14 @@ from app.common.config import settings
 from app.infra.models.chat import ChatMessage, ChatSession
 
 _DEFAULT_LOCAL_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
-_CURRENT_CACHE: ContextVar["_HistoryCache | None"] = ContextVar("chat_history_cache", default=None)
+_CURRENT_CACHE: ContextVar["_ConversationCache | None"] = ContextVar("chat_conversation_cache", default=None)
 
 
-class _HistoryCache:
+class _ConversationCache:
     def get(self, session_id: str) -> tuple[list[dict[str, Any]], str] | None:
         raise NotImplementedError
 
-    def set(self, session_id: str, history: list[dict[str, Any]], version: str) -> None:
+    def set(self, session_id: str, conversation: list[dict[str, Any]], version: str) -> None:
         raise NotImplementedError
 
     def delete(self, session_id: str) -> None:
@@ -32,7 +32,7 @@ class _HistoryCache:
         return
 
 
-class _LruHistoryCache(_HistoryCache):
+class _LruConversationCache(_ConversationCache):
     def __init__(self, cache: OrderedDict[str, dict[str, Any]]) -> None:
         self._cache = cache
 
@@ -44,14 +44,14 @@ class _LruHistoryCache(_HistoryCache):
             self.delete(session_id)
             return None
         self._cache.move_to_end(session_id)
-        history = entry.get("history") or []
+        conversation = entry.get("conversation") or []
         version = entry.get("version") or ""
-        return [item.copy() for item in history], version
+        return [item.copy() for item in conversation], version
 
-    def set(self, session_id: str, history: list[dict[str, Any]], version: str) -> None:
+    def set(self, session_id: str, conversation: list[dict[str, Any]], version: str) -> None:
         expires_at = time.time() + settings.CHAT_HISTORY_LOCAL_CACHE_TTL_SECONDS
         self._cache[session_id] = {
-            "history": [item.copy() for item in history],
+            "conversation": [item.copy() for item in conversation],
             "version": version,
             "expires_at": expires_at,
         }
@@ -64,19 +64,19 @@ class _LruHistoryCache(_HistoryCache):
         self._cache.pop(session_id, None)
 
 
-def create_history_cache() -> _HistoryCache:
-    return _LruHistoryCache(OrderedDict())
+def create_conversation_cache() -> _ConversationCache:
+    return _LruConversationCache(OrderedDict())
 
 
-def _default_local_cache() -> _HistoryCache:
-    return _LruHistoryCache(_DEFAULT_LOCAL_CACHE)
+def _default_local_cache() -> _ConversationCache:
+    return _LruConversationCache(_DEFAULT_LOCAL_CACHE)
 
 
-def set_current_cache(cache: _HistoryCache | None) -> None:
+def set_current_cache(cache: _ConversationCache | None) -> None:
     _CURRENT_CACHE.set(cache)
 
 
-def get_current_cache() -> _HistoryCache | None:
+def get_current_cache() -> _ConversationCache | None:
     return _CURRENT_CACHE.get()
 
 
@@ -99,47 +99,47 @@ def _format_tool_payload(payload: dict[str, Any] | None) -> str:
     return ""
 
 
-def _history_signature(history: list[dict[str, Any]]) -> str:
-    if not history:
+def _conversation_signature(conversation: list[dict[str, Any]]) -> str:
+    if not conversation:
         return "0"
-    last = history[-1]
+    last = conversation[-1]
     content = (last.get("content") or "")[:64]
-    return f"{len(history)}:{last.get('role')}:{content}"
+    return f"{len(conversation)}:{last.get('role')}:{content}"
 
 
-async def append_history_cache(
+async def append_conversation_cache(
     redis_client: redis.Redis | None,
     session_id: str,
     item: dict[str, Any],
-    local_cache: _HistoryCache | None = None,
+    local_cache: _ConversationCache | None = None,
 ) -> None:
     local_cache = local_cache or get_current_cache() or _default_local_cache()
     mode = _cache_mode()
     cached_local = local_cache.get(session_id)
-    local_history = cached_local[0] if cached_local else []
+    local_conversation = cached_local[0] if cached_local else []
     if not cached_local and redis_client:
-        cache_key = f"chat:history:{session_id}"
+        cache_key = f"chat:conversation:{session_id}"
         cached = await redis_client.get(cache_key)
         if cached:
             try:
-                history = json.loads(cached)
+                conversation = json.loads(cached)
             except json.JSONDecodeError:
-                history = []
-            if isinstance(history, list):
-                local_history = history
-    local_history.append(item)
-    local_history = local_history[-settings.CHAT_HISTORY_CACHE_LIMIT:]
-    version = _history_signature(local_history)
+                conversation = []
+            if isinstance(conversation, list):
+                local_conversation = conversation
+    local_conversation.append(item)
+    local_conversation = local_conversation[-settings.CHAT_HISTORY_CACHE_LIMIT:]
+    version = _conversation_signature(local_conversation)
     if mode != "redis_only":
-        local_cache.set(session_id, local_history, version)
+        local_cache.set(session_id, local_conversation, version)
 
     if not redis_client:
         return
-    cache_key = f"chat:history:{session_id}"
-    version_key = f"chat:history:{session_id}:sig"
+    cache_key = f"chat:conversation:{session_id}"
+    version_key = f"chat:conversation:{session_id}:sig"
     await redis_client.set(
         cache_key,
-        json.dumps(local_history, ensure_ascii=True),
+        json.dumps(local_conversation, ensure_ascii=True),
         ex=settings.CHAT_HISTORY_CACHE_TTL_SECONDS,
     )
     await redis_client.set(
@@ -152,7 +152,7 @@ async def append_history_cache(
 async def clear_session_cache(
     redis_client: redis.Redis | None,
     session_id: str,
-    local_cache: _HistoryCache | None = None,
+    local_cache: _ConversationCache | None = None,
 ) -> None:
     local_cache = local_cache or get_current_cache()
     if local_cache:
@@ -162,6 +162,8 @@ async def clear_session_cache(
     if not redis_client:
         return
     await redis_client.delete(
+        f"chat:conversation:{session_id}",
+        f"chat:conversation:{session_id}:sig",
         f"chat:history:{session_id}",
         f"chat:history:{session_id}:sig",
         f"chat:summary:{session_id}",
@@ -204,7 +206,7 @@ async def save_user_message(
     )
     db.add(msg)
     await db.commit()
-    await append_history_cache(
+    await append_conversation_cache(
         redis_client,
         session_id,
         {"role": "user", "content": content},
@@ -243,7 +245,7 @@ async def save_tool_message(
     )
     db.add(msg)
     await db.commit()
-    await append_history_cache(
+    await append_conversation_cache(
         redis_client,
         session_id,
         {
@@ -281,7 +283,7 @@ async def save_assistant_message(
     )
     db.add(msg)
     await db.commit()
-    await append_history_cache(
+    await append_conversation_cache(
         redis_client,
         session_id,
         {"role": "assistant", "content": content},

@@ -55,7 +55,7 @@ async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monke
         "warnings": [],
     }
 
-    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop)
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
