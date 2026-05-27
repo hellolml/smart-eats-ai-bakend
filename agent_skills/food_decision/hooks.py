@@ -6,6 +6,36 @@ from app.agent.runtime.hooks import BaseSkillHooks
 
 
 class FoodDecisionHooks(BaseSkillHooks):
+    def build_context(
+        self,
+        state: Any,
+        context: dict[str, Any],
+        runtime: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "system_directive": (
+                "当前是吃什么/吃点啥决策场景。不要回答没有美食推荐能力；"
+                "必须优先调用 food_decision 工具，用户提到附近、周边或地标时可结合 restaurant_finder。"
+            )
+        }
+
+    def normalize_tool_args(self, state: Any, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if tool_name != "food_decision":
+            return args
+        updated = dict(args)
+        context = getattr(state, "context", None)
+        if isinstance(context, dict):
+            location = _extract_location(context)
+            if location:
+                updated.setdefault("lat", location.get("lat"))
+                updated.setdefault("lng", location.get("lng"))
+            city = context.get("city")
+            if isinstance(city, str) and city.strip():
+                updated.setdefault("city", city)
+        updated.setdefault("query", getattr(state, "message", None) or "今天吃点啥")
+        updated.setdefault("scene", "food_decision")
+        return updated
+
     def handle_tool_result(self, state: Any, tool_name: str, result: Any) -> dict[str, Any] | None:
         if tool_name != "food_decision" or not isinstance(result, dict) or result.get("error"):
             return None
@@ -33,3 +63,18 @@ class FoodDecisionHooks(BaseSkillHooks):
             "warnings": [],
             "decision": result,
         }
+
+
+def _extract_location(context: dict[str, Any]) -> dict[str, float] | None:
+    environment = context.get("environment") if isinstance(context.get("environment"), dict) else {}
+    location = environment.get("location") if isinstance(environment.get("location"), dict) else context.get("location")
+    if not isinstance(location, dict):
+        return None
+    try:
+        lat = float(location.get("lat"))
+        lng = float(location.get("lng"))
+    except (TypeError, ValueError):
+        return None
+    if lat == 0 or lng == 0:
+        return None
+    return {"lat": lat, "lng": lng}

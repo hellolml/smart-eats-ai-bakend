@@ -8,10 +8,12 @@ from app.agent.skills.resolver import SkillResolver
 from app.domain.app.service import AppBffService
 
 
-def test_travel_planner_skill_is_bundled_and_activates_for_trip_request():
+def test_travel_plan_new_skill_replaces_legacy_travel_planner_and_activates():
     skills = load_skills_from_path("agent_skills")
-    travel = next((skill for skill in skills if skill.id == "travel_planner"), None)
+    legacy = next((skill for skill in skills if skill.id == "travel_planner"), None)
+    travel = next((skill for skill in skills if skill.id == "travel_plan_new"), None)
 
+    assert legacy is None
     assert travel is not None
     assert "travel_search_poi" in travel.tools.allow
     assert "travel_create_personal_map" in travel.tools.allow
@@ -23,8 +25,25 @@ def test_travel_planner_skill_is_bundled_and_activates_for_trip_request():
     )
     active = SkillResolver(skills).resolve(state, {"user_message": state.message})
 
-    assert "travel_planner" in [skill.id for skill in active.skills]
-    assert any(reason.startswith("scene:travel_planner") for reason in active.activation_reasons["travel_planner"])
+    assert "travel_plan_new" in [skill.id for skill in active.skills]
+    assert "travel_planner" not in [skill.id for skill in active.skills]
+    assert any(reason.startswith("scene:travel_planner") for reason in active.activation_reasons["travel_plan_new"])
+
+
+def test_travel_scene_food_words_stay_in_travel_skill_without_food_skills():
+    skills = load_skills_from_path("agent_skills")
+    state = AgentRuntimeState(
+        session_id="s-travel-food",
+        scene="travel_planner",
+        message="帮我规划杭州3天行程，午饭和晚饭也安排当地美食",
+    )
+
+    active = SkillResolver(skills).resolve(state, {"user_message": state.message})
+    active_ids = [skill.id for skill in active.skills]
+
+    assert "travel_plan_new" in active_ids
+    assert "food_decision" not in active_ids
+    assert "restaurant_finder" not in active_ids
 
 
 def test_food_decision_skill_is_bundled_and_activates_for_eat_request():
@@ -42,6 +61,22 @@ def test_food_decision_skill_is_bundled_and_activates_for_eat_request():
     active = SkillResolver(skills).resolve(state, {"user_message": state.message})
 
     assert "food_decision" in [skill.id for skill in active.skills]
+
+
+def test_food_decision_activates_for_nearby_food_wording():
+    skills = load_skills_from_path("agent_skills")
+    state = AgentRuntimeState(
+        session_id="s-food-nearby",
+        scene="chat",
+        message="恒伟星中心周边有什么吃的",
+    )
+
+    active = SkillResolver(skills).resolve(state, {"user_message": state.message})
+    active_ids = [skill.id for skill in active.skills]
+
+    assert AppBffService._infer_chat_intent(state.message) == "eat_out"
+    assert "food_decision" in active_ids
+    assert "restaurant_finder" in active_ids
 
 
 def test_chat_intent_forces_food_and_restaurant_skills():

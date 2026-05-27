@@ -26,7 +26,6 @@ from app.agent.runtime.graph import (
 from app.agent.runtime.finalization import fallback_final
 from app.agent.metrics import record_agent_metric
 from app.agent.state import ChatState
-from app.agent.travel_workflow import run_travel_planner_workflow
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
 from app.agent import conversation
@@ -180,11 +179,6 @@ async def run_chat_stream(
     redis_client: redis.Redis,
     state: ChatState,
 ) -> AsyncGenerator[dict[str, Any], None]:
-    if state.scene == "travel_planner":
-        async for item in run_travel_planner_workflow(request, db, redis_client, state):
-            yield item
-        return
-
     provider = state.provider or settings.LLM_PROVIDER
     cancel_key = f"chat:cancel:{state.session_id}"
     trace_id = state.trace_id or ""

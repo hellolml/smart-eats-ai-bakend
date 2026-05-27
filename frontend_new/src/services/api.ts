@@ -46,6 +46,15 @@ export interface ChatStreamResult {
   schemaUrl?: string;
 }
 
+export interface ChatLocationContext {
+  lat: number;
+  lng: number;
+  accuracy?: number;
+  city?: string;
+  source?: string;
+  updatedAt?: number;
+}
+
 export interface DecisionResult {
   decision: {
     type: 'restaurant' | 'recipe' | 'fallback';
@@ -424,6 +433,7 @@ export const appApi = {
     async stream(sessionId: string, message: string, options: {
       scene?: string;
       attachments?: ChatAttachment[];
+      clientContextOverrides?: Record<string, unknown>;
       onDelta?: (text: string) => void;
       retryOnUnauthorized?: boolean;
       signal?: AbortSignal;
@@ -446,7 +456,8 @@ export const appApi = {
         body: JSON.stringify({
           message,
           scene: options.scene,
-          attachments: options.attachments
+          attachments: options.attachments,
+          client_context_overrides: options.clientContextOverrides
         })
       });
       if (!response.ok) {

@@ -6,6 +6,7 @@ from agent_skills.home_chef.hooks import HomeChefHooks
 from agent_skills.food_decision.hooks import FoodDecisionHooks
 from agent_skills.restaurant_finder.hooks import RestaurantFinderHooks
 from agent_skills.route_planner.hooks import RoutePlannerHooks
+from agent_skills.travel_plan_new.hooks import TravelPlanNewHooks
 from app.agent.runtime.graph import AgentRuntimeState
 
 
@@ -42,6 +43,26 @@ def test_food_decision_hook_returns_decision_final():
     assert handled is not None
     assert handled["recommendations"][0]["title"] == "番茄炒蛋"
     assert handled["decision"] == result
+
+
+def test_food_decision_hook_normalizes_location_context():
+    state = AgentRuntimeState(
+        session_id="s1",
+        message="附近有什么吃的",
+        context={
+            "environment": {
+                "location": {"lat": 31.23, "lng": 121.47},
+            },
+            "city": "上海",
+        },
+    )
+
+    normalized = FoodDecisionHooks().normalize_tool_args(state, "food_decision", {})
+
+    assert normalized["query"] == "附近有什么吃的"
+    assert normalized["lat"] == 31.23
+    assert normalized["lng"] == 121.47
+    assert normalized["city"] == "上海"
 
 
 def test_restaurant_hook_normalizes_search_args():
@@ -119,3 +140,82 @@ def test_route_hook_records_latest_route_directive():
     assert handled is None
     assert state.context_overrides["latest_route"]["distance_m"] == 1200
     assert "submit_final_answer" in state.context_overrides["system_directive"]
+
+
+def test_travel_plan_new_hook_stops_at_candidate_confirmation():
+    state = AgentRuntimeState(session_id="s1", scene="travel_planner", message="杭州3天")
+    state.observations.append(
+        {
+            "tool": "travel_search_poi",
+            "result": {
+                "query": {"keywords": "西湖", "city": "杭州"},
+                "pois": [
+                    {
+                        "poi_id": "B001",
+                        "name": "西湖风景名胜区",
+                        "address": "杭州市西湖区",
+                        "longitude": 120.148,
+                        "latitude": 30.242,
+                    }
+                ],
+            },
+        }
+    )
+
+    handled = TravelPlanNewHooks().handle_tool_result(state, "travel_search_poi", state.observations[0]["result"])
+
+    assert handled is not None
+    assert handled["state"] == "candidates_ready"
+    assert handled["await_confirmation"] is True
+    assert handled["candidates"][0]["poi"]["poi_id"] == "B001"
+    assert handled["itinerary"]["days"] == []
+
+
+def test_travel_plan_new_hook_returns_map_final():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_action": "confirm_candidates",
+            "travel_payload": {
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_001",
+                        "name": "西湖",
+                        "poi": {"poi_id": "B001", "longitude": 120.148, "latitude": 30.242},
+                    }
+                ]
+            },
+        },
+    )
+    result = {
+        "title": "杭州3天地图",
+        "qr_code_url": "https://example.com/qr.png",
+        "schema_url": "amapuri://foo",
+        "line_list": [
+            {
+                "title": "Day 1",
+                "pointInfoList": [
+                    {"name": "西湖", "poiId": "B001", "lon": 120.148, "lat": 30.242}
+                ],
+            }
+        ],
+    }
+
+    handled = TravelPlanNewHooks().handle_tool_result(state, "travel_create_personal_map", result)
+
+    assert handled is not None
+    assert handled["state"] == "map_generated"
+    assert handled["map"]["qr_code_url"] == "https://example.com/qr.png"
+    assert handled["candidates"][0]["poi"]["poi_id"] == "B001"
+    assert handled["itinerary"]["days"][0]["items"][0]["place_name"] == "西湖"
+
+
+def test_travel_plan_new_hook_enables_vision_for_attachments():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context={"attachments": [{"kind": "image", "filename": "guide.png"}]},
+    )
+
+    assert TravelPlanNewHooks().should_build_vision_input(state) is True

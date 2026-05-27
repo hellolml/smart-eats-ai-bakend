@@ -18,6 +18,10 @@ activation:
     - 出去吃
     - 去哪吃
     - 外卖
+    - 周边
+    - 附近吃
+    - 附近美食
+    - 吃的
   min_score: 1
 tools:
   allow:

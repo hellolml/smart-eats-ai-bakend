@@ -2680,7 +2680,8 @@ class AppBffService:
             if clean_attachments:
                 context_overrides = context_overrides or {}
                 context_overrides["attachments"] = clean_attachments
-        inferred_intent = AppBffService._infer_chat_intent(payload.get("message"))
+        scene = payload.get("scene") or "chat"
+        inferred_intent = None if scene == "travel_planner" else AppBffService._infer_chat_intent(payload.get("message"))
         if inferred_intent:
             context_overrides = context_overrides or {}
             context_overrides.setdefault("intent", inferred_intent)
@@ -2703,7 +2704,7 @@ class AppBffService:
             session_id=session_id,
             user_id=user_id,
             message=payload.get("message"),
-            scene=(payload.get("scene") or "chat"),
+            scene=scene,
             context_overrides=context_overrides,
             provider=AppBffService.resolve_chat_provider(payload.get("model")) or payload.get("provider"),
             client_ip=request_client_ip,
@@ -2720,7 +2721,7 @@ class AppBffService:
             return None
         if any(token in text for token in ("做饭", "在家做", "菜谱", "食谱", "冰箱", "食材", "自己做")):
             return "cook_home"
-        if any(token in text for token in ("吃点啥", "吃什么", "今天吃", "晚饭", "午饭", "早餐", "夜宵", "外卖", "餐厅", "饭店", "出去吃", "外面吃", "去哪吃")):
+        if any(token in text for token in ("吃点啥", "吃什么", "吃的", "吃啥", "今天吃", "晚饭", "午饭", "早餐", "夜宵", "外卖", "餐厅", "饭店", "美食", "好吃", "周边吃", "附近吃", "附近美食", "推荐吃", "出去吃", "外面吃", "去哪吃")):
             return "eat_out"
         if any(token in text for token in ("路线", "导航", "怎么走", "怎么去")):
             return "route"

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ApiError, type PlanRecord, appApi, authStore } from './services/api';
+import { ApiError, type ChatLocationContext, type PlanRecord, appApi, authStore } from './services/api';
 import { BottomTabs, Page, StatusBar } from './components/Layout';
 import { defaultPlan } from './data/plans';
 import {
@@ -18,6 +18,15 @@ import {
 } from './screens';
 import type { AgentMode, Message, PendingImage, PlanInfo, Screen } from './types';
 import { agentIntro, errorMessage, message, parseTravelDays, uid } from './lib/utils';
+
+const EAT_LOCATION_CACHE_KEY = 'plan_assistant_eat_location';
+const EAT_LOCATION_CACHE_TTL = 6 * 60 * 60 * 1000;
+
+type CachedEatLocation = {
+  status: 'granted' | 'denied';
+  location?: ChatLocationContext;
+  updatedAt: number;
+};
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>(authStore.isLoggedIn() ? 'home' : 'login');
@@ -39,6 +48,7 @@ export default function App() {
   const [travelPeople, setTravelPeople] = useState('1');
   const streamAbortRef = useRef<AbortController | null>(null);
   const stopRequestedRef = useRef(false);
+  const eatLocationRef = useRef<ChatLocationContext | null>(null);
 
   const showTabs = ['home', 'plans', 'profile'].includes(screen);
 
@@ -134,6 +144,79 @@ export default function App() {
     go('createTravel');
   };
 
+  const readCachedEatLocation = (): CachedEatLocation | null => {
+    try {
+      const raw = localStorage.getItem(EAT_LOCATION_CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as CachedEatLocation;
+      if (!parsed?.updatedAt || Date.now() - parsed.updatedAt > EAT_LOCATION_CACHE_TTL) return null;
+      if (parsed.status === 'granted' && parsed.location?.lat && parsed.location?.lng) return parsed;
+      if (parsed.status === 'denied') return parsed;
+    } catch {
+      return null;
+    }
+    return null;
+  };
+
+  const writeCachedEatLocation = (value: CachedEatLocation) => {
+    try {
+      localStorage.setItem(EAT_LOCATION_CACHE_KEY, JSON.stringify(value));
+    } catch {
+      // ignore storage failures
+    }
+  };
+
+  const requestEatLocation = async (): Promise<ChatLocationContext | null> => {
+    const cached = readCachedEatLocation();
+    if (cached?.status === 'granted' && cached.location) {
+      eatLocationRef.current = cached.location;
+      return cached.location;
+    }
+    if (cached?.status === 'denied') return null;
+    if (!('geolocation' in navigator)) return null;
+    const shouldAsk = window.confirm('吃点啥助手需要获取你的当前位置，用来推荐附近餐厅。是否授权获取地址信息？');
+    if (!shouldAsk) {
+      writeCachedEatLocation({ status: 'denied', updatedAt: Date.now() });
+      return null;
+    }
+    try {
+      toast.loading('正在获取当前位置...', { id: 'eat-location' });
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 8000,
+          maximumAge: EAT_LOCATION_CACHE_TTL
+        });
+      });
+      const location: ChatLocationContext = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        source: 'browser_geolocation',
+        updatedAt: Date.now()
+      };
+      eatLocationRef.current = location;
+      writeCachedEatLocation({ status: 'granted', location, updatedAt: Date.now() });
+      toast.success('已获取当前位置，会优先推荐附近选择', { id: 'eat-location' });
+      return location;
+    } catch {
+      writeCachedEatLocation({ status: 'denied', updatedAt: Date.now() });
+      toast.error('未获取到位置，可以继续聊天，我会按文字里的地点来推荐', { id: 'eat-location' });
+      return null;
+    }
+  };
+
+  const buildEatContextOverrides = (location: ChatLocationContext | null) => ({
+    intent: 'eat_out',
+    forced_skill_ids: ['food_decision', 'restaurant_finder'],
+    ...(location ? {
+      location,
+      environment: {
+        location
+      }
+    } : {})
+  });
+
   const beginTravelConversation = async (prompt?: string) => {
     const basePrompt = prompt || [
       `目的地：${destination || '北京'}`,
@@ -160,11 +243,12 @@ export default function App() {
     setMessages([]);
     go('agent');
     try {
+      const location = await requestEatLocation();
       const created = await appApi.chat.createSession({ scene: 'chat', title: '今天吃点啥' });
       const sid = appApi.chat.getSessionId(created);
       if (!sid) throw new ApiError('后端未返回会话 ID');
       setActiveSessionId(sid);
-      await runEatAgent('今天吃点啥？请结合我的口味画像，用对话方式给出 1 个明确推荐，并说明原因。', sid);
+      await runEatAgent('今天吃点啥？', sid, location);
     } catch (error) {
       if (handleAuthFailure(error)) return;
       toast.error(errorMessage(error));
@@ -273,7 +357,7 @@ export default function App() {
     }
   };
 
-  const runEatAgent = async (text: string, sessionId?: string) => {
+  const runEatAgent = async (text: string, sessionId?: string, locationOverride?: ChatLocationContext | null) => {
     const value = text.trim();
     if (!value || loading) return;
     setLoading(true);
@@ -295,8 +379,10 @@ export default function App() {
       const controller = new AbortController();
       streamAbortRef.current = controller;
       stopRequestedRef.current = false;
+      const location = locationOverride === undefined ? eatLocationRef.current : locationOverride;
       const reply = await appApi.chat.stream(sid, value, {
         scene: 'chat',
+        clientContextOverrides: buildEatContextOverrides(location || null),
         signal: controller.signal,
         onDelta: (partial) => {
           setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: partial || '正在整理...' } : item));

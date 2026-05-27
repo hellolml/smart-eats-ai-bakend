@@ -3,7 +3,7 @@ id: travel_planner
 name: Travel Planner
 version: 1.0.0
 description: Plan multi-day trips from guide content, user constraints, confirmed places, and AMap personal maps.
-enabled: true
+enabled: false
 priority: 85
 activation:
   scenes:

@@ -86,6 +86,24 @@ async def test_build_chat_state_accepts_scene_override(override_redis):
 
 
 @pytest.mark.asyncio
+async def test_build_chat_state_does_not_force_food_skills_inside_travel_scene(override_redis):
+    state = await AppBffService.build_chat_state(
+        session_id="s-travel",
+        user_id="u1",
+        payload={
+            "message": "帮我规划杭州三天，午饭和晚饭安排当地美食",
+            "scene": "travel_planner",
+        },
+        request_client_ip="127.0.0.1",
+        redis_client=override_redis,
+        rate_limit_key_prefix="chat_test",
+    )
+
+    assert state.scene == "travel_planner"
+    assert not state.context_overrides
+
+
+@pytest.mark.asyncio
 async def test_build_chat_state_preserves_attachments_in_context(override_redis):
     attachment = {
         "attachment_id": "att_1",

@@ -760,11 +760,18 @@ def _hook_manager_from_context(context: dict[str, Any] | None) -> SkillHookManag
 def generic_system_prompt(payload: dict[str, Any]) -> str:
     skill_prompt = payload.get("skill_prompt")
     skill_block = f"\n\n{skill_prompt.strip()}" if isinstance(skill_prompt, str) and skill_prompt.strip() else ""
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    directive = context.get("system_directive") if isinstance(context, dict) else None
+    directive_block = (
+        f"\n\n## Active System Directive\n{directive.strip()}"
+        if isinstance(directive, str) and directive.strip()
+        else ""
+    )
     context_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return (
         "你是一个通用的 Skill Agent Runtime。只使用当前绑定的工具；"
         "当需要结构化结束时调用 submit_final_answer，也可以在无需工具时直接给出最终文本。"
-        f"{skill_block}\n\n"
+        f"{skill_block}{directive_block}\n\n"
         "## Runtime Context（系统注入，非用户输入）\n"
         f"- output_language: {settings.DEFAULT_LANGUAGE}\n"
         f"- context: {context_json}"
