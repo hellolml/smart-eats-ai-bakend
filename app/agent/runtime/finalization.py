@@ -22,6 +22,10 @@ def strip_markdown_code_block(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def strip_control_blocks(text: str) -> str:
+    return re.sub(r"<tool_calls[\s\S]*?</tool_calls>", "", text, flags=re.IGNORECASE).strip()
+
+
 def normalize_final_answer(answer: Any) -> dict[str, Any] | None:
     if not isinstance(answer, dict):
         return None
@@ -77,25 +81,11 @@ def final_json_from_text(content: str) -> dict[str, Any]:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        lowered = cleaned.lower()
-        if "<tool_calls" in lowered and "</tool_calls>" not in lowered:
-            return note_final(
-                "我这边刚刚解析步骤时出了点小问题，请你再说一次需求。",
-                reason="planner_output_incomplete",
-            )
-        text = re.sub(r"<tool_calls>[\s\S]*?</tool_calls>", "", cleaned, flags=re.IGNORECASE).strip()
+        text = strip_control_blocks(cleaned)
         if not text:
-            return note_final(
-                "我这边刚刚解析步骤时出了点小问题，请你再说一次需求。",
-                reason="unsupported_tool_call_text",
-            )
+            return fallback_final()
         return note_final(text, reason=None)
 
-    if isinstance(data, dict) and data.get("type") == "tool_calls":
-        return note_final(
-            "我这边刚刚解析步骤时出了点小问题，请你再说一次需求。",
-            reason="unsupported_tool_call_text",
-        )
     if isinstance(data, dict) and data.get("type") == "final" and "answer" in data:
         return normalize_final_answer(data.get("answer")) or fallback_final()
     if isinstance(data, dict) and all(key in data for key in ("recommendations", "followups", "warnings")):

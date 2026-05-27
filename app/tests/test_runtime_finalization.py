@@ -71,13 +71,14 @@ def test_text_fallback_strips_thinking_blocks():
     assert "补充关键信息" in answer["recommendations"][0]["title"]
 
 
-def test_incomplete_legacy_tool_tag_is_final_not_tool_call():
+def test_unrecognized_text_is_returned_as_plain_final_text():
     answer = final_json_from_text("<tool_calls>")
 
-    assert answer["recommendations"][0]["reason"] == "planner_output_incomplete"
+    assert answer["recommendations"][0]["title"] == "<tool_calls>"
+    assert answer["recommendations"][0]["reason"] is None
 
 
-def test_json_legacy_tool_call_payload_is_not_parsed_as_tool_call():
+def test_unknown_json_shape_is_not_interpreted_as_tool_call():
     answer = final_json_from_text('{"type": "tool_calls", "calls": [{"some_tool": {}}]}')
 
-    assert answer["recommendations"][0]["reason"] == "unsupported_tool_call_text"
+    assert answer["recommendations"][0]["reason"] == "direct_text_response"
