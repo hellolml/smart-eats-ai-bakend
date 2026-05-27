@@ -2,53 +2,40 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools_registry import register_tool
+from app.agent.tools.native import RuntimeContext
 from app.domain.context.service import ContextService
 
 
-@register_tool(
-    name="get_user_info",
-    description=(
-        "Fetch user profile, preferences, and environment snapshot. "
-        "Input: {scene?:string}. Output: snapshot object with user/preferences/fridge/environment. "
-        "Example input: {\"scene\":\"chat\"}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "scene": {"type": "string"},
-        },
-        "required": [],
-    },
-    output_schema={
-        "type": "object",
-        "properties": {
-            "user": {"type": "object"},
-            "preferences": {"type": "object"},
-            "fridge": {"type": "object"},
-            "environment": {"type": "object"},
-            "history": {"type": "object"},
-            "constraints": {"type": "object"},
-            "ui_scene": {"type": "string"},
-        },
-    },
-)
-async def get_user_info(args: dict[str, Any]) -> dict[str, Any]:
-    db = args.get("db")
+class GetUserInfoArgs(BaseModel):
+    scene: str | None = Field(default=None, description="UI scene or conversation scene.")
+    runtime_context: RuntimeContext = Field(default_factory=dict)
+
+
+async def _get_user_info(
+    scene: str | None = None,
+    runtime_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ctx = runtime_context or {}
+    db = ctx.get("db")
     if not isinstance(db, AsyncSession):
         raise RuntimeError("db session unavailable")
-    user_id = args.get("user_id")
-    scene = args.get("scene") or "chat"
-    session_id = args.get("session_id")
-    overrides = args.get("overrides")
-    if overrides is not None and not isinstance(overrides, dict):
-        overrides = None
     return await ContextService.build(
         db=db,
-        user_id=user_id,
-        scene=scene,
-        session_id=session_id,
-        overrides=overrides,
+        user_id=ctx.get("user_id"),
+        scene=scene or "chat",
+        session_id=ctx.get("session_id"),
+        overrides=ctx.get("context") if isinstance(ctx.get("context"), dict) else None,
     )
+
+
+get_user_info_tool = StructuredTool.from_function(
+    coroutine=_get_user_info,
+    name="get_user_info",
+    description="Fetch user profile, preferences, and environment snapshot.",
+    args_schema=GetUserInfoArgs,
+    infer_schema=False,
+)

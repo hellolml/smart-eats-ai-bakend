@@ -3,17 +3,19 @@ from __future__ import annotations
 from typing import Any
 
 import redis.asyncio as redis
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.tools_registry import register_tool
+from app.agent.tools.native import RuntimeContext
 from app.domain.recipe.service import RecipeService
 from app.infra.redis import get_redis
 from app.infra.models.recipe import Recipe
 
 
-async def _get_redis_client(args: dict[str, Any]) -> redis.Redis:
-    client = args.get("redis_client")
+async def _get_redis_client(runtime_context: dict[str, Any]) -> redis.Redis:
+    client = runtime_context.get("redis_client")
     if client is not None:
         return client
     async for client in get_redis():
@@ -21,36 +23,18 @@ async def _get_redis_client(args: dict[str, Any]) -> redis.Redis:
     raise RuntimeError("redis client unavailable")
 
 
-@register_tool(
-    name="search_recipes",
-    description=(
-        "Search recipes by keyword. Input: {query:string}. "
-        "Output: list of recipes {id,title,image_url,cook_time_min,calories,tags}. "
-        "Example input: {\"query\":\"番茄\"}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {"query": {"type": "string"}},
-        "required": ["query"],
-    },
-    output_schema={
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string"},
-                "title": {"type": "string"},
-                "image_url": {"type": ["string", "null"]},
-                "cook_time_min": {"type": ["integer", "number", "null"]},
-                "calories": {"type": ["integer", "number", "null"]},
-                "tags": {"type": "array", "items": {"type": "string"}},
-            },
-        },
-    },
-)
-async def search_recipes(args: dict[str, Any]) -> list[dict[str, Any]]:
-    query = args.get("query") or "home"
-    db = args.get("db")
+class SearchRecipesArgs(BaseModel):
+    query: str = Field(..., description="Recipe search keyword.")
+    runtime_context: RuntimeContext = Field(default_factory=dict)
+
+
+async def _search_recipes(
+    query: str,
+    runtime_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    ctx = runtime_context or {}
+    query = query or "home"
+    db = ctx.get("db")
     if isinstance(db, AsyncSession):
         result = await db.execute(
             select(Recipe).where(Recipe.title.contains(query)).limit(5)
@@ -70,5 +54,14 @@ async def search_recipes(args: dict[str, Any]) -> list[dict[str, Any]]:
             }
             for row in rows
         ]
-    redis_client = await _get_redis_client(args)
+    redis_client = await _get_redis_client(ctx)
     return await RecipeService.search(redis_client, query)
+
+
+search_recipes_tool = StructuredTool.from_function(
+    coroutine=_search_recipes,
+    name="search_recipes",
+    description="Search recipes by keyword. Input: {query:string}. Output: list of recipes.",
+    args_schema=SearchRecipesArgs,
+    infer_schema=False,
+)

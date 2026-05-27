@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.tools_registry import register_tool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+
+from app.agent.tools.native import RuntimeContext
 from app.infra.external.amap import amap
 
 
@@ -36,38 +39,27 @@ def _normalize_poi(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@register_tool(
-    name="travel_search_poi",
-    description=(
-        "Search and verify travel POIs by keyword through AMap. "
-        "Input: {keywords:string, city?:string, types?:string, location?:string, page_size?:integer}. "
-        "Output: {query, pois:[{poi_id,name,address,longitude,latitude,tel,raw}]}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "keywords": {"type": "string"},
-            "city": {"type": "string"},
-            "types": {"type": "string"},
-            "location": {"type": "string"},
-            "page_size": {"type": "integer"},
-        },
-        "required": ["keywords"],
-    },
-    output_schema={
-        "type": "object",
-        "properties": {
-            "query": {"type": "object"},
-            "pois": {"type": "array", "items": {"type": "object"}},
-            "error": {"type": "string"},
-        },
-    },
-)
-async def travel_search_poi(args: dict[str, Any]) -> dict[str, Any]:
-    keywords = str(args.get("keywords") or "").strip()
+class TravelSearchPoiArgs(BaseModel):
+    keywords: str = Field(..., description="POI keyword to search.")
+    city: str | None = Field(default=None, description="Optional city.")
+    types: str | None = Field(default=None, description="Optional AMap POI type code.")
+    location: str | None = Field(default=None, description="Optional coordinate string lng,lat.")
+    page_size: int | None = Field(default=None, description="Number of POIs to return.")
+    runtime_context: RuntimeContext = Field(default_factory=dict)
+
+
+async def _travel_search_poi(
+    keywords: str,
+    city: str | None = None,
+    types: str | None = None,
+    location: str | None = None,
+    page_size: int | None = None,
+    runtime_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ctx = runtime_context or {}
+    keywords = str(keywords or "").strip()
     if not keywords:
         return {"error": "missing_keywords"}
-    page_size = args.get("page_size")
     try:
         page_size = int(page_size) if page_size is not None else 5
     except (TypeError, ValueError):
@@ -75,19 +67,30 @@ async def travel_search_poi(args: dict[str, Any]) -> dict[str, Any]:
 
     pois = await amap.text_search(
         keywords=keywords,
-        types=args.get("types"),
-        city=args.get("city"),
-        location=args.get("location"),
+        types=types,
+        city=city,
+        location=location,
         page_size=max(1, min(page_size, 20)),
-        servers_path=args.get("servers_path"),
+        servers_path=ctx.get("servers_path"),
     )
     return {
         "query": {
             "keywords": keywords,
-            "city": args.get("city"),
-            "types": args.get("types"),
-            "location": args.get("location"),
+            "city": city,
+            "types": types,
+            "location": location,
         },
         "pois": [_normalize_poi(item) for item in pois if isinstance(item, dict)],
     }
 
+
+travel_search_poi_tool = StructuredTool.from_function(
+    coroutine=_travel_search_poi,
+    name="travel_search_poi",
+    description=(
+        "Search and verify travel POIs by keyword through AMap. "
+        "Input: {keywords:string, city?:string, types?:string, location?:string, page_size?:integer}."
+    ),
+    args_schema=TravelSearchPoiArgs,
+    infer_schema=False,
+)

@@ -48,7 +48,7 @@ def test_skill_tool_call_limit_preserves_final_answer_and_limits_external_tools(
 
 @pytest.mark.asyncio
 async def test_travel_search_poi_normalizes_amap_results(monkeypatch):
-    from app.agent.tools.travel_search_poi import travel_search_poi
+    from app.agent.tools.travel_search_poi import travel_search_poi_tool
 
     async def _fake_text_search(*_args, **_kwargs):
         return [
@@ -62,7 +62,7 @@ async def test_travel_search_poi_normalizes_amap_results(monkeypatch):
 
     monkeypatch.setattr("app.agent.tools.travel_search_poi.amap.text_search", _fake_text_search)
 
-    result = await travel_search_poi({"keywords": "西湖", "city": "杭州", "page_size": 3})
+    result = await travel_search_poi_tool.ainvoke({"keywords": "西湖", "city": "杭州", "page_size": 3})
 
     assert result["query"]["keywords"] == "西湖"
     assert result["pois"][0]["poi_id"] == "B001"
@@ -72,14 +72,14 @@ async def test_travel_search_poi_normalizes_amap_results(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_travel_create_personal_map_returns_qr_payload(monkeypatch):
-    from app.agent.tools.travel_create_personal_map import travel_create_personal_map
+    from app.agent.tools.travel_create_personal_map import travel_create_personal_map_tool
 
     async def _fake_personal_map(*_args, **_kwargs):
         return {"qr_code_url": "https://example.com/qr.png", "schema_url": "amapuri://foo"}
 
     monkeypatch.setattr("app.agent.tools.travel_create_personal_map.create_personal_map", _fake_personal_map)
 
-    result = await travel_create_personal_map(
+    result = await travel_create_personal_map_tool.ainvoke(
         {
             "title": "杭州3天2晚",
             "line_list": [

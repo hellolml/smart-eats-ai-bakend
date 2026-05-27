@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.messages.modifier import RemoveMessage
+from langgraph.prebuilt import ToolNode
 from langgraph.store.memory import InMemoryStore
 
 from app.agent.langgraph_context import (
@@ -213,24 +214,64 @@ async def test_persist_summary_memories_writes_high_confidence_stable_preference
 async def test_memory_tools_use_langgraph_store_namespace():
     store = InMemoryStore()
     runtime = {"langgraph_store": store, "user_id": "u1"}
-
-    written = await context_memory.memory_write(
-        {**runtime, "content": "用户不吃香菜", "kind": "preference", "confidence": 0.9}
+    node = ToolNode(
+        [
+            context_memory.memory_write_tool,
+            context_memory.memory_search_tool,
+            context_memory.memory_update_tool,
+            context_memory.memory_forget_tool,
+        ],
+        messages_key="messages",
     )
-    hits = await context_memory.memory_search({**runtime, "query": "香菜", "top_k": 3})
+
+    written = await context_memory.memory_write_tool.ainvoke(
+        {
+            "content": "用户不吃香菜",
+            "kind": "preference",
+            "confidence": 0.9,
+            "runtime_context": runtime,
+        }
+    )
+    tool_output = await node.ainvoke(
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "memory_search",
+                            "args": {"query": "香菜", "top_k": 3},
+                            "id": "call_memory_search",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ],
+            "runtime_context": runtime,
+        }
+    )
+    hits = json.loads(tool_output["messages"][0].content)
 
     assert written["memory_id"]
     assert hits[0]["content"] == "用户不吃香菜"
     assert hits[0]["namespace"] == ["memories", "u1"]
 
-    updated = await context_memory.memory_update(
-        {**runtime, "memory_id": written["memory_id"], "content": "用户少吃香菜"}
+    updated = await context_memory.memory_update_tool.ainvoke(
+        {
+            "memory_id": written["memory_id"],
+            "content": "用户少吃香菜",
+            "runtime_context": runtime,
+        }
     )
     assert updated["content"] == "用户少吃香菜"
 
-    forgotten = await context_memory.memory_forget({**runtime, "memory_id": written["memory_id"]})
+    forgotten = await context_memory.memory_forget_tool.ainvoke(
+        {"memory_id": written["memory_id"], "runtime_context": runtime}
+    )
     assert forgotten["deleted"] is True
-    assert await context_memory.memory_search({**runtime, "query": "香菜", "top_k": 3}) == []
+    assert await context_memory.memory_search_tool.ainvoke(
+        {"query": "香菜", "top_k": 3, "runtime_context": runtime}
+    ) == []
 
 
 @pytest.mark.asyncio
