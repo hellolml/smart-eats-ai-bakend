@@ -279,13 +279,12 @@ class OpenAIPlanner:
             name = getattr(tool, "name", None)
             if not isinstance(name, str) or not name or name == "submit_final_answer":
                 continue
-            args_schema = getattr(tool, "args_schema", None)
-            if hasattr(args_schema, "model_json_schema"):
-                input_schema = args_schema.model_json_schema()
-            elif isinstance(args_schema, dict):
-                input_schema = args_schema
+            tool_call_schema = getattr(tool, "tool_call_schema", None)
+            if hasattr(tool_call_schema, "model_json_schema"):
+                input_schema = tool_call_schema.model_json_schema()
             else:
-                input_schema = {"type": "object", "properties": {}}
+                args = getattr(tool, "args", None)
+                input_schema = {"type": "object", "properties": args} if isinstance(args, dict) else {"type": "object", "properties": {}}
             available.append(
                 {
                     "name": name,

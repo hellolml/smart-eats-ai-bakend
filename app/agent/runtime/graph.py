@@ -149,9 +149,9 @@ def _state_update(state: AgentRuntimeState) -> dict[str, Any]:
 
 
 def _registered_tool_names() -> list[str]:
-    from app.agent.tools_registry import list_tools
+    from app.agent.tools import tool_names
 
-    return [item["name"] for item in list_tools() if isinstance(item.get("name"), str)]
+    return tool_names()
 
 
 def _budget_model_name(state: AgentRuntimeState) -> str | None:
@@ -449,7 +449,7 @@ def _build_result_preview(
     tool_name: str | None,
     result: Any,
 ) -> Any:
-    from app.agent.tools_registry import preview_result
+    from app.agent.runtime.tool_preview import preview_result
 
     if tool_name:
         customized = _hook_manager_from_context(state.context).preview_tool_result(state, tool_name, result)
@@ -804,7 +804,7 @@ def build_agent_runtime_graph(
     from langgraph.prebuilt import ToolNode
 
     from app.agent.llm_adapters import OpenAIPlanner, ProviderRegistry, build_planner
-    from app.agent.tools_registry import get_langchain_tools
+    from app.agent.tools import select_tools
 
     agent_config = get_agent_runtime_config()
     planner_config = (
@@ -817,7 +817,7 @@ def build_agent_runtime_graph(
 
     tool_node = ToolNode(
         [
-            *get_langchain_tools(allowlist=registered_tools),
+            *select_tools(registered_tools),
             _build_submit_final_answer_tool(),
         ],
         messages_key="messages",
@@ -945,7 +945,7 @@ def build_agent_runtime_graph(
                 if isinstance(item, str) and item in registered_tools
             ]
         current_langchain_tools = [
-            *get_langchain_tools(allowlist=current_allowed_tools, inject_runtime_context=False),
+            *select_tools(current_allowed_tools),
             _build_submit_final_answer_tool(),
         ]
 

@@ -13,7 +13,7 @@ from app.common.errors import AppError, INVALID_PARAMS, app_error_from_http, env
 from app.common.logging import init_logging
 from app.common.config import settings
 from app.infra.db import init_db
-from app.agent.tools_registry import list_tools
+from app.agent.tools import describe_tools
 
 logger = init_logging()
 
@@ -31,7 +31,7 @@ async def on_startup() -> None:
         config.model_writer,
         bool(config.api_key),
     )
-    tools = list_tools()
+    tools = describe_tools()
     logger.info("tools_registered count=%s names=%s", len(tools), [t["name"] for t in tools])
     await init_db()
     
