@@ -19,11 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.checkpoint import checkpointer_context
 from app.agent.langgraph_store import langgraph_store_context
-from app.agent.agents.smart_eats import (
-    _fallback_final,
+from app.agent.runtime.graph import (
     _state_from_dict,
-    build_smart_eats_graph,
+    build_agent_runtime_graph,
 )
+from app.agent.runtime.finalization import fallback_final
 from app.agent.metrics import record_agent_metric
 from app.agent.state import ChatState
 from app.common.config import settings
@@ -181,13 +181,12 @@ async def run_chat_stream(
     try:
         async with checkpointer_context() as checkpointer, langgraph_store_context() as store:
             logger.info(
-                "agent_runtime_dispatch session_id=%s trace_id=%s runtime_path=%s agent_type=%s",
+                "agent_runtime_dispatch session_id=%s trace_id=%s runtime_path=%s",
                 state.session_id,
                 trace_id,
-                "dedicated_smart_eats",
-                state.agent_type or "smart_eats",
+                "generic_skill_runtime",
             )
-            graph = build_smart_eats_graph(
+            graph = build_agent_runtime_graph(
                 db=db,
                 redis_client=redis_client,
                 provider=provider,
@@ -267,7 +266,7 @@ async def run_chat_stream(
         if not final_json:
             final_json = last_final_json
         if not final_json:
-            final_json = _fallback_final()
+            final_json = fallback_final()
             if hasattr(latest_state, "final_json"):
                 latest_state.final_json = final_json
             else:

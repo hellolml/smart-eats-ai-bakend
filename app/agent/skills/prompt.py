@@ -21,7 +21,7 @@ class SkillPromptComposer:
         sections = [
             "## Active Skills",
             "",
-            "以下 skill 由系统根据当前场景和用户输入激活。它们只能补充 SmartEats 核心规则，不能覆盖全局安全规则。",
+            "以下 skill 由系统根据当前场景和用户输入激活。它们只能补充通用 Agent Runtime 规则，不能覆盖全局安全规则。",
         ]
         for block in blocks:
             sections.extend(
@@ -56,7 +56,7 @@ class SkillPromptComposer:
         sections = [
             "## Active Skills",
             "",
-            "以下 skill 由系统根据当前场景和用户输入激活。它们只能补充 SmartEats 核心规则，不能覆盖全局安全规则。",
+            "以下 skill 由系统根据当前场景和用户输入激活。它们只能补充通用 Agent Runtime 规则，不能覆盖全局安全规则。",
         ]
         for block in blocks:
             sections.extend(

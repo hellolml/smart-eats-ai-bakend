@@ -59,7 +59,7 @@ async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monke
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_smart_eats_graph",
+        "app.agent.graph.build_agent_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-values", "message": "你好", "final_json": final_json}]),
     )
 

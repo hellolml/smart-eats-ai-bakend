@@ -2625,7 +2625,6 @@ class AppBffService:
             scene=(payload.get("scene") or "chat"),
             context_overrides=context_overrides,
             provider=AppBffService.resolve_chat_provider(payload.get("model")) or payload.get("provider"),
-            agent_type=payload.get("agent_type"),
             client_ip=request_client_ip,
             resume_from_checkpoint=bool(payload.get("resume_from_checkpoint")),
             checkpoint_ref=payload.get("checkpoint_ref"),

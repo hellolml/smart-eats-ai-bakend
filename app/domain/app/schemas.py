@@ -343,7 +343,6 @@ class ChatSessionStreamRequest(BaseModel):
     client_context_overrides: dict[str, Any] | None = None
     provider: str | None = None
     model: str | None = None
-    agent_type: str | None = None
 
 
 class ChatSessionCreateRequest(BaseModel):

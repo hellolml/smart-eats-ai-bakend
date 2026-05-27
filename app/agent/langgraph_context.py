@@ -261,7 +261,7 @@ def build_summary_prompt(
         formatted.append(f"[{index}] {role}: {content}")
     previous = previous_summary.strip() if previous_summary else "无"
     return (
-        "你在为 SmartEats agent 生成 Claude-Code-like working-state compact summary。\n"
+        "你在为 skill-based agent runtime 生成 Claude-Code-like working-state compact summary。\n"
         "下一个模型看不到被压缩的旧消息，只能看到你的 JSON、保留的最近原文消息、长期记忆和可检索 source refs。\n"
         "请把下面旧对话压缩为严格 JSON 对象。只总结旧消息，不要虚构最新状态。\n"
         "必须只输出 JSON，不要 Markdown，不要解释。\n"

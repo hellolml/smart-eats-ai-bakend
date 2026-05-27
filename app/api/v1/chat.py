@@ -38,7 +38,6 @@ class ChatStreamRequest(BaseModel):
     client_context_overrides: dict[str, Any] | None = None
     provider: str | None = None
     model: str | None = None
-    agent_type: str | None = None
     resume_from_checkpoint: bool | None = None
     checkpoint_ref: str | None = None
     replay_from_checkpoint: bool | None = None

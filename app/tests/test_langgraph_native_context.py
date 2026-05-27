@@ -32,7 +32,7 @@ async def test_build_model_messages_injects_context_without_mutating_state_messa
     memories = [{"id": "m1", "content": "用户喜欢川菜", "score": 0.8}]
 
     model_messages = build_model_messages(
-        system_prompt="你是 SmartEats。",
+        system_prompt="你是通用助手。",
         summary="用户正在找晚饭。",
         messages=state_messages,
         memories=memories,

@@ -1,3 +1,49 @@
+---
+id: travel_planner
+name: Travel Planner
+version: 1.0.0
+description: Plan multi-day trips from guide content, user constraints, confirmed places, and AMap personal maps.
+enabled: true
+priority: 85
+activation:
+  scenes:
+    - travel_planner
+  intents:
+    - travel
+  keywords:
+    - 旅行规划
+    - 旅游规划
+    - 行程
+    - 攻略
+    - 旅游
+    - 几天几晚
+    - 小红书
+    - 马蜂窝
+  min_score: 1
+tools:
+  allow:
+    - geocode_location
+    - plan_route
+    - travel_search_poi
+    - travel_create_personal_map
+  require_global_allowlist: true
+safety:
+  can_override_global_rules: false
+  allow_external_tools: false
+  max_tool_calls_per_turn: 4
+context:
+  read:
+    - user_message
+    - attachments
+    - history
+    - memories
+    - active_skills
+  write:
+    - active_skills
+    - travel_state
+hooks:
+  class: hooks.TravelPlannerHooks
+---
 # Travel Planner Skill
 
 当用户请求旅行规划、行程安排、攻略整理、几天几晚路线、旅行候选地点筛选或高德个人地图时，使用本 skill。

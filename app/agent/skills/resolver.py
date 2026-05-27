@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agent.skills.models import ActiveSkillSet, SkillPromptBlock, SkillSpec
+from app.agent.skills.loader import load_skill_body
 
 
 class SkillResolver:
@@ -42,11 +43,11 @@ class SkillResolver:
                 skill_id=skill.id,
                 version=skill.version,
                 priority=skill.priority,
-                content=skill.instructions.content,
+                content=skill.instructions.content or load_skill_body(skill),
                 reasons=reasons_by_skill.get(skill.id, []),
             )
             for skill in skills
-            if skill.instructions.content
+            if skill.instructions.content or skill.skill_file
         ]
         return ActiveSkillSet(
             skills=skills,
@@ -98,4 +99,3 @@ class SkillResolver:
             elif isinstance(value, list):
                 skill_ids.update(item for item in value if isinstance(item, str))
         return skill_ids
-

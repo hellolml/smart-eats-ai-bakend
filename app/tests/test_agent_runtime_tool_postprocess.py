@@ -3,19 +3,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.agent.agents import smart_eats as smart_eats_module
-from app.agent.agents.smart_eats import (
+from app.agent.runtime import graph as runtime_module
+from app.agent.runtime.graph import (
+    AgentRuntimeState,
     _apply_official_tool_postprocess,
     _finalize_official_after_tools,
-    get_smart_eats_agent_config,
+    get_agent_runtime_config,
 )
 
 
 @pytest.mark.asyncio
 async def test_apply_official_tool_postprocess_writes_final_from_submit_tool(monkeypatch):
-    chat_state = smart_eats_module.SmartEatsState(session_id="s-submit", steps_left=2)
+    chat_state = AgentRuntimeState(session_id="s-submit", steps_left=2)
     save_tool_message = AsyncMock()
-    monkeypatch.setattr("app.agent.agents.smart_eats.conversation.save_tool_message", save_tool_message)
+    monkeypatch.setattr("app.agent.runtime.graph.conversation.save_tool_message", save_tool_message)
 
     message = SimpleNamespace(
         name="submit_final_answer",
@@ -36,7 +37,7 @@ async def test_apply_official_tool_postprocess_writes_final_from_submit_tool(mon
         call_args_map={"call_final": {"recommendations": []}},
         db=None,
         redis_client=None,
-        agent_config=get_smart_eats_agent_config(),
+        agent_config=get_agent_runtime_config(),
     )
 
     assert chat_state.final_json is not None
@@ -48,9 +49,13 @@ async def test_apply_official_tool_postprocess_writes_final_from_submit_tool(mon
 
 @pytest.mark.asyncio
 async def test_apply_official_tool_postprocess_records_tool_observation_without_db_history(monkeypatch):
-    chat_state = smart_eats_module.SmartEatsState(session_id="s-tool", steps_left=2)
+    chat_state = AgentRuntimeState(
+        session_id="s-tool",
+        steps_left=2,
+        context={"active_skills": [{"id": "restaurant_finder"}]},
+    )
     save_tool_message = AsyncMock()
-    monkeypatch.setattr("app.agent.agents.smart_eats.conversation.save_tool_message", save_tool_message)
+    monkeypatch.setattr("app.agent.runtime.graph.conversation.save_tool_message", save_tool_message)
 
     message = SimpleNamespace(
         name="geocode_location",
@@ -65,7 +70,7 @@ async def test_apply_official_tool_postprocess_records_tool_observation_without_
         call_args_map={"call_geo": {"query": "长沙市政府"}},
         db=None,
         redis_client=None,
-        agent_config=get_smart_eats_agent_config(),
+        agent_config=get_agent_runtime_config(),
     )
 
     assert chat_state.final_json is None
@@ -78,16 +83,16 @@ async def test_apply_official_tool_postprocess_records_tool_observation_without_
     ]
     assert chat_state.context is not None
     assert chat_state.context.get("location") == {"lat": 28.2, "lng": 112.9}
-    assert chat_state.location_source == "geocode"
+    assert chat_state.context.get("location_source") == "geocode"
     assert chat_state.events and chat_state.events[0]["event"] == "tool_call"
     save_tool_message.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_finalize_official_after_tools_triggers_best_effort_at_last_step():
-    chat_state = smart_eats_module.SmartEatsState(session_id="s-best-effort", steps_left=1)
+    chat_state = AgentRuntimeState(session_id="s-best-effort", steps_left=1)
 
-    _finalize_official_after_tools(chat_state, get_smart_eats_agent_config())
+    _finalize_official_after_tools(chat_state, get_agent_runtime_config())
 
     assert chat_state.steps_left == 0
     assert chat_state.final_json is not None
@@ -97,9 +102,9 @@ async def test_finalize_official_after_tools_triggers_best_effort_at_last_step()
 
 @pytest.mark.asyncio
 async def test_finalize_official_after_tools_does_not_trigger_best_effort_before_last_step():
-    chat_state = smart_eats_module.SmartEatsState(session_id="s-best-effort-later", steps_left=2)
+    chat_state = AgentRuntimeState(session_id="s-best-effort-later", steps_left=2)
 
-    _finalize_official_after_tools(chat_state, get_smart_eats_agent_config())
+    _finalize_official_after_tools(chat_state, get_agent_runtime_config())
 
     assert chat_state.steps_left == 1
     assert chat_state.final_json is None

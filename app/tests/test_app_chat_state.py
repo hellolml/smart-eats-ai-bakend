@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.agents.smart_eats import _initialize_graph_state
+from app.agent.runtime.graph import _initialize_graph_state
 from app.domain.app.service import AppBffService
 
 
