@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_skills.home_chef.hooks import HomeChefHooks
+from agent_skills.food_decision.hooks import FoodDecisionHooks
 from agent_skills.restaurant_finder.hooks import RestaurantFinderHooks
 from agent_skills.route_planner.hooks import RoutePlannerHooks
 from app.agent.runtime.graph import AgentRuntimeState
@@ -26,6 +27,21 @@ def test_home_chef_hook_records_rag_hits():
 
     assert handled is None
     assert state.context_overrides["rag_recipe_hits"] == items
+
+
+def test_food_decision_hook_returns_decision_final():
+    state = AgentRuntimeState(session_id="s1")
+    result = {
+        "decision": {"type": "recipe", "title": "番茄炒蛋"},
+        "reasons": ["快手", "适合今天"],
+        "actions": [{"label": "查看做法", "url": "app://recipe"}],
+    }
+
+    handled = FoodDecisionHooks().handle_tool_result(state, "food_decision", result)
+
+    assert handled is not None
+    assert handled["recommendations"][0]["title"] == "番茄炒蛋"
+    assert handled["decision"] == result
 
 
 def test_restaurant_hook_normalizes_search_args():

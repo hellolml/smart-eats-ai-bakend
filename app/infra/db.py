@@ -60,6 +60,7 @@ async def init_db() -> None:
         grocery,
         group_decision,
         llm_config,
+        plan,
         preference,
         recipe,
         restaurant,

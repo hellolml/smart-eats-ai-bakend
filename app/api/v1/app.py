@@ -127,6 +127,18 @@ class DecisionQuickFilterAnswerRequest(BaseModel):
     budget_level: int | None = Field(default=None, ge=1, le=5)
 
 
+class PlanCreateRequest(BaseModel):
+    session_id: str | None = None
+    title: str = Field(min_length=1, max_length=160)
+    plan_type: str = Field(default="travel", max_length=32)
+    status: str = Field(default="saved", max_length=32)
+    date_text: str | None = Field(default=None, max_length=120)
+    source_text: str = ""
+    qr_code_url: str | None = None
+    schema_url: str | None = None
+    plan_json: dict[str, Any] = Field(default_factory=dict)
+
+
 class GroceryItemInput(BaseModel):
     name: str
     quantity: float | None = None
@@ -512,6 +524,34 @@ async def get_home_overview(
         location = {"lat": lat, "lng": lng}
 
     data = await AppBffService.get_home_overview(user_id, client_ip, db, location=location)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.get("/plans")
+async def list_plans(request: Request, db: db_dep, user_id: str = Depends(get_current_user_id)):
+    data = await AppBffService.list_plans(user_id, db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.post("/plans")
+async def create_plan(
+    payload: PlanCreateRequest,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.create_plan(user_id, payload.model_dump(), db)
+    return envelope(data, getattr(request.state, "trace_id", ""))
+
+
+@router.delete("/plans/{plan_id}")
+async def delete_plan(
+    plan_id: str,
+    request: Request,
+    db: db_dep,
+    user_id: str = Depends(get_current_user_id),
+):
+    data = await AppBffService.delete_plan(user_id, plan_id, db)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 

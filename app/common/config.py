@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     LLM_VISION_MAX_IMAGES: int = 4
     LLM_VISION_MAX_IMAGE_BYTES: int = 8 * 1024 * 1024
     TOOL_HISTORY_KEEP: int = 3
-    TOOL_HISTORY_ALLOW: str = "get_ip_location,geocode_location,search_restaurants,plan_route,get_weather,rag_search_recipes,search_recipes"
+    TOOL_HISTORY_ALLOW: str = "get_ip_location,geocode_location,search_restaurants,plan_route,get_weather,rag_search_recipes,search_recipes,food_decision"
     CHAT_COMPACT_MIN_MESSAGES: int = 3
     CHAT_COMPACT_TRIGGER_RATIO: float = 0.8
     CHAT_COMPACT_HARD_RATIO: float = 0.92
@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     QWEN_MODEL_PLANNER: str = "qwen3.5-flash"
     QWEN_MODEL_WRITER: str = "qwen3.5-flash"
     LLM_REQUEST_LOG: str = "none"
+    LLM_PLANNER_REQUEST_TIMEOUT_SECONDS: int = 90
+    LLM_INTENT_REQUEST_TIMEOUT_SECONDS: int = 20
     LLM_CONFIG_ENCRYPTION_KEY: str | None = None
     LLM_CONFIG_TEST_TIMEOUT_SECONDS: int = 15
     AGENT_MAX_STEPS: int = 6
@@ -118,6 +120,7 @@ class Settings(BaseSettings):
     CHAT_PAUSE_TTL: int = 600
     SEED_DEMO_USER_ID: str | None = None
     AMAP_SEARCH_CACHE_TTL_SECONDS: int = 180
+    TRAVEL_POI_CACHE_TTL_SECONDS: int = 86400
     RESTAURANT_DETAIL_CACHE_TTL_SECONDS: int = 300
     MCP_SERVERS_CONFIG_PATH: str | None = "mcp_servers.json"
     APP_FALLBACK_ENABLED: bool = True

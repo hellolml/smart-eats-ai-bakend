@@ -26,6 +26,7 @@ from app.agent.runtime.graph import (
 from app.agent.runtime.finalization import fallback_final
 from app.agent.metrics import record_agent_metric
 from app.agent.state import ChatState
+from app.agent.travel_workflow import run_travel_planner_workflow
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
 from app.agent import conversation
@@ -51,6 +52,12 @@ def _normalize_llm_upstream_error_message(exc: Exception) -> str:
 
     if error_type == "AllocationQuota.FreeTierOnly" or "free tier" in combined_lower:
         return "当前模型免费额度已用尽，请在模型管理控制台关闭“仅使用免费额度”模式，或切换到可用模型后重试。"
+
+    if "coding_plan_subscription_expired" in combined_lower or "subscription is expired" in combined_lower:
+        return "当前模型订阅已过期，请在模型管理中切换到可用模型，或更新后端 LLM_PROVIDER / 模型配置后重试。"
+
+    if "request timed out" in combined_lower or "timed out" in combined_lower:
+        return "模型响应超时，请稍后重试；如果旅行规划较复杂，请减少一次输入的信息量，或在后端调大 LLM_PLANNER_REQUEST_TIMEOUT_SECONDS。"
 
     if error_message:
         return error_message
@@ -173,6 +180,11 @@ async def run_chat_stream(
     redis_client: redis.Redis,
     state: ChatState,
 ) -> AsyncGenerator[dict[str, Any], None]:
+    if state.scene == "travel_planner":
+        async for item in run_travel_planner_workflow(request, db, redis_client, state):
+            yield item
+        return
+
     provider = state.provider or settings.LLM_PROVIDER
     cancel_key = f"chat:cancel:{state.session_id}"
     trace_id = state.trace_id or ""

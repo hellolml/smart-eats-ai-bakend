@@ -63,6 +63,7 @@ from app.infra.models.fridge import FridgeItem, FridgePhoto, RecognitionJob
 from app.infra.models.game import BlindboxRoll, WheelConfig, WheelSpin
 from app.infra.models.auth import AuthEvent, OAuthAccount, UserSession
 from app.infra.models.grocery import GroceryList, GroceryListItem
+from app.infra.models.plan import TravelPlan
 from app.infra.models.preference import UserPreference, UserProfile
 from app.infra.models.user import User
 from app.infra.external.amap import amap
@@ -71,6 +72,68 @@ logger = logging.getLogger(__name__)
 
 
 class AppBffService:
+    @staticmethod
+    def _map_travel_plan(plan: TravelPlan) -> dict[str, Any]:
+        return {
+            "id": plan.id,
+            "user_id": plan.user_id,
+            "session_id": plan.session_id,
+            "title": plan.title,
+            "plan_type": plan.plan_type,
+            "status": plan.status,
+            "date_text": plan.date_text,
+            "source_text": plan.source_text or "",
+            "qr_code_url": plan.qr_code_url,
+            "schema_url": plan.schema_url,
+            "plan_json": plan.plan_json or {},
+            "created_at": plan.created_at.isoformat() if plan.created_at else None,
+            "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+        }
+
+    @staticmethod
+    async def list_plans(user_id: str, db: AsyncSession) -> list[dict[str, Any]]:
+        result = await db.execute(
+            select(TravelPlan)
+            .where(TravelPlan.user_id == user_id)
+            .order_by(desc(TravelPlan.created_at))
+        )
+        return [AppBffService._map_travel_plan(item) for item in result.scalars().all()]
+
+    @staticmethod
+    async def create_plan(user_id: str, payload: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
+        plan = TravelPlan(
+            id=str(uuid4()),
+            user_id=user_id,
+            session_id=payload.get("session_id"),
+            title=(payload.get("title") or "旅行计划")[:160],
+            plan_type=(payload.get("plan_type") or "travel")[:32],
+            status=(payload.get("status") or "saved")[:32],
+            date_text=payload.get("date_text"),
+            source_text=payload.get("source_text"),
+            qr_code_url=payload.get("qr_code_url"),
+            schema_url=payload.get("schema_url"),
+            plan_json=payload.get("plan_json") if isinstance(payload.get("plan_json"), dict) else {},
+        )
+        db.add(plan)
+        await db.commit()
+        await db.refresh(plan)
+        return AppBffService._map_travel_plan(plan)
+
+    @staticmethod
+    async def delete_plan(user_id: str, plan_id: str, db: AsyncSession) -> dict[str, Any]:
+        result = await db.execute(
+            select(TravelPlan).where(
+                TravelPlan.id == plan_id,
+                TravelPlan.user_id == user_id,
+            )
+        )
+        plan = result.scalar_one_or_none()
+        if plan is None:
+            raise HTTPException(status_code=404, detail="plan not found")
+        await db.delete(plan)
+        await db.commit()
+        return {"deleted": True, "id": plan_id}
+
     @staticmethod
     def list_chat_models() -> dict[str, Any]:
         configured_providers = [
@@ -2617,6 +2680,24 @@ class AppBffService:
             if clean_attachments:
                 context_overrides = context_overrides or {}
                 context_overrides["attachments"] = clean_attachments
+        inferred_intent = AppBffService._infer_chat_intent(payload.get("message"))
+        if inferred_intent:
+            context_overrides = context_overrides or {}
+            context_overrides.setdefault("intent", inferred_intent)
+            forced_skill_ids = AppBffService._forced_skill_ids_for_intent(inferred_intent)
+            if forced_skill_ids:
+                existing_forced = context_overrides.get("forced_skill_ids")
+                merged_forced = []
+                if isinstance(existing_forced, list):
+                    merged_forced.extend(item for item in existing_forced if isinstance(item, str))
+                merged_forced.extend(item for item in forced_skill_ids if item not in merged_forced)
+                context_overrides["forced_skill_ids"] = merged_forced
+        if payload.get("travel_action"):
+            context_overrides = context_overrides or {}
+            context_overrides["travel_action"] = payload.get("travel_action")
+        if isinstance(payload.get("travel_payload"), dict):
+            context_overrides = context_overrides or {}
+            context_overrides["travel_payload"] = payload.get("travel_payload")
 
         return ChatState(
             session_id=session_id,
@@ -2631,6 +2712,29 @@ class AppBffService:
             replay_from_checkpoint=bool(payload.get("replay_from_checkpoint")),
             resume_payload=payload.get("resume_payload"),
         )
+
+    @staticmethod
+    def _infer_chat_intent(message: Any) -> str | None:
+        text = str(message or "")
+        if not text:
+            return None
+        if any(token in text for token in ("做饭", "在家做", "菜谱", "食谱", "冰箱", "食材", "自己做")):
+            return "cook_home"
+        if any(token in text for token in ("吃点啥", "吃什么", "今天吃", "晚饭", "午饭", "早餐", "夜宵", "外卖", "餐厅", "饭店", "出去吃", "外面吃", "去哪吃")):
+            return "eat_out"
+        if any(token in text for token in ("路线", "导航", "怎么走", "怎么去")):
+            return "route"
+        return None
+
+    @staticmethod
+    def _forced_skill_ids_for_intent(intent: str) -> list[str]:
+        if intent == "cook_home":
+            return ["food_decision", "home_chef"]
+        if intent == "eat_out":
+            return ["food_decision", "restaurant_finder"]
+        if intent == "route":
+            return ["route_planner"]
+        return []
 
     @staticmethod
     async def prepare_chat_stream_state(

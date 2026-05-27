@@ -18,6 +18,17 @@ class _FakeRedis:
         return None
 
 
+class _MemoryRedis:
+    def __init__(self):
+        self.values = {}
+
+    async def get(self, key):
+        return self.values.get(key)
+
+    async def setex(self, key, _ttl, value):
+        self.values[key] = value
+
+
 class _FakeCheckpointerContext:
     async def __aenter__(self):
         return None
@@ -49,6 +60,82 @@ class _FakeStatefulCheckpointerContext:
 
     async def __aexit__(self, exc_type, exc, tb):
         return False
+
+
+@pytest.mark.asyncio
+async def test_travel_workflow_initial_call_waits_for_confirmation(monkeypatch):
+    async def _fake_search(args):
+        return {
+            "pois": [
+                {
+                    "poi_id": f"B-{args['keywords']}",
+                    "name": args["keywords"],
+                    "address": "测试地址",
+                    "longitude": 120.1,
+                    "latitude": 30.2,
+                }
+            ]
+        }
+
+    monkeypatch.setattr("app.agent.travel_workflow.travel_search_poi", _fake_search)
+
+    events = [
+        item
+        async for item in run_chat_stream(
+            _FakeRequest(),
+            db=None,
+            redis_client=_MemoryRedis(),
+            state=ChatState(session_id="s-travel", scene="travel_planner", message="目的地：杭州\n西湖\n灵隐寺"),
+        )
+    ]
+
+    final = [item for item in events if item["event"] == "final"][-1]["data"]["answer"]
+    assert final["status"] == "await_confirmation"
+    assert final["candidates"]
+    assert final["candidates"][0]["poi_id"]
+
+
+@pytest.mark.asyncio
+async def test_travel_workflow_confirmation_generates_itinerary_and_map(monkeypatch):
+    async def _fake_map(args):
+        return {"qr_code_url": "https://example.com/qr.png", "schema_url": "amapuri://travel", "line_list": args["line_list"]}
+
+    monkeypatch.setattr("app.agent.travel_workflow.travel_create_personal_map", _fake_map)
+    redis_client = _MemoryRedis()
+    await redis_client.setex(
+        "travel:state:s-travel",
+        3600,
+        json.dumps(
+            {
+                "stage": "await_confirmation",
+                "constraints": {"destination": "杭州", "days": 2},
+                "candidates": [
+                    {"poi_id": "B001", "name": "西湖", "longitude": 120.1, "latitude": 30.2},
+                    {"poi_id": "B002", "name": "灵隐寺", "longitude": 120.2, "latitude": 30.3},
+                ],
+            }
+        ),
+    )
+
+    events = [
+        item
+        async for item in run_chat_stream(
+            _FakeRequest(),
+            db=None,
+            redis_client=redis_client,
+            state=ChatState(
+                session_id="s-travel",
+                scene="travel_planner",
+                message="确认生成",
+                context_overrides={"travel_action": "confirm_candidates"},
+            ),
+        )
+    ]
+
+    final = [item for item in events if item["event"] == "final"][-1]["data"]["answer"]
+    assert final["status"] == "completed"
+    assert final["itinerary"]["days"]
+    assert final["map"]["qr_code_url"] == "https://example.com/qr.png"
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ import pytest
 from app.agent.runtime.graph import AgentRuntimeState, _limit_skill_tool_calls, get_agent_runtime_config
 from app.agent.skills.loader import load_skills_from_path
 from app.agent.skills.resolver import SkillResolver
+from app.domain.app.service import AppBffService
 
 
 def test_travel_planner_skill_is_bundled_and_activates_for_trip_request():
@@ -24,6 +25,29 @@ def test_travel_planner_skill_is_bundled_and_activates_for_trip_request():
 
     assert "travel_planner" in [skill.id for skill in active.skills]
     assert any(reason.startswith("scene:travel_planner") for reason in active.activation_reasons["travel_planner"])
+
+
+def test_food_decision_skill_is_bundled_and_activates_for_eat_request():
+    skills = load_skills_from_path("agent_skills")
+    food = next((skill for skill in skills if skill.id == "food_decision"), None)
+
+    assert food is not None
+    assert "food_decision" in food.tools.allow
+
+    state = AgentRuntimeState(
+        session_id="s-food",
+        scene="chat",
+        message="今天吃点啥",
+    )
+    active = SkillResolver(skills).resolve(state, {"user_message": state.message})
+
+    assert "food_decision" in [skill.id for skill in active.skills]
+
+
+def test_chat_intent_forces_food_and_restaurant_skills():
+    assert AppBffService._infer_chat_intent("今天吃点啥") == "eat_out"
+    assert AppBffService._forced_skill_ids_for_intent("eat_out") == ["food_decision", "restaurant_finder"]
+    assert AppBffService._forced_skill_ids_for_intent("cook_home") == ["food_decision", "home_chef"]
 
 
 def test_agent_runtime_config_keeps_travel_tools_out_of_core_allowlist():
@@ -68,6 +92,69 @@ async def test_travel_search_poi_normalizes_amap_results(monkeypatch):
     assert result["pois"][0]["poi_id"] == "B001"
     assert result["pois"][0]["longitude"] == 120.148
     assert result["pois"][0]["latitude"] == 30.242
+
+
+@pytest.mark.asyncio
+async def test_travel_search_poi_uses_cache_for_valid_pois(monkeypatch):
+    from app.agent.tools.travel_search_poi import travel_search_poi
+
+    calls = {"count": 0}
+
+    class FakeRedis:
+        def __init__(self):
+            self.value = None
+
+        async def get(self, _key):
+            return self.value
+
+        async def setex(self, _key, _ttl, value):
+            self.value = value
+
+    async def _fake_text_search(*_args, **_kwargs):
+        calls["count"] += 1
+        return [
+            {
+                "id": "B001",
+                "name": "西湖风景名胜区",
+                "address": "杭州市西湖区",
+                "location": {"lng": 120.148, "lat": 30.242},
+            }
+        ]
+
+    redis = FakeRedis()
+    monkeypatch.setattr("app.agent.tools.travel_search_poi.amap.text_search", _fake_text_search)
+
+    first = await travel_search_poi({"keywords": "西湖", "city": "杭州", "redis_client": redis})
+    second = await travel_search_poi({"keywords": "西湖", "city": "杭州", "redis_client": redis})
+
+    assert calls["count"] == 1
+    assert first["cache_hit"] is False
+    assert second["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_travel_search_poi_does_not_cache_invalid_pois(monkeypatch):
+    from app.agent.tools.travel_search_poi import travel_search_poi
+
+    class FakeRedis:
+        def __init__(self):
+            self.value = None
+
+        async def get(self, _key):
+            return self.value
+
+        async def setex(self, _key, _ttl, value):
+            self.value = value
+
+    async def _fake_text_search(*_args, **_kwargs):
+        return [{"name": "无坐标地点"}]
+
+    redis = FakeRedis()
+    monkeypatch.setattr("app.agent.tools.travel_search_poi.amap.text_search", _fake_text_search)
+
+    await travel_search_poi({"keywords": "无坐标", "redis_client": redis})
+
+    assert redis.value is None
 
 
 @pytest.mark.asyncio

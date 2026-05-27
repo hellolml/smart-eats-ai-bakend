@@ -362,7 +362,7 @@ class OpenAIPlanner:
             messages=messages,
             tools=openai_tools,
             tool_choice="auto",
-            timeout=35,
+            timeout=settings.LLM_PLANNER_REQUEST_TIMEOUT_SECONDS,
         )
 
         message = response.choices[0].message
@@ -435,7 +435,7 @@ class OpenAIPlanner:
             messages=payload_messages,
             tools=self._build_openai_tools(available_tools),
             tool_choice="auto",
-            timeout=35,
+            timeout=settings.LLM_PLANNER_REQUEST_TIMEOUT_SECONDS,
         )
 
         message = response.choices[0].message
@@ -618,7 +618,7 @@ class OpenAIPlanner:
                 messages=messages,
                 tools=tools,
                 tool_choice={"type": "function", "function": {"name": "decide_intent"}},
-                timeout=20,
+                timeout=settings.LLM_INTENT_REQUEST_TIMEOUT_SECONDS,
             )
             message = response.choices[0].message
             tool_calls = getattr(message, "tool_calls", None) or []

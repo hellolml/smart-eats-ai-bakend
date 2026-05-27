@@ -340,6 +340,8 @@ class ChatSessionStreamRequest(BaseModel):
     message: str | None = None
     scene: str | None = None
     attachments: list[dict[str, Any]] | None = None
+    travel_action: str | None = None
+    travel_payload: dict[str, Any] | None = None
     client_context_overrides: dict[str, Any] | None = None
     provider: str | None = None
     model: str | None = None
