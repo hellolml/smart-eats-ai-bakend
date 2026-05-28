@@ -3,7 +3,7 @@ id: restaurant_finder
 name: Restaurant Finder
 version: 1.0.0
 description: Help users find nearby restaurants and choose where to eat out.
-enabled: true
+enabled: false
 priority: 70
 activation:
   scenes:

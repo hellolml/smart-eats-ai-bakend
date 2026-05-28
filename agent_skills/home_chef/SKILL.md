@@ -3,7 +3,7 @@ id: home_chef
 name: Home Chef
 version: 1.0.0
 description: Help users cook with available ingredients and practical recipes.
-enabled: true
+enabled: false
 priority: 80
 activation:
   scenes:

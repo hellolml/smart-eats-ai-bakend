@@ -337,7 +337,10 @@ def test_render_final_text_empty_returns_default():
 
 
 def test_best_effort_with_empty_fridge_avoids_fallback():
-    state = ChatState(session_id="s1", context={"active_skills": [{"id": "home_chef"}], "fridge_items": []})
+    state = ChatState(
+        session_id="s1",
+        context={"active_skills": [{"id": "food_assistant"}], "food_mode": "cook_home", "fridge_items": []},
+    )
 
     final_json = _best_effort_final_from_observations(state, get_agent_runtime_config())
 
@@ -348,7 +351,7 @@ def test_best_effort_with_empty_fridge_avoids_fallback():
 def test_best_effort_with_rag_recipe_results_avoids_fallback():
     state = ChatState(
         session_id="s1",
-        context={"active_skills": [{"id": "home_chef"}]},
+        context={"active_skills": [{"id": "food_assistant"}], "food_mode": "cook_home"},
         observations=[
             {
                 "tool": "rag_search_recipes",

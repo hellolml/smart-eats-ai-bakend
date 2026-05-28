@@ -27,12 +27,14 @@ def test_travel_planner_skill_is_bundled_and_activates_for_trip_request():
     assert any(reason.startswith("scene:travel_planner") for reason in active.activation_reasons["travel_planner"])
 
 
-def test_food_decision_skill_is_bundled_and_activates_for_eat_request():
+def test_food_assistant_skill_is_bundled_and_activates_for_eat_request():
     skills = load_skills_from_path("agent_skills")
-    food = next((skill for skill in skills if skill.id == "food_decision"), None)
+    food = next((skill for skill in skills if skill.id == "food_assistant"), None)
 
     assert food is not None
     assert "food_decision" in food.tools.allow
+    assert "search_restaurants" in food.tools.allow
+    assert "get_fridge_items" in food.tools.allow
 
     state = AgentRuntimeState(
         session_id="s-food",
@@ -41,13 +43,19 @@ def test_food_decision_skill_is_bundled_and_activates_for_eat_request():
     )
     active = SkillResolver(skills).resolve(state, {"user_message": state.message})
 
-    assert "food_decision" in [skill.id for skill in active.skills]
+    assert [skill.id for skill in active.skills if skill.id == "food_assistant"] == ["food_assistant"]
 
 
-def test_chat_intent_forces_food_and_restaurant_skills():
-    assert AppBffService._infer_chat_intent("今天吃点啥") == "eat_out"
-    assert AppBffService._forced_skill_ids_for_intent("eat_out") == ["food_decision", "restaurant_finder"]
-    assert AppBffService._forced_skill_ids_for_intent("cook_home") == ["food_decision", "home_chef"]
+def test_chat_intent_forces_unified_food_skill():
+    assert AppBffService._infer_chat_intent("今天吃点啥") == "food"
+    assert AppBffService._infer_chat_intent("出去吃") == "food"
+    assert AppBffService._infer_chat_intent("冰箱里有鸡蛋") == "food"
+    assert AppBffService._infer_chat_intent("换一家不辣的") == "food"
+    assert AppBffService._forced_skill_ids_for_intent("food") == ["food_assistant"]
+
+
+def test_chat_route_intent_wins_for_navigation_followup():
+    assert AppBffService._infer_chat_intent("第二家怎么走") == "route"
 
 
 def test_agent_runtime_config_keeps_travel_tools_out_of_core_allowlist():

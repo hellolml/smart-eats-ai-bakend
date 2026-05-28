@@ -2718,20 +2718,47 @@ class AppBffService:
         text = str(message or "")
         if not text:
             return None
-        if any(token in text for token in ("做饭", "在家做", "菜谱", "食谱", "冰箱", "食材", "自己做")):
-            return "cook_home"
-        if any(token in text for token in ("吃点啥", "吃什么", "今天吃", "晚饭", "午饭", "早餐", "夜宵", "外卖", "餐厅", "饭店", "出去吃", "外面吃", "去哪吃")):
-            return "eat_out"
         if any(token in text for token in ("路线", "导航", "怎么走", "怎么去")):
             return "route"
+        if any(
+            token in text
+            for token in (
+                "吃点啥",
+                "吃什么",
+                "今天吃",
+                "晚饭",
+                "午饭",
+                "早餐",
+                "夜宵",
+                "外卖",
+                "餐厅",
+                "饭店",
+                "出去吃",
+                "外面吃",
+                "去哪吃",
+                "换一家",
+                "下一家",
+                "第二家",
+                "第三家",
+                "近一点",
+                "不辣",
+                "做饭",
+                "在家做",
+                "家里做",
+                "菜谱",
+                "食谱",
+                "冰箱",
+                "食材",
+                "自己做",
+            )
+        ):
+            return "food"
         return None
 
     @staticmethod
     def _forced_skill_ids_for_intent(intent: str) -> list[str]:
-        if intent == "cook_home":
-            return ["food_decision", "home_chef"]
-        if intent == "eat_out":
-            return ["food_decision", "restaurant_finder"]
+        if intent == "food":
+            return ["food_assistant"]
         if intent == "route":
             return ["route_planner"]
         return []

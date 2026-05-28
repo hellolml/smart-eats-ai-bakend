@@ -4,6 +4,7 @@ import pytest
 
 from agent_skills.home_chef.hooks import HomeChefHooks
 from agent_skills.food_decision.hooks import FoodDecisionHooks
+from agent_skills.food_assistant.hooks import FoodAssistantHooks
 from agent_skills.restaurant_finder.hooks import RestaurantFinderHooks
 from agent_skills.route_planner.hooks import RoutePlannerHooks
 from app.agent.runtime.graph import AgentRuntimeState
@@ -42,6 +43,63 @@ def test_food_decision_hook_returns_decision_final():
     assert handled is not None
     assert handled["recommendations"][0]["title"] == "番茄炒蛋"
     assert handled["decision"] == result
+
+
+def test_food_assistant_records_home_context():
+    state = AgentRuntimeState(session_id="s1", message="冰箱里有鸡蛋，能做什么")
+
+    handled = FoodAssistantHooks().handle_tool_result(state, "get_fridge_items", {"items": []})
+
+    assert handled is None
+    assert state.context["food_mode"] == "cook_home"
+    assert state.context["fridge_items"] == []
+    assert state.context_overrides == {"fridge_empty": True}
+
+
+def test_food_assistant_records_restaurant_context():
+    state = AgentRuntimeState(session_id="s1", message="出去吃")
+
+    handled = FoodAssistantHooks().handle_tool_result(
+        state,
+        "geocode_location",
+        {"lat": 28.2, "lng": 112.9, "city": "长沙", "location_source": "geocode"},
+    )
+
+    assert handled is None
+    assert state.context["food_mode"] == "eat_out"
+    assert state.context["location"] == {"lat": 28.2, "lng": 112.9}
+    assert state.context["city"] == "长沙"
+
+
+def test_food_assistant_blocks_eat_out_food_decision_fallback():
+    state = AgentRuntimeState(session_id="s1", message="出去吃")
+    state.context = {"food_mode": "eat_out"}
+    result = {
+        "decision": {"type": "fallback", "title": "黄焖鸡米饭"},
+        "reasons": ["兜底"],
+        "actions": [],
+    }
+
+    handled = FoodAssistantHooks().handle_tool_result(state, "food_decision", result)
+
+    assert handled is not None
+    assert "黄焖鸡米饭" not in handled["recommendations"][0]["title"]
+    assert "餐厅" in handled["recommendations"][0]["title"]
+
+
+def test_food_assistant_allows_decide_food_result():
+    state = AgentRuntimeState(session_id="s1", message="今天吃点啥")
+    state.context = {"food_mode": "decide_food"}
+    result = {
+        "decision": {"type": "recipe", "title": "番茄炒蛋"},
+        "reasons": ["快手"],
+        "actions": [],
+    }
+
+    handled = FoodAssistantHooks().handle_tool_result(state, "food_decision", result)
+
+    assert handled is not None
+    assert handled["recommendations"][0]["title"] == "番茄炒蛋"
 
 
 def test_restaurant_hook_normalizes_search_args():
