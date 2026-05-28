@@ -4,17 +4,17 @@ import { CalendarDays, ChevronLeft, Home, User, type LucideIcon } from 'lucide-r
 import type { Screen } from '../types';
 import { cn } from '../lib/utils';
 
-export function StatusBar() {
-  return (
-    <div className="absolute inset-x-0 top-0 z-40 flex h-11 items-center justify-between px-5 text-xs font-black text-black">
-      <span>9:41</span>
-      <span className="flex items-center gap-1">
-        <span className="h-2 w-3 rounded-sm bg-black" />
-        <span className="h-2 w-4 rounded-sm border border-black p-0.5"><span className="block h-full w-2 rounded-sm bg-black" /></span>
-      </span>
-    </div>
-  );
-}
+// export function StatusBar() {
+//   return (
+//     <div className="absolute inset-x-0 top-0 z-40 flex h-11 items-center justify-between px-5 text-xs font-black text-black">
+//       <span>9:41</span>
+//       <span className="flex items-center gap-1">
+//         <span className="h-2 w-3 rounded-sm bg-black" />
+//         <span className="h-2 w-4 rounded-sm border border-black p-0.5"><span className="block h-full w-2 rounded-sm bg-black" /></span>
+//       </span>
+//     </div>
+//   );
+// }
 
 export function Page({ active, children }: { active: boolean; children: React.ReactNode }) {
   return (

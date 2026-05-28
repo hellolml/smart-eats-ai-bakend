@@ -1,4 +1,4 @@
-export type Screen = 'login' | 'register' | 'home' | 'createTravel' | 'photoPreview' | 'agent' | 'plans' | 'detail' | 'qr' | 'profile' | 'settings';
+export type Screen = 'login' | 'register' | 'home' | 'createTravel' | 'photoPreview' | 'agent' | 'chatHistory' | 'plans' | 'detail' | 'qr' | 'profile' | 'settings';
 export type AgentMode = 'travel' | 'eat';
 export type MessageKind = 'travel-draft' | 'travel-plan' | 'eat-result';
 

@@ -30,8 +30,15 @@ def _coerce_location(value: Any) -> tuple[float | None, float | None]:
 
 def _normalize_poi(item: dict[str, Any]) -> dict[str, Any]:
     longitude, latitude = _coerce_location(item.get("location"))
+    if longitude is None or latitude is None:
+        longitude, latitude = _coerce_location(
+            {
+                "lng": item.get("lng", item.get("lon", item.get("longitude"))),
+                "lat": item.get("lat", item.get("latitude")),
+            }
+        )
     return {
-        "poi_id": item.get("id") or item.get("poi_id"),
+        "poi_id": item.get("id") or item.get("poi_id") or item.get("poiId"),
         "name": item.get("name"),
         "address": item.get("address"),
         "longitude": longitude,
@@ -96,6 +103,35 @@ async def _cache_valid_pois(redis_client: Any, key: str, pois: list[dict[str, An
         return
 
 
+async def _cache_session_pois(redis_client: Any, session_id: Any, pois: list[dict[str, Any]]) -> None:
+    valid = [item for item in pois if _is_valid_poi(item)]
+    if redis_client is None or not session_id or not valid:
+        return
+    key = f"travel:pois:{session_id}"
+    try:
+        raw = await redis_client.get(key)
+        existing: list[dict[str, Any]] = []
+        if raw:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                existing = [item for item in parsed if isinstance(item, dict) and _is_valid_poi(item)]
+        seen = {str(item.get("poi_id") or item.get("name")) for item in existing}
+        for item in valid:
+            marker = str(item.get("poi_id") or item.get("name"))
+            if marker not in seen:
+                existing.append(item)
+                seen.add(marker)
+        await redis_client.setex(
+            key,
+            settings.TRAVEL_POI_CACHE_TTL_SECONDS,
+            json.dumps(existing, ensure_ascii=True),
+        )
+    except Exception:
+        return
+
+
 class TravelSearchPoiArgs(BaseModel):
     keywords: str = Field(..., description="POI search keywords.")
     city: str | None = Field(default=None, description="Optional city hint.")
@@ -132,6 +168,7 @@ async def _travel_search_poi(
     )
     cached_pois = await _load_cached_pois(redis_client, cache_key)
     if cached_pois:
+        await _cache_session_pois(redis_client, ctx.get("session_id"), cached_pois)
         return {
             "query": {
                 "keywords": keywords,
@@ -153,6 +190,7 @@ async def _travel_search_poi(
     )
     normalized = [_normalize_poi(item) for item in pois if isinstance(item, dict)]
     await _cache_valid_pois(redis_client, cache_key, normalized)
+    await _cache_session_pois(redis_client, ctx.get("session_id"), normalized)
     return {
         "query": {
             "keywords": keywords,
@@ -169,6 +207,7 @@ async def travel_search_poi(args: dict[str, Any]) -> dict[str, Any]:
     runtime_context = {
         "redis_client": args.get("redis_client"),
         "servers_path": args.get("servers_path"),
+        "session_id": args.get("session_id"),
     }
     return await _travel_search_poi(
         keywords=str(args.get("keywords") or ""),

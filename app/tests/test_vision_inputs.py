@@ -96,7 +96,7 @@ async def test_planner_uses_multimodal_message_and_vision_model():
 
 
 @pytest.mark.asyncio
-async def test_planner_drops_image_parts_for_text_only_model():
+async def test_planner_sends_image_parts_without_model_name_allowlist():
     from app.agent.llm_adapters import OpenAIPlanner, ProviderConfig
 
     captured: dict = {}
@@ -105,11 +105,7 @@ async def test_planner_drops_image_parts_for_text_only_model():
         async def create(self, **kwargs):
             captured.update(kwargs)
             return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(content="请补充清晰攻略原文", tool_calls=[])
-                    )
-                ]
+                choices=[SimpleNamespace(message=SimpleNamespace(content="已尝试识别图片", tool_calls=[]))]
             )
 
     planner = OpenAIPlanner.__new__(OpenAIPlanner)
@@ -136,5 +132,56 @@ async def test_planner_drops_image_parts_for_text_only_model():
     )
 
     assert captured["model"] == "qwen3.5-flash"
-    assert captured["messages"][1]["content"] == "请识别图片中的旅行地点"
-    assert decision["content"] == "请补充清晰攻略原文"
+    assert captured["messages"][1]["content"] == [
+        {"type": "text", "text": "请识别图片中的旅行地点"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}},
+    ]
+    assert decision["content"] == "已尝试识别图片"
+
+
+@pytest.mark.asyncio
+async def test_qwen36_plus_accepts_image_parts_without_separate_vision_model():
+    from app.agent.llm_adapters import OpenAIPlanner, ProviderConfig
+
+    captured: dict = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="图片里有喀纳斯", tool_calls=[])
+                    )
+                ]
+            )
+
+    planner = OpenAIPlanner.__new__(OpenAIPlanner)
+    planner.config = ProviderConfig(
+        name="qwen",
+        api_key="test",
+        base_url="https://example.test/v1",
+        model_planner="qwen3.6-plus",
+        model_writer="qwen3.6-plus",
+        model_vision_planner=None,
+    )
+    planner.client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    decision = await planner.plan_tool_calls(
+        "system",
+        "请识别图片中的旅行地点",
+        [],
+        image_parts=[
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,ZmFrZQ=="},
+            }
+        ],
+    )
+
+    assert captured["model"] == "qwen3.6-plus"
+    assert captured["messages"][1]["content"] == [
+        {"type": "text", "text": "请识别图片中的旅行地点"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}},
+    ]
+    assert decision["content"] == "图片里有喀纳斯"

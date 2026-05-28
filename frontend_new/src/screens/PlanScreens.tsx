@@ -1,4 +1,6 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { QrCode, Search, Trash2 } from 'lucide-react';
 import { BottomAction, Header, ScreenScroll } from '../components/Layout';
 import { cn } from '../lib/utils';
@@ -70,7 +72,9 @@ export function DetailScreen({ plan, onBack, onAdjust, onQr }: { plan: PlanInfo;
         {plan.sourceText && (
           <>
             <p className="mb-3 mt-6 font-black">AI 行程规划</p>
-            <div className="whitespace-pre-wrap rounded-2xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-600">{plan.sourceText}</div>
+            <div className="rounded-2xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-600">
+              <PlanMarkdown content={String(plan.raw?.itineraryMarkdown || plan.sourceText)} />
+            </div>
           </>
         )}
         <p className="mb-3 mt-6 font-black">地图概览</p>
@@ -92,6 +96,31 @@ function InfoPill({ label, value }: { label: string; value: string }) {
     <div className="rounded-xl bg-gray-50 px-3 py-2">
       <p className="text-[10px] font-bold text-gray-400">{label}</p>
       <p className="mt-1 truncate font-black text-gray-800">{value}</p>
+    </div>
+  );
+}
+
+function PlanMarkdown({ content }: { content: string }) {
+  return (
+    <div className="overflow-hidden break-words">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => <h1 className="mb-2 text-lg font-black text-gray-950">{children}</h1>,
+          h2: ({ children }) => <h2 className="mb-2 mt-4 text-base font-black text-gray-900">{children}</h2>,
+          h3: ({ children }) => <h3 className="mb-1 mt-3 text-sm font-black text-gray-900">{children}</h3>,
+          p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
+          ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+          ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
+          li: ({ children }) => <li className="pl-1">{children}</li>,
+          table: ({ children }) => <div className="my-2 overflow-x-auto rounded-xl border border-gray-200 bg-white"><table className="min-w-full border-collapse text-left">{children}</table></div>,
+          th: ({ children }) => <th className="border-b border-gray-200 bg-gray-50 px-3 py-2 font-black">{children}</th>,
+          td: ({ children }) => <td className="border-b border-gray-100 px-3 py-2 align-top">{children}</td>,
+          code: ({ children }) => <code className="rounded bg-white px-1 py-0.5 font-mono text-[11px] text-gray-800">{children}</code>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

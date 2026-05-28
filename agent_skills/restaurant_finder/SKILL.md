@@ -8,6 +8,7 @@ priority: 70
 activation:
   scenes:
     - restaurant
+    - eat
   intents:
     - eat_out
   keywords:

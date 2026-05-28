@@ -35,9 +35,21 @@ Recommendation = Union[RecipeRecommendation, RestaurantRecommendation, NoteRecom
 
 
 class FinalAnswerArgs(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     recommendations: list[Recommendation] = Field(default_factory=list, description="推荐的美食、餐厅或笔记列表")
     followups: list[str] = Field(default_factory=list, description="追问或引导用户下一步的话术")
     warnings: list[str] = Field(default_factory=list, description="需要提醒用户的注意事项")
+    state: str | None = Field(default=None, description="Optional workflow state, e.g. candidates_ready or itinerary_generated.")
+    await_confirmation: bool | None = Field(default=None, description="Whether the client should wait for user confirmation.")
+    trip_meta: dict[str, Any] | None = Field(default=None, description="Travel planning metadata.")
+    sources: list[dict[str, Any]] | None = Field(default=None, description="Travel content sources.")
+    places: list[dict[str, Any]] | None = Field(default=None, description="Extracted places.")
+    candidates: list[dict[str, Any]] | None = Field(default=None, description="Verified candidate POIs.")
+    failed_places: list[dict[str, Any]] | None = Field(default=None, description="Places that failed POI verification.")
+    itinerary: dict[str, Any] | None = Field(default=None, description="Structured itinerary.")
+    map: dict[str, Any] | None = Field(default=None, description="AMap map payload.")
+    raw_text: str | None = Field(default=None, description="Raw travel plan text.")
 
 
 class FinalAnswer(BaseModel):

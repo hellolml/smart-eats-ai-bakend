@@ -11,6 +11,7 @@ from app.agent.tools.context_memory import (
     memory_write_tool,
     source_event_search_tool,
 )
+from app.agent.tools.food_decision import food_decision_tool
 from app.agent.tools.geocode_location import geocode_location_tool
 from app.agent.tools.get_fridge_items import get_fridge_items_tool
 from app.agent.tools.get_ip_location import get_ip_location_tool
@@ -29,6 +30,7 @@ ALL_TOOLS: tuple[BaseTool, ...] = (
     get_fridge_items_tool,
     search_recipes_tool,
     rag_search_recipes_tool,
+    food_decision_tool,
     search_restaurants_tool,
     plan_route_tool,
     get_ip_location_tool,

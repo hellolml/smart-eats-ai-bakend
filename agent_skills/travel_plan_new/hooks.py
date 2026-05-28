@@ -16,18 +16,21 @@ class TravelPlanNewHooks(BaseSkillHooks):
         action = _travel_action(overrides)
         candidates = _collect_verified_candidates(state)
         map_payload = _latest_map_payload(state)
+        itinerary = _payload_itinerary(overrides)
         trip_meta = _trip_meta(state, context, overrides)
-        phase = _phase(action=action, candidates=candidates, map_payload=map_payload)
+        phase = _phase(action=action, candidates=candidates, itinerary=itinerary, map_payload=map_payload)
 
         return {
             "intent": "travel",
             "travel_state": {
                 "skill_id": "travel_plan_new",
                 "phase": phase,
-                "await_confirmation": phase == "candidates_ready",
+                "await_confirmation": phase in {"candidates_ready", "itinerary_generated"},
                 "travel_action": action,
                 "trip_meta": trip_meta,
                 "candidates": candidates,
+                "failed_places": _collect_failed_places(state),
+                "itinerary": itinerary,
                 "map": _map_summary(map_payload),
                 "input_priority": ["raw_texts", "images", "urls"],
             },
@@ -47,6 +50,11 @@ class TravelPlanNewHooks(BaseSkillHooks):
                 normalized["city"] = destination
             normalized.setdefault("page_size", 5)
         if tool_name == "travel_create_personal_map":
+            overrides = _context_overrides(state)
+            trip_meta = _trip_meta(state, {}, overrides)
+            normalized.setdefault("title", _map_title(trip_meta))
+            if not isinstance(normalized.get("line_list"), list) or not normalized.get("line_list"):
+                normalized["line_list"] = _line_list_from_payload(overrides)
             normalized.setdefault("scene_type", 1)
         return normalized
 
@@ -112,6 +120,26 @@ class TravelPlanNewHooks(BaseSkillHooks):
         context = getattr(state, "context", None)
         return _has_attachments(context if isinstance(context, dict) else {})
 
+    def forced_tool_calls(self, state: Any) -> list[dict[str, Any]] | None:
+        overrides = _context_overrides(state)
+        action = _travel_action(overrides)
+        if not _is_map_action(action):
+            return None
+        line_list = _line_list_from_payload(overrides)
+        if not line_list:
+            return None
+        return [
+            {
+                "name": "travel_create_personal_map",
+                "args": {
+                    "title": _map_title(_trip_meta(state, {}, overrides)),
+                    "line_list": line_list,
+                    "scene_type": 1,
+                },
+                "type": "tool_call",
+            }
+        ]
+
 
 def _context_overrides(state: Any) -> dict[str, Any]:
     overrides = getattr(state, "context_overrides", None)
@@ -121,6 +149,10 @@ def _context_overrides(state: Any) -> dict[str, Any]:
 def _travel_action(overrides: dict[str, Any]) -> str:
     value = overrides.get("travel_action")
     return str(value or "").strip()
+
+
+def _is_map_action(action: str) -> bool:
+    return action in {"confirm_itinerary", "generate_map", "confirm_plan"}
 
 
 def _has_attachments(context: dict[str, Any]) -> bool:
@@ -146,11 +178,21 @@ def _trip_meta(state: Any, context: dict[str, Any], overrides: dict[str, Any]) -
     }
 
 
-def _phase(*, action: str, candidates: list[dict[str, Any]], map_payload: dict[str, Any] | None) -> str:
+def _phase(
+    *,
+    action: str,
+    candidates: list[dict[str, Any]],
+    itinerary: dict[str, Any],
+    map_payload: dict[str, Any] | None,
+) -> str:
     if map_payload and (map_payload.get("qr_code_url") or map_payload.get("schema_url")):
         return "map_generated"
+    if _is_map_action(action):
+        return "itinerary_generated"
     if action == "confirm_candidates":
         return "candidates_confirmed"
+    if isinstance(itinerary.get("days"), list) and itinerary.get("days"):
+        return "itinerary_generated"
     if candidates:
         return "candidates_ready"
     return "ingesting_content"
@@ -160,18 +202,33 @@ def _system_directive(*, phase: str, action: str, candidate_count: int, has_atta
     attachment_note = "当前有图片附件，必须先从图片中识别地点。" if has_attachments else "当前没有图片附件，优先使用用户文本中的攻略原文或 URL。"
     if phase == "candidates_confirmed":
         return (
-            "旅行规划候选已确认。现在必须生成结构化 itinerary.days，然后调用 travel_create_personal_map "
-            "生成高德二维码和 schema。不要再返回候选确认卡片。"
+            "旅行规划候选已确认。现在只生成结构化 itinerary.days，并通过 submit_final_answer 返回 "
+            "state=itinerary_generated、await_confirmation=true、trip_meta、candidates、itinerary.days、"
+            "map={qr_code_url:null,schema_url:null}、raw_text。"
+            "本阶段禁止调用 travel_create_personal_map；必须引导用户确认行程后再生成高德地图二维码。"
+        )
+    if phase == "itinerary_generated" and _is_map_action(action):
+        return (
+            "用户已确认最终行程。现在必须调用 travel_create_personal_map 生成高德二维码和 schema。"
+            "只允许使用已验证 POI 构造 line_list；未验证地点不得进入地图点位。"
+            "地图生成后返回 state=map_generated，并包含 itinerary.days、map.qr_code_url、map.schema_url。"
+        )
+    if phase == "itinerary_generated":
+        return (
+            "已生成每日行程。必须停在行程确认阶段，等待用户确认是否生成高德地图二维码；"
+            "用户确认前禁止调用 travel_create_personal_map。"
         )
     if phase == "candidates_ready":
         return (
             f"已验证 {candidate_count} 个候选 POI。必须停在候选确认阶段，展示候选并等待用户确认；"
-            "用户确认前禁止生成最终每日行程或高德地图。"
+            "同时展示验证失败的地点和原因，引导用户增删地点；用户确认前禁止生成最终每日行程或高德地图。"
         )
     return (
         "旅行规划必须按 created -> ingesting_content -> places_extracted -> candidates_ready -> "
         "candidates_confirmed -> itinerary_generated -> map_generated 执行。"
         f"{attachment_note} 先提取地点，再用 travel_search_poi 验证 POI。"
+        "如果用户上传了图片，你必须逐一识别图片中的景点、餐厅、酒店、商圈、车站等地点；"
+        "图片清晰可读时禁止直接说无法识别图片；确实无法识别时先说明图片中可见内容并请求用户补充原文。"
     )
 
 
@@ -291,6 +348,49 @@ def _payload_candidates(overrides: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates
 
 
+def _payload_itinerary(overrides: dict[str, Any]) -> dict[str, Any]:
+    payload = overrides.get("travel_payload")
+    if not isinstance(payload, dict):
+        return {"days": []}
+    itinerary = payload.get("itinerary")
+    if isinstance(itinerary, dict):
+        days = itinerary.get("days")
+        return {"days": days if isinstance(days, list) else []}
+    days = payload.get("days")
+    if isinstance(days, list):
+        return {"days": days}
+    return {"days": []}
+
+
+def _collect_failed_places(state: Any) -> list[dict[str, Any]]:
+    observations = getattr(state, "observations", None)
+    if not isinstance(observations, list):
+        return []
+    failed: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for observation in observations:
+        if not isinstance(observation, dict) or observation.get("tool") != "travel_search_poi":
+            continue
+        result = observation.get("result")
+        if not isinstance(result, dict):
+            continue
+        if _valid_pois(result):
+            continue
+        query = result.get("query") if isinstance(result.get("query"), dict) else {}
+        name = str(query.get("keywords") or result.get("keywords") or result.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        failed.append(
+            {
+                "name": name,
+                "city": query.get("city"),
+                "reason": result.get("error") or "未在高德 POI 中验证到有效坐标",
+            }
+        )
+    return failed
+
+
 def _category_from_query(query: dict[str, Any]) -> str:
     text = " ".join(str(query.get(key) or "") for key in ("keywords", "types")).lower()
     if any(token in text for token in ("餐", "饭", "美食", "咖啡", "restaurant", "food", "cafe")):
@@ -322,6 +422,10 @@ def _map_summary(result: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _candidate_confirmation_final(state: Any, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    failed_places = _collect_failed_places(state)
+    followups = ["确认候选地点后，将继续生成最终每日行程。"]
+    if failed_places:
+        followups.insert(0, "部分地点未验证通过，你可以补充准确名称、删除或改成附近地标。")
     return {
         "state": "candidates_ready",
         "await_confirmation": True,
@@ -329,17 +433,18 @@ def _candidate_confirmation_final(state: Any, candidates: list[dict[str, Any]]) 
         "sources": _sources(state),
         "places": [{"name": item.get("name"), "category": item.get("category")} for item in candidates],
         "candidates": candidates,
+        "failed_places": failed_places,
         "itinerary": {"days": []},
         "map": {"qr_code_url": None, "schema_url": None},
         "raw_text": str(getattr(state, "message", "") or ""),
         "recommendations": [
             {
                 "title": f"已验证 {len(candidates)} 个候选地点",
-                "reason": "请先确认、删除或补充候选地点，确认后我再生成每日行程和高德地图。",
+                "reason": "请先确认、删除或补充候选地点，确认后我再生成每日行程。",
             }
         ],
-        "followups": ["确认候选地点后，将继续生成最终行程和高德二维码。"],
-        "warnings": [],
+        "followups": followups,
+        "warnings": [f"{item.get('name')}：{item.get('reason')}" for item in failed_places],
     }
 
 
@@ -371,6 +476,10 @@ def _no_places_final(state: Any, result: Any) -> dict[str, Any]:
 def _map_final(state: Any, result: dict[str, Any]) -> dict[str, Any]:
     line_list = result.get("line_list") if isinstance(result.get("line_list"), list) else []
     days = _days_from_line_list(line_list)
+    overrides = _context_overrides(state)
+    payload_days = _payload_itinerary(overrides).get("days")
+    if not days and isinstance(payload_days, list):
+        days = payload_days
     return {
         "state": "map_generated",
         "await_confirmation": False,
@@ -395,6 +504,108 @@ def _map_final(state: Any, result: dict[str, Any]) -> dict[str, Any]:
         "followups": ["你可以继续提出调整要求，我会在当前计划基础上修改。"],
         "warnings": [] if result.get("qr_code_url") or result.get("schema_url") else ["高德地图二维码暂不可用，请稍后重试。"],
     }
+
+
+def _map_title(trip_meta: dict[str, Any]) -> str:
+    destination = str(trip_meta.get("destination") or "旅行").strip()
+    days = str(trip_meta.get("days") or "").strip()
+    return f"{destination}{days}日游地图" if days else f"{destination}旅行地图"
+
+
+def _line_list_from_payload(overrides: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = overrides.get("travel_payload")
+    payload = payload if isinstance(payload, dict) else {}
+    raw_line_list = payload.get("line_list")
+    if isinstance(raw_line_list, list) and raw_line_list:
+        return [item for item in raw_line_list if isinstance(item, dict)]
+
+    itinerary_days = _payload_itinerary(overrides).get("days")
+    candidates = _payload_candidates(overrides)
+    if not isinstance(itinerary_days, list) or not itinerary_days:
+        itinerary_days = _rough_days_from_candidates(candidates, _trip_meta_from_payload(payload))
+
+    candidate_by_name = {str(item.get("name") or ""): item for item in candidates if isinstance(item, dict)}
+    line_list: list[dict[str, Any]] = []
+    for index, day in enumerate(itinerary_days, start=1):
+        if not isinstance(day, dict):
+            continue
+        raw_items = day.get("items")
+        if not isinstance(raw_items, list):
+            raw_items = []
+        points: list[dict[str, Any]] = []
+        for item in raw_items:
+            item_name = item.get("place_name") or item.get("name") or item.get("title") if isinstance(item, dict) else item
+            name = str(item_name or "").strip()
+            if not name:
+                continue
+            candidate = candidate_by_name.get(name)
+            if not candidate:
+                candidate = next(
+                    (
+                        item
+                        for candidate_name, item in candidate_by_name.items()
+                        if candidate_name and (candidate_name in name or name in candidate_name)
+                    ),
+                    None,
+                )
+            poi = candidate.get("poi") if isinstance(candidate, dict) and isinstance(candidate.get("poi"), dict) else {}
+            if not poi and isinstance(item, dict):
+                poi = item
+            longitude = poi.get("longitude") or poi.get("lon")
+            latitude = poi.get("latitude") or poi.get("lat")
+            if longitude is None or latitude is None:
+                continue
+            points.append(
+                {
+                    "name": name,
+                    "poiId": poi.get("poi_id") or poi.get("poiId"),
+                    "lon": longitude,
+                    "lat": latitude,
+                }
+            )
+        if points:
+            line_list.append(
+                {
+                    "title": day.get("theme") or day.get("day") or f"Day {index}",
+                    "pointInfoList": points[:16],
+                }
+            )
+    return line_list
+
+
+def _trip_meta_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    meta = payload.get("trip_meta") if isinstance(payload.get("trip_meta"), dict) else {}
+    basic = payload.get("basic_info") if isinstance(payload.get("basic_info"), dict) else {}
+    return {
+        "destination": meta.get("destination") or basic.get("destination") or payload.get("destination"),
+        "days": meta.get("days") or basic.get("days") or payload.get("days"),
+    }
+
+
+def _rough_days_from_candidates(candidates: list[dict[str, Any]], trip_meta: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        day_count = int(trip_meta.get("days") or 1)
+    except (TypeError, ValueError):
+        day_count = 1
+    day_count = max(1, min(day_count, 15))
+    days: list[dict[str, Any]] = []
+    for index in range(day_count):
+        items = candidates[index::day_count] or candidates[:1]
+        days.append(
+            {
+                "day_number": index + 1,
+                "theme": f"Day {index + 1}",
+                "items": [
+                    {
+                        "place_name": item.get("name"),
+                        "name": item.get("name"),
+                        **(item.get("poi") if isinstance(item.get("poi"), dict) else {}),
+                    }
+                    for item in items
+                ],
+            }
+        )
+    return days
 
 
 def _days_from_line_list(line_list: list[Any]) -> list[dict[str, Any]]:

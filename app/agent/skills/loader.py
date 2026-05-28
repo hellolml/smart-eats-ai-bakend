@@ -64,6 +64,20 @@ def load_skill_body(skill: SkillSpec) -> str:
         return ""
     split = _split_frontmatter(raw)
     body = split[1] if split else raw.strip()
+    include_chunks: list[str] = []
+    for include in skill.instructions.includes:
+        if not isinstance(include, str) or not include.strip():
+            continue
+        include_path = Path(skill.source_path) / include
+        try:
+            include_content = include_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            logger.warning("skill_include_missing skill=%s path=%s", skill.id, include_path)
+            continue
+        if include_content:
+            include_chunks.append(f"## Reference: {include}\n\n{include_content}")
+    if include_chunks:
+        body = "\n\n".join([body, *include_chunks]).strip()
     max_chars = skill.instructions.max_chars
     if max_chars > 0 and len(body) > max_chars:
         return body[:max_chars].rstrip()

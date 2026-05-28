@@ -729,6 +729,11 @@ async def _resolve_runtime_skills(
     if hook_context:
         context = _merge_context(context, hook_context)
     context["allowed_tools"] = skill_runtime.allowed_tools if skill_runtime.active_skills else base_tools
+    travel_state = context.get("travel_state")
+    if isinstance(travel_state, dict) and travel_state.get("phase") == "candidates_confirmed":
+        context["allowed_tools"] = [
+            tool_name for tool_name in context["allowed_tools"] if tool_name != "travel_create_personal_map"
+        ]
     return context, skill_runtime.system_prompt_addendum
 
 
@@ -944,6 +949,19 @@ def build_agent_runtime_graph(
                 for item in chat_state.context.get("allowed_tools", [])
                 if isinstance(item, str) and item in registered_tools
             ]
+        active_skills_payload = chat_state.context.get("active_skills") if isinstance(chat_state.context, dict) else None
+        active_skill_ids = [
+            item.get("id")
+            for item in active_skills_payload
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ] if isinstance(active_skills_payload, list) else None
+        logger.info(
+            "agent_tools_resolved session_id=%s scene=%s active_skills=%s allowed_tools=%s",
+            chat_state.session_id,
+            chat_state.scene,
+            active_skill_ids,
+            current_allowed_tools,
+        )
         current_langchain_tools = [
             *select_tools(current_allowed_tools),
             _build_submit_final_answer_tool(),
@@ -951,7 +969,16 @@ def build_agent_runtime_graph(
 
         image_parts: list[dict[str, Any]] = []
         active_planner = planner
-        if settings.LLM_VISION_ENABLED and hook_manager.should_build_vision_input(chat_state):
+        has_attachments = bool(isinstance(chat_state.context, dict) and chat_state.context.get("attachments"))
+        should_build_vision = settings.LLM_VISION_ENABLED and hook_manager.should_build_vision_input(chat_state)
+        logger.info(
+            "vision_check session_id=%s vision_enabled=%s has_attachments=%s should_build=%s",
+            chat_state.session_id,
+            settings.LLM_VISION_ENABLED,
+            has_attachments,
+            should_build_vision,
+        )
+        if should_build_vision:
             try:
                 from app.agent.vision import build_vision_content_parts
                 from app.infra.minio import get_minio
@@ -960,13 +987,33 @@ def build_agent_runtime_graph(
                     chat_state.context.get("attachments"),
                     minio=await get_minio(),
                 )
+                logger.info(
+                    "vision_parts_built session_id=%s image_count=%s",
+                    chat_state.session_id,
+                    len(image_parts),
+                )
                 if image_parts and settings.LLM_VISION_PROVIDER:
                     active_planner = OpenAIPlanner(provider=settings.LLM_VISION_PROVIDER)
-            except Exception as exc:
                 logger.info(
+                    "vision_llm_call session_id=%s model=%s has_image_parts=%s vision_provider=%s",
+                    chat_state.session_id,
+                    active_planner.config.model_planner,
+                    bool(image_parts),
+                    settings.LLM_VISION_PROVIDER,
+                )
+            except Exception as exc:
+                logger.warning(
                     "vision_input_build_failed session_id=%s reason=%s",
                     chat_state.session_id,
                     str(exc),
+                )
+                chat_state.events.append(
+                    {
+                        "event": "vision_error",
+                        "data": {
+                            "message": f"图片处理失败：{exc}，请重新上传或用文字描述地点"
+                        },
+                    }
                 )
 
         state_messages = state.get("messages")
@@ -986,6 +1033,35 @@ def build_agent_runtime_graph(
         )
         raw_content = ai_message.content
         normalized_tool_calls = ai_message.tool_calls
+        if (
+            chat_state.scene == "eat"
+            and "food_decision" in current_allowed_tools
+            and not normalized_tool_calls
+        ):
+            logger.info("agent_forcing_food_decision_tool session_id=%s", chat_state.session_id)
+            normalized_tool_calls = [
+                {
+                    "name": "food_decision",
+                    "args": {"query": user or "今天吃点啥", "scene": "eat"},
+                    "id": f"call_{uuid4().hex[:12]}_food",
+                    "type": "tool_call",
+                }
+            ]
+        if not normalized_tool_calls:
+            forced_tool_calls = hook_manager.forced_tool_calls(chat_state)
+            if forced_tool_calls:
+                logger.info(
+                    "agent_forcing_skill_tool_calls session_id=%s tools=%s",
+                    chat_state.session_id,
+                    [call.get("name") for call in forced_tool_calls],
+                )
+                normalized_tool_calls = forced_tool_calls
+        logger.info(
+            "agent_tool_choice session_id=%s scene=%s tool_calls=%s",
+            chat_state.session_id,
+            chat_state.scene,
+            [call.get("name") for call in normalized_tool_calls] if isinstance(normalized_tool_calls, list) else [],
+        )
 
         if isinstance(normalized_tool_calls, list) and normalized_tool_calls:
             tool_calls: list[dict[str, Any]] = []

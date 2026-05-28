@@ -46,6 +46,14 @@ context:
     - final_json
 hooks:
   class: hooks.TravelPlanNewHooks
+instructions:
+  includes:
+    - references/orchestrate-travel-content.md
+    - references/extract-places.md
+    - references/curate-candidates.md
+    - references/generate-itinerary.md
+    - references/personal-map.md
+  max_chars: 12000
 ---
 # Travel Plan New Skill
 
@@ -58,12 +66,14 @@ hooks:
 3. `places_extracted`：只从用户提供内容中提取地点，不凭常识补充攻略中未出现的地点。
 4. `candidates_ready`：调用 `travel_search_poi` 验证候选地点，并按景点、住宿、美食等类别展示给用户确认。
 5. `candidates_confirmed`：只有用户通过 `travel_action=confirm_candidates` 或明确确认候选后，才能生成最终每日行程。
-6. `itinerary_generated`：生成结构化 `itinerary.days`，包含 Day 编号、时间段、地点、交通建议、提醒和餐饮安排。
-7. `map_generated`：调用 `travel_create_personal_map` 生成高德个人地图二维码和 schema 后，才能返回最终完成状态。
+6. `itinerary_generated`：生成结构化 `itinerary.days`，包含 Day 编号、时间段、地点、交通建议、提醒和餐饮安排；本阶段必须等待用户确认是否生成高德地图。
+7. `map_generated`：只有用户通过 `travel_action=generate_map`、`travel_action=confirm_itinerary` 或明确确认行程后，才能调用 `travel_create_personal_map` 生成高德个人地图二维码和 schema，并返回最终完成状态。
 
 ## 硬性规则
 
 - 用户确认候选地点前，禁止生成最终行程。
+- `candidates_ready` 必须返回已验证候选 POI，同时返回验证失败地点和原因，引导用户增删地点。
+- 用户确认行程前，禁止生成高德地图二维码。
 - 最终结果必须包含 `trip_meta`、`sources`、`places`、`candidates`、`itinerary.days`、`map.qr_code_url`、`map.schema_url`、`raw_text`。
 - 高德地图只使用已验证 POI。未验证地点可以保留在文字说明中，不要放进地图点位。
 - 每天一条高德 line；相邻天通过住宿点或前一天终点衔接；单条 line 最多 16 个点。

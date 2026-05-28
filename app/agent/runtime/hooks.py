@@ -39,6 +39,9 @@ class SkillHooks(Protocol):
     def short_circuit_final(self, state: Any) -> dict[str, Any] | None:
         return None
 
+    def forced_tool_calls(self, state: Any) -> list[dict[str, Any]] | None:
+        return None
+
 
 class BaseSkillHooks:
     def build_context(
@@ -65,6 +68,9 @@ class BaseSkillHooks:
         return False
 
     def short_circuit_final(self, state: Any) -> dict[str, Any] | None:
+        return None
+
+    def forced_tool_calls(self, state: Any) -> list[dict[str, Any]] | None:
         return None
 
 
@@ -134,6 +140,14 @@ class SkillHookManager:
             if isinstance(final_json, dict):
                 return final_json
         return None
+
+    def forced_tool_calls(self, state: Any) -> list[dict[str, Any]]:
+        calls: list[dict[str, Any]] = []
+        for hook in self.hooks:
+            hook_calls = hook.forced_tool_calls(state)
+            if isinstance(hook_calls, list):
+                calls.extend(item for item in hook_calls if isinstance(item, dict))
+        return calls
 
 
 def load_skill_hooks(skill: SkillSpec) -> SkillHooks | None:

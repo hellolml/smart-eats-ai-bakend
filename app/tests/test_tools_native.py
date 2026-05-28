@@ -26,10 +26,17 @@ def test_select_tools_respects_allowlist():
     assert [tool.name for tool in tools] == ["memory_search", "travel_search_poi"]
 
 
-def test_describe_tools_hides_runtime_context_from_model_schema():
-    descriptions = describe_tools(["search_restaurants", "memory_search"])
+def test_food_decision_is_registered_as_native_tool():
+    tools = select_tools(["food_decision"])
 
-    assert {item["name"] for item in descriptions} == {"search_restaurants", "memory_search"}
+    assert [tool.name for tool in tools] == ["food_decision"]
+    assert "food_decision" in tool_names()
+
+
+def test_describe_tools_hides_runtime_context_from_model_schema():
+    descriptions = describe_tools(["search_restaurants", "memory_search", "food_decision"])
+
+    assert {item["name"] for item in descriptions} == {"search_restaurants", "memory_search", "food_decision"}
     for item in descriptions:
         schema_text = str(item["input_schema"])
         assert "runtime_context" not in schema_text

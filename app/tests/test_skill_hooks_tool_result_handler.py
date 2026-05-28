@@ -63,6 +63,7 @@ def test_food_decision_hook_normalizes_location_context():
     assert normalized["lat"] == 31.23
     assert normalized["lng"] == 121.47
     assert normalized["city"] == "上海"
+    assert normalized["scene"] == "eat"
 
 
 def test_restaurant_hook_normalizes_search_args():
@@ -209,6 +210,65 @@ def test_travel_plan_new_hook_returns_map_final():
     assert handled["map"]["qr_code_url"] == "https://example.com/qr.png"
     assert handled["candidates"][0]["poi"]["poi_id"] == "B001"
     assert handled["itinerary"]["days"][0]["items"][0]["place_name"] == "西湖"
+
+
+def test_travel_plan_new_confirm_candidates_waits_for_itinerary_confirmation():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_action": "confirm_candidates",
+            "travel_payload": {
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_001",
+                        "name": "西湖",
+                        "poi": {"poi_id": "B001", "longitude": 120.148, "latitude": 30.242},
+                    }
+                ]
+            },
+        },
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+
+    assert context["travel_state"]["phase"] == "candidates_confirmed"
+    assert "禁止调用 travel_create_personal_map" in context["system_directive"]
+
+
+def test_travel_plan_new_forces_map_tool_after_itinerary_confirmation():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_action": "generate_map",
+            "travel_payload": {
+                "trip_meta": {"destination": "杭州", "days": 1},
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_001",
+                        "name": "西湖",
+                        "poi": {"poi_id": "B001", "name": "西湖", "longitude": 120.148, "latitude": 30.242},
+                    }
+                ],
+                "itinerary": {
+                    "days": [
+                        {
+                            "day_number": 1,
+                            "theme": "西湖经典线",
+                            "items": [{"place_name": "西湖"}],
+                        }
+                    ]
+                },
+            },
+        },
+    )
+
+    calls = TravelPlanNewHooks().forced_tool_calls(state)
+
+    assert calls is not None
+    assert calls[0]["name"] == "travel_create_personal_map"
+    assert calls[0]["args"]["line_list"][0]["pointInfoList"][0]["poiId"] == "B001"
 
 
 def test_travel_plan_new_hook_enables_vision_for_attachments():

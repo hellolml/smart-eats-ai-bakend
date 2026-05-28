@@ -77,6 +77,40 @@ def test_skill_loader_reads_enabled_skill_with_instructions(tmp_path):
     assert skills[0].tools.allow == ["get_fridge_items"]
 
 
+def test_skill_loader_merges_explicit_reference_includes(tmp_path):
+    from app.agent.skills.loader import load_skill_body, load_skills_from_path
+
+    skill_dir = tmp_path / "travel_plan_new"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "references").mkdir()
+    (skill_dir / "references" / "extract-places.md").write_text("Extract image places first.", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text(
+        """---
+id: travel_plan_new
+version: 1.0.0
+enabled: true
+activation:
+  scenes: [travel_planner]
+instructions:
+  includes:
+    - references/extract-places.md
+  max_chars: 1000
+---
+# Travel
+
+Main flow.
+""",
+        encoding="utf-8",
+    )
+
+    skill = load_skills_from_path(tmp_path)[0]
+    body = load_skill_body(skill)
+
+    assert "Main flow." in body
+    assert "Reference: references/extract-places.md" in body
+    assert "Extract image places first." in body
+
+
 def test_skill_resolver_activates_by_keyword_and_records_reason(tmp_path):
     from app.agent.skills.loader import load_skills_from_path
     from app.agent.skills.resolver import SkillResolver

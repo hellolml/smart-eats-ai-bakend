@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     AGENT_SKILLS_ENABLED: bool = True
     AGENT_SKILLS_PATH: str = "agent_skills"
     AGENT_SKILLS_MAX_ACTIVE: int = 3
-    AGENT_SKILLS_MAX_PROMPT_CHARS: int = 6000
+    AGENT_SKILLS_MAX_PROMPT_CHARS: int = 12000
     AGENT_SKILLS_LOG_DIAGNOSTICS: bool = True
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     CHAT_PAUSE_TTL: int = 600
     SEED_DEMO_USER_ID: str | None = None
     AMAP_SEARCH_CACHE_TTL_SECONDS: int = 180
-    TRAVEL_POI_CACHE_TTL_SECONDS: int = 86400
+    TRAVEL_POI_CACHE_TTL_SECONDS: int = 604800
     RESTAURANT_DETAIL_CACHE_TTL_SECONDS: int = 300
     MCP_SERVERS_CONFIG_PATH: str | None = "mcp_servers.json"
     APP_FALLBACK_ENABLED: bool = True

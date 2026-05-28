@@ -124,28 +124,6 @@ class ProviderRegistry:
         )
 
 
-def _supports_vision_payload(config: ProviderConfig) -> bool:
-    if config.model_vision_planner:
-        return True
-    model = (config.model_planner or "").lower()
-    provider = (config.name or "").lower()
-    if provider == "anthropic":
-        return True
-    return any(
-        token in model
-        for token in (
-            "gpt-4o",
-            "gpt-4.1",
-            "gpt-5",
-            "vision",
-            "vl",
-            "qwen-vl",
-            "qvq",
-            "omni",
-        )
-    )
-
-
 _CLIENT_POOL: dict[str, AsyncOpenAI] = {}
 _CLIENT_POOL_LOCK = threading.Lock()
 _ANTHROPIC_CLIENT_POOL: dict[str, httpx.AsyncClient] = {}
@@ -340,7 +318,7 @@ class OpenAIPlanner:
         if not self.client:
             raise RuntimeError("LLM provider is not configured")
         context = _log_context()
-        requested_image_parts = image_parts if isinstance(image_parts, list) and _supports_vision_payload(self.config) else []
+        requested_image_parts = image_parts if isinstance(image_parts, list) else []
         model = (
             self.config.model_vision_planner
             if requested_image_parts and self.config.model_vision_planner
@@ -434,13 +412,16 @@ class OpenAIPlanner:
         if not self.client:
             raise RuntimeError("LLM provider is not configured")
         context = _log_context()
-        requested_image_parts = image_parts if isinstance(image_parts, list) and _supports_vision_payload(self.config) else []
+        requested_image_parts = image_parts if isinstance(image_parts, list) else []
         model = (
             self.config.model_vision_planner
             if requested_image_parts and self.config.model_vision_planner
             else self.config.model_planner
         )
-        payload_messages = self._messages_to_openai_payload(messages, requested_image_parts)
+        payload_messages = self._messages_to_openai_payload(
+            messages,
+            requested_image_parts,
+        )
         if _should_log_request("user"):
             logger.info(
                 "planner request provider=%s model=%s session_id=%s turn=%s step=%s messages=%s",

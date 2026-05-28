@@ -170,7 +170,7 @@ async def _finalize_itinerary(redis_client: redis.Redis, state: ChatState) -> di
                 "reason": "已基于确认 POI 生成每日路线，并调用高德个人地图。",
             }
         ],
-        "followups": ["查看高德二维码", "继续调整某一天路线"],
+        "followups": ["查看高德二维码"],
         "warnings": [] if candidates else ["没有可用于生成地图的已验证 POI。"],
     }
     await _save_state(redis_client, state.session_id, {"stage": "completed", **final})

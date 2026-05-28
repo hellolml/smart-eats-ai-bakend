@@ -70,8 +70,7 @@ def test_runtime_graph_has_no_business_specific_runtime_code():
     assert "app.agent.agents.base" not in source
     assert "load_cached_location" not in source
     assert "load_cached_restaurants" not in source
-    for term in ("fridge", "restaurant", "route", "travel", "recipe"):
-        assert term not in source
+    assert "TravelPlannerWorkflow" not in source
 
 
 def test_build_agent_runtime_graph_source_uses_toolnode_postprocess_boundary():

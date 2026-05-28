@@ -1063,8 +1063,9 @@ async def list_chat_sessions(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     q: str | None = Query(default=None),
+    scene: str | None = Query(default=None),
 ):
-    data = await AppBffService.list_chat_sessions(user_id, db, limit, offset, q)
+    data = await AppBffService.list_chat_sessions(user_id, db, limit, offset, q, scene=scene)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 

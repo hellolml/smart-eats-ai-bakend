@@ -29,6 +29,7 @@ export interface ChatSession {
   session_id?: string;
   title?: string;
   scene?: string;
+  created_at?: string;
 }
 
 export interface ChatAttachment {
@@ -44,6 +45,35 @@ export interface ChatStreamResult {
   text: string;
   qrCodeUrl?: string;
   schemaUrl?: string;
+  finalJson?: Record<string, unknown>;
+}
+
+export interface ChatSessionSummary {
+  session_id: string;
+  scene: string;
+  title: string;
+  created_at: string;
+}
+
+export interface ChatSessionListResult {
+  sessions: ChatSessionSummary[];
+  offset: number;
+  limit: number;
+}
+
+export interface ChatMessageRecord {
+  id: string;
+  role: 'user' | 'assistant' | 'tool' | string;
+  content: string;
+  tool_name?: string | null;
+  tool_payload?: Record<string, unknown> | null;
+  created_at?: string;
+}
+
+export interface ChatMessageListResult {
+  messages: ChatMessageRecord[];
+  offset: number;
+  limit: number;
 }
 
 export interface ChatLocationContext {
@@ -111,6 +141,17 @@ export class ApiError extends Error {
 function getApiBaseUrl(): string {
   const raw = (process.env.APP_API_BASE_URL || '').trim();
   return raw.endsWith('/') ? raw.slice(0, -1) : raw;
+}
+
+function buildQuery(params?: Record<string, string | number | boolean | null | undefined>): string {
+  if (!params) return '';
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    query.set(key, String(value));
+  });
+  const text = query.toString();
+  return text ? `?${text}` : '';
 }
 
 function buildUrl(path: string): string {
@@ -433,8 +474,11 @@ export const appApi = {
     async stream(sessionId: string, message: string, options: {
       scene?: string;
       attachments?: ChatAttachment[];
+      travelAction?: string;
+      travelPayload?: Record<string, unknown>;
       clientContextOverrides?: Record<string, unknown>;
       onDelta?: (text: string) => void;
+      onVisionError?: (message: string) => void;
       retryOnUnauthorized?: boolean;
       signal?: AbortSignal;
     } = {}): Promise<ChatStreamResult> {
@@ -457,6 +501,8 @@ export const appApi = {
           message,
           scene: options.scene,
           attachments: options.attachments,
+          travel_action: options.travelAction,
+          travel_payload: options.travelPayload,
           client_context_overrides: options.clientContextOverrides
         })
       });
@@ -478,6 +524,7 @@ export const appApi = {
       let collected = '';
       let qrCodeUrl = '';
       let schemaUrl = '';
+      let finalJson: Record<string, unknown> | undefined;
 
       const consumeBlock = (block: string) => {
         const lines = block.split(/\r?\n/);
@@ -503,7 +550,22 @@ export const appApi = {
           }
           throw new ApiError(toZhErrorMessage(extractErrorMessage(parsed) || 'Agent 对话失败'), { code: envelope?.code });
         }
+        if (eventName === 'vision_error') {
+          const text = extractSseText(parsed) || '图片处理失败，请重新上传或用文字描述地点';
+          options.onVisionError?.(text);
+          collected = collected ? `${collected}\n\n${text}` : text;
+          options.onDelta?.(collected);
+          return;
+        }
         if (eventName === 'final') {
+          if (parsed && typeof parsed === 'object') {
+            const answer = (parsed as Record<string, unknown>).answer;
+            if (answer && typeof answer === 'object' && !Array.isArray(answer)) {
+              finalJson = answer as Record<string, unknown>;
+              qrCodeUrl = qrCodeUrl || findStringByKeys(finalJson, ['qr_code_url', 'qrCodeUrl']) || '';
+              schemaUrl = schemaUrl || findStringByKeys(finalJson, ['schema_url', 'schemaUrl']) || '';
+            }
+          }
           const finalText = extractFinalText(parsed);
           if (finalText && !collected) {
             collected = finalText;
@@ -526,11 +588,28 @@ export const appApi = {
         blocks.forEach(consumeBlock);
       }
       if (buffer.trim()) consumeBlock(buffer);
-      return { text: collected, qrCodeUrl: qrCodeUrl || undefined, schemaUrl: schemaUrl || undefined };
+      return { text: collected, qrCodeUrl: qrCodeUrl || undefined, schemaUrl: schemaUrl || undefined, finalJson };
     },
     async stop(sessionId: string) {
       return request<{ stopped: boolean; session_id: string }>(`/chat/session/${sessionId}/stop`, {
         method: 'POST'
+      });
+    },
+    async listSessions(params?: { limit?: number; offset?: number; q?: string; scene?: string }) {
+      return request<ChatSessionListResult>(`/chat/sessions${buildQuery(params)}`);
+    },
+    async listMessages(sessionId: string, params?: { limit?: number; offset?: number }) {
+      return request<ChatMessageListResult>(`/chat/session/${sessionId}/messages${buildQuery(params)}`);
+    },
+    async renameSession(sessionId: string, data: { title: string }) {
+      return request<{ updated: boolean; title: string }>(`/chat/session/${sessionId}`, {
+        method: 'PATCH',
+        body: data
+      });
+    },
+    async deleteSession(sessionId: string) {
+      return request<{ deleted: boolean }>(`/chat/session/${sessionId}`, {
+        method: 'DELETE'
       });
     },
     getSessionId

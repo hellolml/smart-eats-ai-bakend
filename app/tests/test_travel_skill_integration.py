@@ -55,7 +55,7 @@ def test_food_decision_skill_is_bundled_and_activates_for_eat_request():
 
     state = AgentRuntimeState(
         session_id="s-food",
-        scene="chat",
+        scene="eat",
         message="今天吃点啥",
     )
     active = SkillResolver(skills).resolve(state, {"user_message": state.message})
@@ -67,7 +67,7 @@ def test_food_decision_activates_for_nearby_food_wording():
     skills = load_skills_from_path("agent_skills")
     state = AgentRuntimeState(
         session_id="s-food-nearby",
-        scene="chat",
+        scene="eat",
         message="恒伟星中心周边有什么吃的",
     )
 
@@ -77,6 +77,7 @@ def test_food_decision_activates_for_nearby_food_wording():
     assert AppBffService._infer_chat_intent(state.message) == "eat_out"
     assert "food_decision" in active_ids
     assert "restaurant_finder" in active_ids
+    assert any(reason.startswith("scene:eat") for reason in active.activation_reasons["food_decision"])
 
 
 def test_chat_intent_forces_food_and_restaurant_skills():
@@ -132,6 +133,7 @@ async def test_travel_search_poi_normalizes_amap_results(monkeypatch):
 @pytest.mark.asyncio
 async def test_travel_search_poi_uses_cache_for_valid_pois(monkeypatch):
     from app.agent.tools.travel_search_poi import travel_search_poi
+    from app.common.config import settings
 
     calls = {"count": 0}
 
@@ -143,6 +145,7 @@ async def test_travel_search_poi_uses_cache_for_valid_pois(monkeypatch):
             return self.value
 
         async def setex(self, _key, _ttl, value):
+            assert _ttl == settings.TRAVEL_POI_CACHE_TTL_SECONDS
             self.value = value
 
     async def _fake_text_search(*_args, **_kwargs):
@@ -165,6 +168,30 @@ async def test_travel_search_poi_uses_cache_for_valid_pois(monkeypatch):
     assert calls["count"] == 1
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_travel_search_poi_normalizes_nested_mcp_payload(monkeypatch):
+    from app.agent.tools.travel_search_poi import travel_search_poi
+
+    async def _fake_text_search(*_args, **_kwargs):
+        return [
+            {
+                "poiId": "B002",
+                "name": "断桥残雪",
+                "address": "杭州市西湖区",
+                "lon": "120.147",
+                "lat": "30.257",
+            }
+        ]
+
+    monkeypatch.setattr("app.agent.tools.travel_search_poi.amap.text_search", _fake_text_search)
+
+    result = await travel_search_poi({"keywords": "断桥", "city": "杭州"})
+
+    assert result["pois"][0]["poi_id"] == "B002"
+    assert result["pois"][0]["longitude"] == 120.147
+    assert result["pois"][0]["latitude"] == 30.257
 
 
 @pytest.mark.asyncio

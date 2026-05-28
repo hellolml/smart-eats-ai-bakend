@@ -9,6 +9,7 @@ activation:
   scenes:
     - chat
     - home_chef
+    - eat
   intents:
     - cook_home
     - eat_out

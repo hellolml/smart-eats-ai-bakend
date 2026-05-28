@@ -15,6 +15,7 @@ class SkillActivationPolicy(BaseModel):
 
 class SkillInstructions(BaseModel):
     file: str = "instructions.md"
+    includes: list[str] = Field(default_factory=list)
     max_chars: int = 3000
     content: str = ""
 

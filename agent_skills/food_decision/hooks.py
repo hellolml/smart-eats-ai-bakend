@@ -15,7 +15,8 @@ class FoodDecisionHooks(BaseSkillHooks):
         return {
             "system_directive": (
                 "当前是吃什么/吃点啥决策场景。不要回答没有美食推荐能力；"
-                "必须优先调用 food_decision 工具，用户提到附近、周边或地标时可结合 restaurant_finder。"
+                "你必须调用 food_decision 工具来给出推荐，不允许直接回复文字答案；"
+                "用户提到附近、周边或地标时可结合 restaurant_finder。"
             )
         }
 
@@ -33,12 +34,28 @@ class FoodDecisionHooks(BaseSkillHooks):
             if isinstance(city, str) and city.strip():
                 updated.setdefault("city", city)
         updated.setdefault("query", getattr(state, "message", None) or "今天吃点啥")
-        updated.setdefault("scene", "food_decision")
+        intent = None
+        context = getattr(state, "context", None)
+        if isinstance(context, dict):
+            intent = context.get("intent")
+        updated.setdefault("scene", "cook_home" if intent == "cook_home" else "eat")
         return updated
 
     def handle_tool_result(self, state: Any, tool_name: str, result: Any) -> dict[str, Any] | None:
-        if tool_name != "food_decision" or not isinstance(result, dict) or result.get("error"):
+        if tool_name != "food_decision" or not isinstance(result, dict):
             return None
+        if result.get("error"):
+            return {
+                "recommendations": [
+                    {
+                        "type": "note",
+                        "title": "我还缺少一点位置信息，暂时没法精确推荐附近餐厅。",
+                        "reason": str(result.get("error") or "food_decision_failed"),
+                    }
+                ],
+                "followups": ["发我当前城市或附近地标", "重新授权定位后再推荐一次"],
+                "warnings": [str(result.get("error"))],
+            }
         decision = result.get("decision") if isinstance(result.get("decision"), dict) else {}
         title = str(decision.get("title") or "今天就选这个").strip()
         rec_type = str(decision.get("type") or "note").strip()

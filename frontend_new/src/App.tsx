@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ApiError, type ChatLocationContext, type PlanRecord, appApi, authStore } from './services/api';
-import { BottomTabs, Page, StatusBar } from './components/Layout';
+import { ApiError, type ChatAttachment, type ChatLocationContext, type PlanRecord, appApi, authStore } from './services/api';
+import { BottomTabs, Page } from './components/Layout';
 import { defaultPlan } from './data/plans';
 import {
   AgentScreen,
+  ChatHistoryScreen,
   CreateTravelScreen,
   DetailScreen,
   HomeScreen,
@@ -28,6 +29,11 @@ type CachedEatLocation = {
   updatedAt: number;
 };
 
+type EatLocationPromptResult = {
+  action: 'allow' | 'skip' | 'manual';
+  place?: string;
+};
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>(authStore.isLoggedIn() ? 'home' : 'login');
   const [loading, setLoading] = useState(false);
@@ -49,6 +55,11 @@ export default function App() {
   const streamAbortRef = useRef<AbortController | null>(null);
   const stopRequestedRef = useRef(false);
   const eatLocationRef = useRef<ChatLocationContext | null>(null);
+  const eatPlaceRef = useRef('');
+  const eatLocationPromptResolverRef = useRef<((result: EatLocationPromptResult) => void) | null>(null);
+  const [eatLocationPromptOpen, setEatLocationPromptOpen] = useState(false);
+  const [eatLocationPromptText, setEatLocationPromptText] = useState('吃点啥助手需要你的位置来推荐附近美食，只用于本次推荐。');
+  const [eatLocationPlaceInput, setEatLocationPlaceInput] = useState('');
 
   const showTabs = ['home', 'plans', 'profile'].includes(screen);
 
@@ -166,17 +177,46 @@ export default function App() {
     }
   };
 
+  const askEatLocationPermission = (text = '吃点啥助手需要你的位置来推荐附近美食，只用于本次推荐。'): Promise<EatLocationPromptResult> => {
+    if (eatLocationPromptResolverRef.current) {
+      eatLocationPromptResolverRef.current({ action: 'skip' });
+    }
+    setEatLocationPromptText(text);
+    setEatLocationPlaceInput('');
+    setEatLocationPromptOpen(true);
+    return new Promise((resolve) => {
+      eatLocationPromptResolverRef.current = resolve;
+    });
+  };
+
+  const resolveEatLocationPrompt = (result: EatLocationPromptResult) => {
+    eatLocationPromptResolverRef.current?.(result);
+    eatLocationPromptResolverRef.current = null;
+    setEatLocationPromptOpen(false);
+  };
+
   const requestEatLocation = async (): Promise<ChatLocationContext | null> => {
     const cached = readCachedEatLocation();
     if (cached?.status === 'granted' && cached.location) {
       eatLocationRef.current = cached.location;
       return cached.location;
     }
-    if (cached?.status === 'denied') return null;
-    if (!('geolocation' in navigator)) return null;
-    const shouldAsk = window.confirm('吃点啥助手需要获取你的当前位置，用来推荐附近餐厅。是否授权获取地址信息？');
-    if (!shouldAsk) {
+    if (cached?.status === 'denied') {
+      toast('你已选择暂不定位，6 小时内不会再次询问。');
+      return null;
+    }
+    const choice = await askEatLocationPermission();
+    if (choice.action === 'manual') {
+      eatPlaceRef.current = (choice.place || '').trim();
+      return null;
+    }
+    if (choice.action !== 'allow') {
       writeCachedEatLocation({ status: 'denied', updatedAt: Date.now() });
+      toast('已跳过定位，6 小时内不会再次询问。');
+      return null;
+    }
+    if (!('geolocation' in navigator)) {
+      toast.error('当前浏览器不支持定位，可以手动输入城市或地标。');
       return null;
     }
     try {
@@ -200,29 +240,40 @@ export default function App() {
       toast.success('已获取当前位置，会优先推荐附近选择', { id: 'eat-location' });
       return location;
     } catch {
-      writeCachedEatLocation({ status: 'denied', updatedAt: Date.now() });
-      toast.error('未获取到位置，可以继续聊天，我会按文字里的地点来推荐', { id: 'eat-location' });
+      toast.error('定位失败，可以重试或手动输入附近地标', { id: 'eat-location' });
+      const fallback = await askEatLocationPermission('定位没有成功。你可以重试定位，或手动输入城市、商场、写字楼等地标。');
+      if (fallback.action === 'allow') return requestEatLocation();
+      if (fallback.action === 'manual') eatPlaceRef.current = (fallback.place || '').trim();
       return null;
     }
   };
 
-  const buildEatContextOverrides = (location: ChatLocationContext | null) => ({
-    intent: 'eat_out',
-    forced_skill_ids: ['food_decision', 'restaurant_finder'],
-    ...(location ? {
-      location,
-      environment: {
-        location
-      }
-    } : {})
-  });
+  const buildEatContextOverrides = (location: ChatLocationContext | null) => {
+    const place = eatPlaceRef.current.trim();
+    return {
+      intent: 'eat_out',
+      forced_skill_ids: ['food_decision', 'restaurant_finder'],
+      ...(place ? { location_text: place } : {}),
+      ...(location ? {
+        location,
+        environment: {
+          location,
+          ...(place ? { location_text: place } : {})
+        }
+      } : place ? {
+        environment: {
+          location_text: place
+        }
+      } : {})
+    };
+  };
 
   const beginTravelConversation = async (prompt?: string) => {
     const basePrompt = prompt || [
       `目的地：${destination || '北京'}`,
       `出行时间：${travelDate || '待定'}`,
       `出行天数：${travelDays || '5'} 天`,
-      `出行人数：${travelPeople || '1'}`,
+      `出行人数：${travelPeople || '1'} 人`,
       '请输出清晰的候选旅行行程，包含每日路线、景点顺序和必要提醒。'
     ].join('\n');
     setMode('travel');
@@ -244,7 +295,7 @@ export default function App() {
     go('agent');
     try {
       const location = await requestEatLocation();
-      const created = await appApi.chat.createSession({ scene: 'chat', title: '今天吃点啥' });
+      const created = await appApi.chat.createSession({ scene: 'eat', title: '今天吃点啥' });
       const sid = appApi.chat.getSessionId(created);
       if (!sid) throw new ApiError('后端未返回会话 ID');
       setActiveSessionId(sid);
@@ -293,22 +344,30 @@ export default function App() {
         setActiveSessionId(sid);
       }
       const uploadedAttachments = imagesToUpload.length
-        ? await Promise.all(imagesToUpload.map((item) => appApi.chat.uploadAttachment(sid, item.file)))
+        ? await Promise.allSettled(imagesToUpload.map((item) => appApi.chat.uploadAttachment(sid, item.file)))
         : [];
+      const successfulAttachments = uploadedAttachments
+        .filter((item): item is PromiseFulfilledResult<ChatAttachment> => item.status === 'fulfilled')
+        .map((item) => item.value);
+      const failedUploadCount = uploadedAttachments.filter((item) => item.status === 'rejected').length;
       imagesToUpload.forEach((item) => URL.revokeObjectURL(item.previewUrl));
       const controller = new AbortController();
       streamAbortRef.current = controller;
       stopRequestedRef.current = false;
-      const reply = await appApi.chat.stream(sid, `${visibleText}\n\n请先输出候选行程，等待用户确认后由应用层创建计划记录。不要直接操作数据库。`, {
+      const uploadNotice = failedUploadCount ? `\n\n[提示：${failedUploadCount} 张图片上传失败，请检查图片大小后重试]` : '';
+      const reply = await appApi.chat.stream(sid, `${visibleText || '请根据我上传的图片生成旅行计划'}${uploadNotice}\n\n请先输出候选行程，等待用户确认后由应用层创建计划记录。不要直接操作数据库。`, {
         scene: 'travel_planner',
-        attachments: uploadedAttachments,
+        attachments: successfulAttachments,
         signal: controller.signal,
         onDelta: (partial) => {
           setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: partial || '正在整理...' } : item));
+        },
+        onVisionError: (text) => {
+          toast.error(text);
         }
       });
       const finalText = reply.text || '候选行程已完成，确认后即可生成计划记录。';
-      const parsedDays = parseTravelDays(finalText);
+      const parsedDays = travelDaysFromFinalJson(reply.finalJson || {}, {}, finalText);
       const finalAssistantMessage = { ...assistantMessage, content: finalText, kind: options.createDraft ? 'travel-draft' as const : undefined };
       const conversationSnapshot = [...(options.seedMessages || messages), userMessage, finalAssistantMessage];
       const nextDraft: PlanInfo = {
@@ -335,7 +394,9 @@ export default function App() {
           travelDays,
           travelPeople,
           source: 'agent',
-          generatedAt: new Date().toISOString()
+          generatedAt: new Date().toISOString(),
+          finalJson: reply.finalJson || {},
+          candidates: Array.isArray(reply.finalJson?.candidates) ? reply.finalJson.candidates : []
         }
       };
       if (options.createDraft) setDraftPlan(nextDraft);
@@ -371,7 +432,7 @@ export default function App() {
     try {
       let sid = sessionId || activeSessionId;
       if (!sid) {
-        const created = await appApi.chat.createSession({ scene: 'chat', title: '今天吃点啥' });
+        const created = await appApi.chat.createSession({ scene: 'eat', title: '今天吃点啥' });
         sid = appApi.chat.getSessionId(created);
         if (!sid) throw new ApiError('后端未返回会话 ID');
         setActiveSessionId(sid);
@@ -381,7 +442,7 @@ export default function App() {
       stopRequestedRef.current = false;
       const location = locationOverride === undefined ? eatLocationRef.current : locationOverride;
       const reply = await appApi.chat.stream(sid, value, {
-        scene: 'chat',
+        scene: 'eat',
         clientContextOverrides: buildEatContextOverrides(location || null),
         signal: controller.signal,
         onDelta: (partial) => {
@@ -407,45 +468,166 @@ export default function App() {
 
   const confirmDraftPlan = async () => {
     if (!draftPlan) return;
+    if (!draftPlan.sessionId) {
+      toast.error('当前草稿缺少会话信息，无法继续生成');
+      return;
+    }
     setLoading(true);
     try {
-      const saved = await appApi.plans.create({
-        session_id: draftPlan.sessionId,
-        title: draftPlan.title,
-        plan_type: 'travel',
-        status: 'saved',
-        date_text: draftPlan.date,
-        source_text: draftPlan.sourceText,
-        qr_code_url: draftPlan.qrCodeUrl,
-        schema_url: draftPlan.schemaUrl,
-        plan_json: {
-          basicInfo: draftPlan.basicInfo || {},
-          days: draftPlan.days,
-          messages: messages.map((item) => item.kind === 'travel-draft' ? { ...item, kind: 'travel-plan' as const } : item),
-          itineraryText: draftPlan.sourceText,
-          raw: draftPlan.raw || {},
-          sourceText: draftPlan.sourceText
+      const raw = draftPlan.raw || {};
+      const draftFinalJson = raw.finalJson && typeof raw.finalJson === 'object' ? raw.finalJson as Record<string, unknown> : {};
+      const stage = getTravelStage(draftFinalJson);
+      const confirmedCandidates = getTravelCandidates(draftFinalJson, raw);
+      const tripMeta = {
+        destination: draftPlan.basicInfo?.destination,
+        start_date: draftPlan.basicInfo?.travelDate,
+        days: draftPlan.basicInfo?.travelDays,
+        travelers_count: draftPlan.basicInfo?.travelPeople
+      };
+
+      if (stage !== 'itinerary_generated' && stage !== 'map_generated') {
+        const userMessage = message('user', '确认这些候选地点，请继续生成最终每日行程。');
+        const assistantId = uid();
+        const assistantMessage = { ...message('assistant', '正在生成每日行程...'), id: assistantId };
+        setMessages((prev) => [...prev, userMessage, assistantMessage]);
+        const controller = new AbortController();
+        streamAbortRef.current = controller;
+        stopRequestedRef.current = false;
+        const reply = await appApi.chat.stream(draftPlan.sessionId, userMessage.content, {
+          scene: 'travel_planner',
+          travelAction: 'confirm_candidates',
+          travelPayload: {
+            candidates: confirmedCandidates,
+            confirmed_candidates: confirmedCandidates,
+            basic_info: draftPlan.basicInfo || {},
+            trip_meta: tripMeta
+          },
+          signal: controller.signal,
+          onDelta: (partial) => {
+            setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: partial || '正在生成...' } : item));
+          }
+        });
+        const finalText = reply.text || draftPlan.sourceText;
+        const nextFinalJson = reply.finalJson || draftFinalJson;
+        const parsedDays = travelDaysFromFinalJson(nextFinalJson, raw, finalText);
+        const finalAssistant = { ...assistantMessage, content: finalText, kind: 'travel-draft' as const };
+        const nextDraft = {
+          ...draftPlan,
+          status: '进行中' as const,
+          sourceText: finalText,
+          days: parsedDays.length ? parsedDays : draftPlan.days,
+          messages: [...messages, userMessage, finalAssistant],
+          raw: {
+            ...raw,
+            finalJson: nextFinalJson,
+            candidates: confirmedCandidates,
+            itinerary: nextFinalJson.itinerary,
+            itineraryText: finalText,
+            candidatesConfirmedAt: new Date().toISOString()
+          }
+        };
+        setDraftPlan(nextDraft);
+        setMessages((prev) => prev.map((item) => {
+          if (item.id === assistantId) return finalAssistant;
+          if (item.kind === 'travel-draft') return { ...item, kind: undefined };
+          return item;
+        }));
+        toast.success('行程草稿已生成，请确认是否生成高德地图');
+        return;
+      }
+
+      const itinerary = getTravelItinerary(draftFinalJson, raw);
+      const userMessage = message('user', '确认这版行程，请生成高德地图二维码并保存计划。');
+      const assistantId = uid();
+      const assistantMessage = { ...message('assistant', '正在生成高德地图二维码...'), id: assistantId };
+      setMessages((prev) => [...prev, userMessage, assistantMessage]);
+      const controller = new AbortController();
+      streamAbortRef.current = controller;
+      stopRequestedRef.current = false;
+      const reply = await appApi.chat.stream(draftPlan.sessionId, userMessage.content, {
+        scene: 'travel_planner',
+        travelAction: 'generate_map',
+        travelPayload: {
+          candidates: confirmedCandidates,
+          confirmed_candidates: confirmedCandidates,
+          itinerary,
+          basic_info: draftPlan.basicInfo || {},
+          trip_meta: tripMeta
+        },
+        signal: controller.signal,
+        onDelta: (partial) => {
+          setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: partial || '正在生成...' } : item));
         }
       });
-      const savedMessages = messages.map((item) => item.kind === 'travel-draft' ? { ...item, kind: 'travel-plan' as const } : item);
-      const created = {
+      const finalText = reply.text || draftPlan.sourceText;
+      const planText = draftPlan.sourceText || finalText;
+      const mapFinalJson = reply.finalJson || draftFinalJson;
+      const parsedDays = travelDaysFromFinalJson(mapFinalJson, { ...raw, itinerary }, planText);
+      const finalAssistant = { ...assistantMessage, content: finalText, kind: 'travel-plan' as const };
+      const planToSave = {
         ...draftPlan,
-        id: saved.id || draftPlan.id,
+        sourceText: planText,
+        qrCodeUrl: reply.qrCodeUrl || findTravelMapUrl(mapFinalJson, 'qr_code_url') || draftPlan.qrCodeUrl,
+        schemaUrl: reply.schemaUrl || findTravelMapUrl(mapFinalJson, 'schema_url') || draftPlan.schemaUrl,
+        days: parsedDays.length ? parsedDays : draftPlan.days,
+        raw: {
+          ...raw,
+          finalJson: mapFinalJson,
+          candidates: confirmedCandidates,
+          itinerary,
+          finalSourceText: planText,
+          mapGeneratedAt: new Date().toISOString()
+        }
+      };
+      const messagesToSave = [
+        ...messages.map((item) => item.kind === 'travel-draft' ? { ...item, kind: 'travel-plan' as const } : item),
+        userMessage,
+        finalAssistant
+      ];
+      setMessages((prev) => prev.map((item) => item.id === assistantId ? finalAssistant : item));
+      const saved = await appApi.plans.create({
+        session_id: planToSave.sessionId,
+        title: planToSave.title,
+        plan_type: 'travel',
+        status: 'saved',
+        date_text: planToSave.date,
+        source_text: planToSave.sourceText,
+        qr_code_url: planToSave.qrCodeUrl,
+        schema_url: planToSave.schemaUrl,
+        plan_json: {
+          basicInfo: planToSave.basicInfo || {},
+          days: planToSave.days,
+          messages: messagesToSave,
+          itineraryText: planToSave.sourceText,
+          itineraryMarkdown: planToSave.sourceText,
+          raw: planToSave.raw || {},
+          sourceText: planToSave.sourceText
+        }
+      });
+      const created = {
+        ...planToSave,
+        id: saved.id || planToSave.id,
         status: '已保存' as const,
-        qrCodeUrl: saved.qr_code_url || draftPlan.qrCodeUrl,
-        schemaUrl: saved.schema_url || draftPlan.schemaUrl,
-        messages: savedMessages
+        qrCodeUrl: saved.qr_code_url || planToSave.qrCodeUrl,
+        schemaUrl: saved.schema_url || planToSave.schemaUrl,
+        messages: messagesToSave
       };
       setPlan(created);
       setSavedPlans((prev) => [created, ...prev.filter((item) => item.id !== created.id)]);
       setSelectedPlan(created);
       setDraftPlan(null);
-      setMessages(savedMessages);
+      setMessages(messagesToSave);
       toast.success('计划已保存');
     } catch (error) {
+      if (stopRequestedRef.current || isAbortError(error)) {
+        toast('已终止生成最终行程');
+        return;
+      }
       if (handleAuthFailure(error)) return;
       toast.error(`计划保存失败：${errorMessage(error)}`);
     } finally {
+      streamAbortRef.current = null;
+      stopRequestedRef.current = false;
       setLoading(false);
     }
   };
@@ -495,7 +677,7 @@ export default function App() {
   return (
     <div className="h-full w-full overflow-hidden bg-[#f4f5f7] text-[#111827] md:grid md:place-items-center">
       <div className="relative h-full w-full overflow-hidden bg-white md:h-[844px] md:w-[390px] md:rounded-[2.25rem] md:shadow-2xl">
-        <StatusBar />
+        {/* <StatusBar /> */}
         <main className="absolute inset-x-0 bottom-0 top-11 overflow-hidden">
           <Page active={screen === 'login'}>
             <LoginScreen
@@ -588,6 +770,23 @@ export default function App() {
               adjustPlan={adjustPlan}
               openQr={() => go('qr')}
               onBack={() => go(mode === 'travel' ? 'createTravel' : 'home')}
+              onHistory={() => go('chatHistory')}
+            />
+          </Page>
+
+          <Page active={screen === 'chatHistory'}>
+            <ChatHistoryScreen
+              active={screen === 'chatHistory'}
+              onBack={() => go('agent')}
+              onAuthExpired={() => handleAuthFailure(new ApiError('登录状态已失效，请重新登录', { status: 401 }))}
+              openSession={({ session, mode: nextMode, messages: loadedMessages }) => {
+                setMode('eat');
+                setActiveSessionId(session.session_id);
+                setDraftPlan(null);
+                clearPendingImages();
+                setMessages(loadedMessages);
+                go('agent');
+              }}
             />
           </Page>
 
@@ -619,6 +818,112 @@ export default function App() {
           </Page>
         </main>
         <BottomTabs active={screen} visible={showTabs} go={go} />
+        <EatLocationPrompt
+          open={eatLocationPromptOpen}
+          text={eatLocationPromptText}
+          place={eatLocationPlaceInput}
+          setPlace={setEatLocationPlaceInput}
+          allow={() => resolveEatLocationPrompt({ action: 'allow' })}
+          skip={() => resolveEatLocationPrompt({ action: 'skip' })}
+          useManual={() => resolveEatLocationPrompt({ action: 'manual', place: eatLocationPlaceInput })}
+        />
+      </div>
+    </div>
+  );
+}
+
+function getTravelCandidates(finalJson: Record<string, unknown>, raw: Record<string, unknown>) {
+  const direct = finalJson.candidates;
+  if (Array.isArray(direct)) return direct.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  const rawCandidates = raw.candidates;
+  if (Array.isArray(rawCandidates)) return rawCandidates.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  return [];
+}
+
+function getTravelStage(finalJson: Record<string, unknown>) {
+  return typeof finalJson.state === 'string' ? finalJson.state : '';
+}
+
+function getTravelItinerary(finalJson: Record<string, unknown>, raw: Record<string, unknown>) {
+  const direct = finalJson.itinerary;
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct as Record<string, unknown>;
+  const rawItinerary = raw.itinerary;
+  if (rawItinerary && typeof rawItinerary === 'object' && !Array.isArray(rawItinerary)) return rawItinerary as Record<string, unknown>;
+  return { days: [] };
+}
+
+function travelDaysFromFinalJson(finalJson: Record<string, unknown>, raw: Record<string, unknown>, fallbackText: string): PlanInfo['days'] {
+  const itinerary = getTravelItinerary(finalJson, raw);
+  const days = itinerary.days;
+  if (Array.isArray(days) && days.length) {
+    return days.map((item, index) => {
+      const day = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : {};
+      const rawItems = Array.isArray(day.items) ? day.items : [];
+      const itemNames = rawItems
+        .map((entry) => {
+          if (typeof entry === 'string') return entry;
+          if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+            const value = entry as Record<string, unknown>;
+            return String(value.place_name || value.name || value.title || value.summary || '').trim();
+          }
+          return '';
+        })
+        .filter(Boolean);
+      const label = String(day.day || day.theme || day.title || `Day${day.day_number || index + 1}`);
+      return {
+        day: label.startsWith('Day') ? label : `Day${day.day_number || index + 1}`,
+        route: itemNames.join(' -> ') || String(day.route || day.theme || day.title || label),
+        items: itemNames.length ? itemNames : [String(day.theme || day.title || '行程安排')]
+      };
+    });
+  }
+  return parseTravelDays(fallbackText);
+}
+
+function findTravelMapUrl(finalJson: Record<string, unknown>, key: 'qr_code_url' | 'schema_url') {
+  const map = finalJson.map;
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return '';
+  const value = (map as Record<string, unknown>)[key];
+  if (typeof value === 'string') return value;
+  const camel = key === 'qr_code_url' ? 'qrCodeUrl' : 'schemaUrl';
+  const camelValue = (map as Record<string, unknown>)[camel];
+  return typeof camelValue === 'string' ? camelValue : '';
+}
+
+function EatLocationPrompt(props: {
+  open: boolean;
+  text: string;
+  place: string;
+  setPlace: (value: string) => void;
+  allow: () => void;
+  skip: () => void;
+  useManual: () => void;
+}) {
+  if (!props.open) return null;
+  return (
+    <div className="absolute inset-0 z-50 grid place-items-end bg-black/25 px-4 pb-6">
+      <div className="w-full rounded-[1.75rem] bg-white p-5 shadow-2xl">
+        <p className="text-lg font-black text-gray-950">获取你的位置</p>
+        <p className="mt-2 text-sm leading-relaxed text-gray-500">{props.text}</p>
+        <div className="mt-4 rounded-2xl bg-gray-50 px-4 py-3">
+          <input
+            value={props.place}
+            onChange={(event) => props.setPlace(event.target.value)}
+            placeholder="也可以输入城市或附近地标"
+            className="w-full bg-transparent text-sm outline-none placeholder:text-gray-400"
+          />
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button onClick={props.allow} className="rounded-full bg-black py-3 text-sm font-black text-white">允许定位</button>
+          <button onClick={props.skip} className="rounded-full bg-gray-100 py-3 text-sm font-black text-gray-700">暂不需要</button>
+        </div>
+        <button
+          onClick={props.useManual}
+          disabled={!props.place.trim()}
+          className="mt-2 w-full rounded-full bg-green-50 py-3 text-sm font-black text-green-700 disabled:opacity-40"
+        >
+          使用手动位置
+        </button>
       </div>
     </div>
   );

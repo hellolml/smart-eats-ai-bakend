@@ -59,6 +59,10 @@ def _extract_pois(payload: Any) -> list[dict[str, Any]]:
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
+            if isinstance(value, dict):
+                nested = _extract_pois(value)
+                if nested:
+                    return nested
     return []
 
 
@@ -608,7 +612,7 @@ async def create_personal_map(
     servers_path: str | None,
 ) -> dict[str, Any] | None:
     args = {
-        "orgName": org_name,
+        "title": org_name,
         "lineList": line_list,
         "sceneType": scene_type,
     }

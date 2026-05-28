@@ -55,16 +55,16 @@ def _extract_location_from_context(context: Any) -> tuple[float | None, float | 
 class SearchRestaurantsArgs(BaseModel):
     query: str | None = Field(default=None, description="Restaurant keyword or cuisine.")
     tag: str | None = Field(default=None, description="Restaurant category tag.")
-    lat: float = Field(..., description="Latitude.")
-    lng: float = Field(..., description="Longitude.")
+    lat: float | None = Field(default=None, description="Optional latitude. Falls back to device location in runtime context.")
+    lng: float | None = Field(default=None, description="Optional longitude. Falls back to device location in runtime context.")
     city: str | None = Field(default=None, description="Optional city hint.")
     sort: str | None = Field(default=None, description="Optional sort mode.")
     runtime_context: RuntimeContext = Field(default_factory=dict)
 
 
 async def _search_restaurants(
-    lat: float,
-    lng: float,
+    lat: float | None = None,
+    lng: float | None = None,
     query: str | None = None,
     tag: str | None = None,
     city: str | None = None,
@@ -143,8 +143,8 @@ search_restaurants_tool = StructuredTool.from_function(
     name="search_restaurants",
     description=(
         "Search restaurants by keyword and coordinates. "
-        "Input: {query?:string,tag?:string,lat:number,lng:number,city?:string,sort?:string}. "
-        "IMPORTANT: lat/lng are required. Call get_ip_location or geocode_location first if missing."
+        "Input: {query?:string,tag?:string,lat?:number,lng?:number,city?:string,sort?:string}. "
+        "If lat/lng are omitted, use the user's device location from runtime context when available."
     ),
     args_schema=SearchRestaurantsArgs,
     infer_schema=False,

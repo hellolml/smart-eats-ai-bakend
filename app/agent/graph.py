@@ -58,6 +58,9 @@ def _normalize_llm_upstream_error_message(exc: Exception) -> str:
     if "request timed out" in combined_lower or "timed out" in combined_lower:
         return "模型响应超时，请稍后重试；如果旅行规划较复杂，请减少一次输入的信息量，或在后端调大 LLM_PLANNER_REQUEST_TIMEOUT_SECONDS。"
 
+    if "unexpected item type in content" in combined_lower or "messages input is invalid" in combined_lower:
+        return "模型未接受本次图片输入，请确认当前模型支持多模态图片，或重新上传图片后再试。"
+
     if error_message:
         return error_message
     return raw_message or "LLM 上游服务暂时不可用，请稍后重试。"
@@ -77,6 +80,8 @@ def _render_final_text(final_json: dict[str, Any]) -> str:
     recommendations = final_json.get("recommendations")
     followups = final_json.get("followups")
     warnings = final_json.get("warnings")
+    state = str(final_json.get("state") or "")
+    raw_text = str(final_json.get("raw_text") or "").strip()
 
     rec_lines: list[str] = []
     if isinstance(recommendations, list):
@@ -103,6 +108,34 @@ def _render_final_text(final_json: dict[str, Any]) -> str:
         warning_lines = [str(item).strip() for item in warnings if str(item).strip()]
 
     chunks: list[str] = []
+    if raw_text and state == "itinerary_generated":
+        chunks.append(raw_text)
+    elif state == "itinerary_generated":
+        itinerary = final_json.get("itinerary")
+        days = itinerary.get("days") if isinstance(itinerary, dict) else None
+        if isinstance(days, list) and days:
+            day_lines: list[str] = []
+            for index, day in enumerate(days, start=1):
+                if not isinstance(day, dict):
+                    continue
+                title = day.get("theme") or day.get("title") or f"Day {day.get('day_number') or index}"
+                day_lines.append(f"### {title}")
+                items = day.get("items")
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, str):
+                            day_lines.append(f"- {item}")
+                        elif isinstance(item, dict):
+                            name = item.get("place_name") or item.get("name") or item.get("title")
+                            note = item.get("summary") or item.get("note") or item.get("transport")
+                            if name and note:
+                                day_lines.append(f"- {name}：{note}")
+                            elif name:
+                                day_lines.append(f"- {name}")
+                day_lines.append("")
+            rendered_days = "\n".join(day_lines).strip()
+            if rendered_days:
+                chunks.append(rendered_days)
     if rec_lines:
         chunks.append("\n".join([f"- {line}" for line in rec_lines]))
     if follow_lines:
@@ -185,6 +218,11 @@ async def run_chat_stream(
     conversation_cache = conversation.create_conversation_cache()
     conversation.set_current_cache(conversation_cache)
     try:
+        delete_cancel = getattr(redis_client, "delete", None)
+        if callable(delete_cancel):
+            result = delete_cancel(cancel_key)
+            if inspect.isawaitable(result):
+                await result
         async with checkpointer_context() as checkpointer, langgraph_store_context() as store:
             logger.info(
                 "agent_runtime_dispatch session_id=%s trace_id=%s runtime_path=%s",
