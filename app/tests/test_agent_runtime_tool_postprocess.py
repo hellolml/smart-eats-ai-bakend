@@ -52,7 +52,7 @@ async def test_apply_official_tool_postprocess_records_tool_observation_without_
     chat_state = AgentRuntimeState(
         session_id="s-tool",
         steps_left=2,
-        context={"active_skills": [{"id": "restaurant_finder"}]},
+        context={"active_skills": [{"id": "food_assistant"}]},
     )
     save_tool_message = AsyncMock()
     monkeypatch.setattr("app.agent.runtime.graph.conversation.save_tool_message", save_tool_message)

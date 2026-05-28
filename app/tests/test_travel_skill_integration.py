@@ -46,12 +46,14 @@ def test_travel_scene_food_words_stay_in_travel_skill_without_food_skills():
     assert "restaurant_finder" not in active_ids
 
 
-def test_food_decision_skill_is_bundled_and_activates_for_eat_request():
+def test_food_assistant_skill_is_bundled_and_activates_for_eat_request():
     skills = load_skills_from_path("agent_skills")
-    food = next((skill for skill in skills if skill.id == "food_decision"), None)
+    food = next((skill for skill in skills if skill.id == "food_assistant"), None)
 
     assert food is not None
     assert "food_decision" in food.tools.allow
+    assert "search_restaurants" in food.tools.allow
+    assert "get_fridge_items" in food.tools.allow
 
     state = AgentRuntimeState(
         session_id="s-food",
@@ -60,30 +62,19 @@ def test_food_decision_skill_is_bundled_and_activates_for_eat_request():
     )
     active = SkillResolver(skills).resolve(state, {"user_message": state.message})
 
-    assert "food_decision" in [skill.id for skill in active.skills]
+    assert [skill.id for skill in active.skills if skill.id == "food_assistant"] == ["food_assistant"]
 
 
-def test_food_decision_activates_for_nearby_food_wording():
-    skills = load_skills_from_path("agent_skills")
-    state = AgentRuntimeState(
-        session_id="s-food-nearby",
-        scene="eat",
-        message="恒伟星中心周边有什么吃的",
-    )
-
-    active = SkillResolver(skills).resolve(state, {"user_message": state.message})
-    active_ids = [skill.id for skill in active.skills]
-
-    assert AppBffService._infer_chat_intent(state.message) == "eat_out"
-    assert "food_decision" in active_ids
-    assert "restaurant_finder" in active_ids
-    assert any(reason.startswith("scene:eat") for reason in active.activation_reasons["food_decision"])
+def test_chat_intent_forces_unified_food_skill():
+    assert AppBffService._infer_chat_intent("今天吃点啥") == "food"
+    assert AppBffService._infer_chat_intent("出去吃") == "food"
+    assert AppBffService._infer_chat_intent("冰箱里有鸡蛋") == "food"
+    assert AppBffService._infer_chat_intent("换一家不辣的") == "food"
+    assert AppBffService._forced_skill_ids_for_intent("food") == ["food_assistant"]
 
 
-def test_chat_intent_forces_food_and_restaurant_skills():
-    assert AppBffService._infer_chat_intent("今天吃点啥") == "eat_out"
-    assert AppBffService._forced_skill_ids_for_intent("eat_out") == ["food_decision", "restaurant_finder"]
-    assert AppBffService._forced_skill_ids_for_intent("cook_home") == ["food_decision", "home_chef"]
+def test_chat_route_intent_wins_for_navigation_followup():
+    assert AppBffService._infer_chat_intent("第二家怎么走") == "route"
 
 
 def test_agent_runtime_config_keeps_travel_tools_out_of_core_allowlist():
