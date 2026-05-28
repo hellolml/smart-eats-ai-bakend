@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from app.agent.runtime.hooks import BaseSkillHooks
 from agent_skills.food_decision.hooks import FoodDecisionHooks
@@ -115,6 +116,21 @@ class FoodAssistantHooks(BaseSkillHooks):
             "需要先确认吃饭方式",
             ["回复“在家做”我就按冰箱和菜谱推荐。", "回复“出去吃”我就帮你找附近餐厅。"],
         )
+
+    def forced_tool_calls(self, state: Any) -> list[dict[str, Any]] | None:
+        if _current_food_mode(state) != "decide_food":
+            return None
+        return [
+            {
+                "name": "food_decision",
+                "args": {
+                    "query": getattr(state, "message", None) or "今天吃点啥",
+                    "scene": "food_decision",
+                },
+                "id": f"call_{uuid4().hex[:12]}_food",
+                "type": "tool_call",
+            }
+        ]
 
     def _handle_food_decision(self, state: Any, result: Any) -> dict[str, Any] | None:
         if not isinstance(result, dict) or result.get("error"):

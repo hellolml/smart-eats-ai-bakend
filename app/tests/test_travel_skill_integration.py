@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.agent.runtime.graph import AgentRuntimeState, _limit_skill_tool_calls, get_agent_runtime_config
-from app.agent.skills.loader import load_skills_from_path
+from app.agent.skills.loader import load_skill_body, load_skills_from_path
 from app.agent.skills.resolver import SkillResolver
 from app.domain.app.service import AppBffService
 
@@ -15,7 +15,9 @@ def test_travel_plan_new_skill_replaces_legacy_travel_planner_and_activates():
 
     assert legacy is None
     assert travel is not None
+    assert "travel_fetch_url_content" in travel.tools.allow
     assert "travel_search_poi" in travel.tools.allow
+    assert "travel_search_nearby_poi" in travel.tools.allow
     assert "travel_create_personal_map" in travel.tools.allow
 
     state = AgentRuntimeState(
@@ -28,6 +30,18 @@ def test_travel_plan_new_skill_replaces_legacy_travel_planner_and_activates():
     assert "travel_plan_new" in [skill.id for skill in active.skills]
     assert "travel_planner" not in [skill.id for skill in active.skills]
     assert any(reason.startswith("scene:travel_planner") for reason in active.activation_reasons["travel_plan_new"])
+
+
+def test_travel_plan_new_loads_complete_adapted_references():
+    skills = load_skills_from_path("agent_skills")
+    travel = next(skill for skill in skills if skill.id == "travel_plan_new")
+
+    body = load_skill_body(travel)
+
+    assert "用户补充地点最高优先级" in body
+    assert "美食补充必须是具体店名" in body
+    assert "相邻天通过共享端点衔接" in body
+    assert "travel_search_nearby_poi" in body
 
 
 def test_travel_scene_food_words_stay_in_travel_skill_without_food_skills():
@@ -235,3 +249,52 @@ async def test_travel_create_personal_map_returns_qr_payload(monkeypatch):
 
     assert result["qr_code_url"] == "https://example.com/qr.png"
     assert result["line_list"][0]["pointInfoList"][0]["name"] == "西湖"
+
+
+@pytest.mark.asyncio
+async def test_travel_search_nearby_poi_normalizes_amap_results(monkeypatch):
+    from app.agent.tools.travel_search_nearby_poi import travel_search_nearby_poi_tool
+
+    async def _fake_around_search(*_args, **_kwargs):
+        return [
+            {
+                "id": "F001",
+                "name": "知味观",
+                "address": "杭州市上城区",
+                "location": "120.170,30.250",
+                "distance": "320",
+            }
+        ]
+
+    monkeypatch.setattr("app.agent.tools.travel_search_nearby_poi.amap.around_search", _fake_around_search)
+
+    result = await travel_search_nearby_poi_tool.ainvoke(
+        {"keywords": "餐厅", "location": "120.148,30.242", "radius": 1000}
+    )
+
+    assert result["query"]["location"] == "120.148,30.242"
+    assert result["pois"][0]["poi_id"] == "F001"
+    assert result["pois"][0]["distance_meters"] == 320
+
+
+@pytest.mark.asyncio
+async def test_travel_fetch_url_content_success_and_failure(monkeypatch):
+    import importlib
+
+    module = importlib.import_module("app.agent.tools.travel_fetch_url_content")
+    from app.agent.tools.travel_fetch_url_content import travel_fetch_url_content_tool
+
+    def _fake_fetch_url_sync(url, _timeout):
+        if "bad" in url:
+            raise TimeoutError()
+        return {"parse_status": "success", "title": "杭州攻略", "text": "西湖\n灵隐寺", "error": None}
+
+    monkeypatch.setattr(module, "_fetch_url_sync", _fake_fetch_url_sync)
+
+    success = await travel_fetch_url_content_tool.ainvoke({"url": "https://example.com/guide"})
+    failure = await travel_fetch_url_content_tool.ainvoke({"url": "https://example.com/bad"})
+
+    assert success["parse_status"] == "success"
+    assert "西湖" in success["text"]
+    assert failure["parse_status"] == "failed"
+    assert failure["error"] == "timeout"

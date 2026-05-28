@@ -728,12 +728,11 @@ async def _resolve_runtime_skills(
     )
     if hook_context:
         context = _merge_context(context, hook_context)
-    context["allowed_tools"] = skill_runtime.allowed_tools if skill_runtime.active_skills else base_tools
-    travel_state = context.get("travel_state")
-    if isinstance(travel_state, dict) and travel_state.get("phase") == "candidates_confirmed":
-        context["allowed_tools"] = [
-            tool_name for tool_name in context["allowed_tools"] if tool_name != "travel_create_personal_map"
-        ]
+    allowed_tools = skill_runtime.allowed_tools if skill_runtime.active_skills else base_tools
+    context["allowed_tools"] = SkillHookManager.from_skills(skill_runtime.active_skill_specs).filter_allowed_tools(
+        state,
+        allowed_tools,
+    )
     return context, skill_runtime.system_prompt_addendum
 
 
@@ -1033,20 +1032,6 @@ def build_agent_runtime_graph(
         )
         raw_content = ai_message.content
         normalized_tool_calls = ai_message.tool_calls
-        if (
-            chat_state.scene == "eat"
-            and "food_decision" in current_allowed_tools
-            and not normalized_tool_calls
-        ):
-            logger.info("agent_forcing_food_decision_tool session_id=%s", chat_state.session_id)
-            normalized_tool_calls = [
-                {
-                    "name": "food_decision",
-                    "args": {"query": user or "今天吃点啥", "scene": "eat"},
-                    "id": f"call_{uuid4().hex[:12]}_food",
-                    "type": "tool_call",
-                }
-            ]
         if not normalized_tool_calls:
             forced_tool_calls = hook_manager.forced_tool_calls(chat_state)
             if forced_tool_calls:

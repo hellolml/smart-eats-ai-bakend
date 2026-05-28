@@ -273,6 +273,80 @@ def test_travel_plan_new_confirm_candidates_waits_for_itinerary_confirmation():
     assert "禁止调用 travel_create_personal_map" in context["system_directive"]
 
 
+def test_travel_plan_new_tracks_added_and_removed_candidates():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_action": "add_candidates",
+            "travel_payload": {
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_001",
+                        "name": "西湖",
+                        "poi": {"poi_id": "B001", "longitude": 120.148, "latitude": 30.242},
+                    },
+                    {
+                        "candidate_id": "candidate_002",
+                        "name": "断桥",
+                        "poi": {"poi_id": "B002", "longitude": 120.147, "latitude": 30.257},
+                    },
+                ],
+                "removed_places": ["断桥"],
+                "user_added_places": [{"name": "知味观湖滨店", "category": "restaurant"}],
+            },
+        },
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+
+    names = [item["name"] for item in context["travel_state"]["candidates"]]
+    assert names == ["西湖", "知味观湖滨店"]
+    assert context["travel_state"]["user_added_places"][0]["name"] == "知味观湖滨店"
+    assert context["travel_state"]["excluded_places"] == ["断桥"]
+
+
+def test_travel_plan_new_warns_for_generic_food_addition():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_action": "add_candidates",
+            "travel_payload": {"user_added_places": [{"name": "火锅", "category": "restaurant"}]},
+        },
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+
+    assert "具体店名" in context["system_directive"]
+
+
+def test_travel_plan_new_filters_map_tool_until_itinerary_confirmation():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_payload": {
+                "itinerary": {"days": [{"day_number": 1, "items": [{"place_name": "西湖"}]}]},
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_001",
+                        "name": "西湖",
+                        "poi": {"poi_id": "B001", "longitude": 120.148, "latitude": 30.242},
+                    }
+                ],
+            }
+        },
+    )
+
+    allowed = TravelPlanNewHooks().filter_allowed_tools(
+        state,
+        ["travel_search_poi", "travel_create_personal_map"],
+    )
+
+    assert allowed == ["travel_search_poi"]
+
+
 def test_travel_plan_new_forces_map_tool_after_itinerary_confirmation():
     state = AgentRuntimeState(
         session_id="s1",
@@ -306,6 +380,43 @@ def test_travel_plan_new_forces_map_tool_after_itinerary_confirmation():
     assert calls is not None
     assert calls[0]["name"] == "travel_create_personal_map"
     assert calls[0]["args"]["line_list"][0]["pointInfoList"][0]["poiId"] == "B001"
+
+
+def test_travel_plan_new_line_list_uses_verified_pois_and_connects_days():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_action": "generate_map",
+            "travel_payload": {
+                "trip_meta": {"destination": "杭州", "days": 2},
+                "candidates": [
+                    {
+                        "name": "西湖",
+                        "poi": {"poi_id": "B001", "name": "西湖", "longitude": 120.148, "latitude": 30.242},
+                    },
+                    {
+                        "name": "灵隐寺",
+                        "poi": {"poi_id": "B002", "name": "灵隐寺", "longitude": 120.101, "latitude": 30.240},
+                    },
+                    {"name": "未验证地点"},
+                ],
+                "itinerary": {
+                    "days": [
+                        {"day_number": 1, "items": [{"place_name": "西湖"}]},
+                        {"day_number": 2, "items": [{"place_name": "灵隐寺"}, {"place_name": "未验证地点"}]},
+                    ]
+                },
+            },
+        },
+    )
+
+    calls = TravelPlanNewHooks().forced_tool_calls(state)
+    line_list = calls[0]["args"]["line_list"]
+
+    assert [point["poiId"] for point in line_list[0]["pointInfoList"]] == ["B001"]
+    assert line_list[1]["pointInfoList"][0]["poiId"] == "B001"
+    assert all(point["poiId"] != "" for line in line_list for point in line["pointInfoList"])
 
 
 def test_travel_plan_new_hook_enables_vision_for_attachments():

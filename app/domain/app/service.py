@@ -2769,10 +2769,6 @@ class AppBffService:
         text = str(message or "")
         if not text:
             return None
-        if any(token in text for token in ("做饭", "在家做", "菜谱", "食谱", "冰箱", "食材", "自己做")):
-            return "cook_home"
-        if any(token in text for token in ("吃点啥", "吃什么", "吃的", "吃啥", "今天吃", "晚饭", "午饭", "早餐", "夜宵", "外卖", "餐厅", "饭店", "美食", "好吃", "周边吃", "附近吃", "附近美食", "推荐吃", "出去吃", "外面吃", "去哪吃")):
-            return "eat_out"
         if any(token in text for token in ("路线", "导航", "怎么走", "怎么去")):
             return "route"
         if any(
@@ -2780,6 +2776,8 @@ class AppBffService:
             for token in (
                 "吃点啥",
                 "吃什么",
+                "吃的",
+                "吃啥",
                 "今天吃",
                 "晚饭",
                 "午饭",
@@ -2788,6 +2786,12 @@ class AppBffService:
                 "外卖",
                 "餐厅",
                 "饭店",
+                "美食",
+                "好吃",
+                "周边吃",
+                "附近吃",
+                "附近美食",
+                "推荐吃",
                 "出去吃",
                 "外面吃",
                 "去哪吃",

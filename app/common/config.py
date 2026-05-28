@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     AGENT_SKILLS_ENABLED: bool = True
     AGENT_SKILLS_PATH: str = "agent_skills"
     AGENT_SKILLS_MAX_ACTIVE: int = 3
-    AGENT_SKILLS_MAX_PROMPT_CHARS: int = 12000
+    AGENT_SKILLS_MAX_PROMPT_CHARS: int = 80000
     AGENT_SKILLS_LOG_DIAGNOSTICS: bool = True
     LANGGRAPH_CHECKPOINT_DB: str = ".langgraph_checkpoints.sqlite"
     LANGGRAPH_DURABILITY: str = "async"

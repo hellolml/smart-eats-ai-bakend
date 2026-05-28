@@ -18,6 +18,8 @@ class TravelPlanNewHooks(BaseSkillHooks):
         map_payload = _latest_map_payload(state)
         itinerary = _payload_itinerary(overrides)
         trip_meta = _trip_meta(state, context, overrides)
+        excluded_places = _payload_excluded_places(overrides)
+        user_added_places = _payload_user_added_places(overrides)
         phase = _phase(action=action, candidates=candidates, itinerary=itinerary, map_payload=map_payload)
 
         return {
@@ -29,6 +31,8 @@ class TravelPlanNewHooks(BaseSkillHooks):
                 "travel_action": action,
                 "trip_meta": trip_meta,
                 "candidates": candidates,
+                "excluded_places": excluded_places,
+                "user_added_places": user_added_places,
                 "failed_places": _collect_failed_places(state),
                 "itinerary": itinerary,
                 "map": _map_summary(map_payload),
@@ -39,6 +43,8 @@ class TravelPlanNewHooks(BaseSkillHooks):
                 action=action,
                 candidate_count=len(candidates),
                 has_attachments=_has_attachments(context),
+                has_url_failures=bool(_url_failures(state)),
+                generic_food_additions=_generic_food_additions(user_added_places),
             ),
         }
 
@@ -49,6 +55,18 @@ class TravelPlanNewHooks(BaseSkillHooks):
             if destination and not normalized.get("city"):
                 normalized["city"] = destination
             normalized.setdefault("page_size", 5)
+        if tool_name == "travel_search_nearby_poi":
+            normalized.setdefault("page_size", 5)
+            normalized.setdefault("radius", 1500)
+            if not normalized.get("location") and not (
+                normalized.get("longitude") is not None and normalized.get("latitude") is not None
+            ):
+                poi = _first_verified_poi(state)
+                if poi:
+                    normalized["longitude"] = poi.get("longitude")
+                    normalized["latitude"] = poi.get("latitude")
+        if tool_name == "travel_fetch_url_content":
+            normalized.setdefault("timeout_seconds", 8)
         if tool_name == "travel_create_personal_map":
             overrides = _context_overrides(state)
             trip_meta = _trip_meta(state, {}, overrides)
@@ -67,6 +85,23 @@ class TravelPlanNewHooks(BaseSkillHooks):
                 "count": len(pois),
                 "names": [str(item.get("name")) for item in pois[:5] if item.get("name")],
             }
+        if tool_name == "travel_search_nearby_poi" and isinstance(result, dict):
+            pois = _valid_pois(result)
+            return {
+                "status": "nearby_poi_found" if pois else "nearby_poi_not_found",
+                "query": result.get("query"),
+                "count": len(pois),
+                "names": [str(item.get("name")) for item in pois[:5] if item.get("name")],
+            }
+        if tool_name == "travel_fetch_url_content" and isinstance(result, dict):
+            text = str(result.get("text") or "")
+            return {
+                "status": result.get("parse_status") or "failed",
+                "url": result.get("url"),
+                "title": result.get("title"),
+                "text_chars": len(text),
+                "error": result.get("error"),
+            }
         if tool_name == "travel_create_personal_map" and isinstance(result, dict):
             return {
                 "status": "map_generated" if result.get("qr_code_url") or result.get("schema_url") else "map_unavailable",
@@ -79,11 +114,17 @@ class TravelPlanNewHooks(BaseSkillHooks):
     def handle_tool_result(self, state: Any, tool_name: str, result: Any) -> dict[str, Any] | None:
         overrides = _context_overrides(state)
         action = _travel_action(overrides)
-        if tool_name == "travel_search_poi" and action != "confirm_candidates":
+        if tool_name in {"travel_search_poi", "travel_search_nearby_poi"} and action != "confirm_candidates":
             candidates = _collect_verified_candidates(state)
             if not candidates:
                 return _no_places_final(state, result)
             return _candidate_confirmation_final(state, candidates)
+
+        if tool_name == "travel_fetch_url_content" and isinstance(result, dict) and result.get("parse_status") == "failed":
+            candidates = _collect_verified_candidates(state)
+            if candidates:
+                return _candidate_confirmation_final(state, candidates)
+            return _url_fetch_failed_final(state, result)
 
         if tool_name == "travel_create_personal_map" and isinstance(result, dict):
             return _map_final(state, result)
@@ -139,6 +180,21 @@ class TravelPlanNewHooks(BaseSkillHooks):
                 "type": "tool_call",
             }
         ]
+
+    def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
+        overrides = _context_overrides(state)
+        action = _travel_action(overrides)
+        phase = _phase(
+            action=action,
+            candidates=_collect_verified_candidates(state),
+            itinerary=_payload_itinerary(overrides),
+            map_payload=_latest_map_payload(state),
+        )
+        if _is_map_action(action):
+            return None
+        if phase != "map_generated":
+            return [tool_name for tool_name in allowed_tools if tool_name != "travel_create_personal_map"]
+        return None
 
 
 def _context_overrides(state: Any) -> dict[str, Any]:
@@ -198,14 +254,30 @@ def _phase(
     return "ingesting_content"
 
 
-def _system_directive(*, phase: str, action: str, candidate_count: int, has_attachments: bool) -> str:
+def _system_directive(
+    *,
+    phase: str,
+    action: str,
+    candidate_count: int,
+    has_attachments: bool,
+    has_url_failures: bool,
+    generic_food_additions: list[str],
+) -> str:
     attachment_note = "当前有图片附件，必须先从图片中识别地点。" if has_attachments else "当前没有图片附件，优先使用用户文本中的攻略原文或 URL。"
+    url_note = "已有 URL 获取失败记录；继续基于成功来源处理，并提示用户改用截图或粘贴原文。" if has_url_failures else ""
+    food_note = ""
+    if generic_food_additions:
+        food_note = (
+            "用户补充的美食地点不够具体："
+            f"{'、'.join(generic_food_additions)}。必须先请用户补充可在高德检索的具体店名。"
+        )
     if phase == "candidates_confirmed":
         return (
             "旅行规划候选已确认。现在只生成结构化 itinerary.days，并通过 submit_final_answer 返回 "
             "state=itinerary_generated、await_confirmation=true、trip_meta、candidates、itinerary.days、"
             "map={qr_code_url:null,schema_url:null}、raw_text。"
             "本阶段禁止调用 travel_create_personal_map；必须引导用户确认行程后再生成高德地图二维码。"
+            f"{food_note}"
         )
     if phase == "itinerary_generated" and _is_map_action(action):
         return (
@@ -222,6 +294,7 @@ def _system_directive(*, phase: str, action: str, candidate_count: int, has_atta
         return (
             f"已验证 {candidate_count} 个候选 POI。必须停在候选确认阶段，展示候选并等待用户确认；"
             "同时展示验证失败的地点和原因，引导用户增删地点；用户确认前禁止生成最终每日行程或高德地图。"
+            f"{food_note}"
         )
     return (
         "旅行规划必须按 created -> ingesting_content -> places_extracted -> candidates_ready -> "
@@ -229,6 +302,7 @@ def _system_directive(*, phase: str, action: str, candidate_count: int, has_atta
         f"{attachment_note} 先提取地点，再用 travel_search_poi 验证 POI。"
         "如果用户上传了图片，你必须逐一识别图片中的景点、餐厅、酒店、商圈、车站等地点；"
         "图片清晰可读时禁止直接说无法识别图片；确实无法识别时先说明图片中可见内容并请求用户补充原文。"
+        f"{url_note}{food_note}"
     )
 
 
@@ -247,7 +321,38 @@ def _sources(state: Any) -> list[dict[str, Any]]:
                         "parse_status": "image_received",
                     }
                 )
+    observations = getattr(state, "observations", None)
+    if isinstance(observations, list):
+        for observation in observations:
+            if not isinstance(observation, dict) or observation.get("tool") != "travel_fetch_url_content":
+                continue
+            result = observation.get("result")
+            if not isinstance(result, dict):
+                continue
+            sources.append(
+                {
+                    "type": "url",
+                    "url": result.get("url"),
+                    "title": result.get("title"),
+                    "parse_status": result.get("parse_status") or "failed",
+                    "error": result.get("error"),
+                }
+            )
     return sources
+
+
+def _url_failures(state: Any) -> list[dict[str, Any]]:
+    observations = getattr(state, "observations", None)
+    failures: list[dict[str, Any]] = []
+    if not isinstance(observations, list):
+        return failures
+    for observation in observations:
+        if not isinstance(observation, dict) or observation.get("tool") != "travel_fetch_url_content":
+            continue
+        result = observation.get("result")
+        if isinstance(result, dict) and result.get("parse_status") == "failed":
+            failures.append(result)
+    return failures
 
 
 def _valid_pois(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -279,7 +384,7 @@ def _collect_verified_candidates(state: Any) -> list[dict[str, Any]]:
     if not isinstance(observations, list):
         return candidates
     for observation in observations:
-        if not isinstance(observation, dict) or observation.get("tool") != "travel_search_poi":
+        if not isinstance(observation, dict) or observation.get("tool") not in {"travel_search_poi", "travel_search_nearby_poi"}:
             continue
         result = observation.get("result")
         if not isinstance(result, dict):
@@ -307,6 +412,9 @@ def _collect_verified_candidates(state: Any) -> list[dict[str, Any]]:
                     },
                 }
             )
+    excluded = _payload_excluded_places(_context_overrides(state))
+    if excluded:
+        candidates = [item for item in candidates if not _matches_excluded(item, excluded)]
     return candidates
 
 
@@ -345,7 +453,111 @@ def _payload_candidates(overrides: dict[str, Any]) -> list[dict[str, Any]]:
                 },
             }
         )
+    seen = {_candidate_key(item) for item in candidates}
+    for added in _payload_user_added_places(overrides):
+        key = _candidate_key(added)
+        if key in seen:
+            for existing in candidates:
+                if _candidate_key(existing) == key:
+                    existing["source"] = "user_added"
+                    existing["score"] = 10
+                    existing["reason"] = "用户补充地点，最高优先级"
+            continue
+        seen.add(key)
+        candidates.append(
+            {
+                "candidate_id": added.get("candidate_id") or f"candidate_{len(candidates) + 1:03d}",
+                "name": added.get("name"),
+                "category": added.get("category") or "attraction",
+                "source": "user_added",
+                "score": 10,
+                "reason": added.get("reason") or "用户补充地点，最高优先级",
+                "poi": {
+                    "poi_id": added.get("poi_id"),
+                    "name": added.get("name"),
+                    "address": added.get("address"),
+                    "longitude": added.get("longitude"),
+                    "latitude": added.get("latitude"),
+                },
+            }
+        )
+    excluded = _payload_excluded_places(overrides)
+    if excluded:
+        candidates = [item for item in candidates if not _matches_excluded(item, excluded)]
     return candidates
+
+
+def _payload_user_added_places(overrides: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = overrides.get("travel_payload")
+    payload = payload if isinstance(payload, dict) else {}
+    raw_items = payload.get("user_added_places") or payload.get("added_places") or payload.get("additions") or []
+    if not isinstance(raw_items, list):
+        raw_items = [raw_items]
+    places: list[dict[str, Any]] = []
+    for item in raw_items:
+        normalized = _normalize_user_added_place(item)
+        if normalized:
+            places.append(normalized)
+    return places
+
+
+def _normalize_user_added_place(item: Any) -> dict[str, Any] | None:
+    if isinstance(item, str):
+        name = item.strip()
+        return {"name": name, "category": _category_from_text(name)} if name else None
+    if not isinstance(item, dict):
+        return None
+    poi = item.get("poi") if isinstance(item.get("poi"), dict) else {}
+    name = str(item.get("name") or poi.get("name") or "").strip()
+    if not name:
+        return None
+    longitude = item.get("longitude") if item.get("longitude") is not None else poi.get("longitude")
+    latitude = item.get("latitude") if item.get("latitude") is not None else poi.get("latitude")
+    return {
+        "candidate_id": item.get("candidate_id"),
+        "name": name,
+        "category": item.get("category") or _category_from_text(name),
+        "reason": item.get("reason"),
+        "poi_id": item.get("poi_id") or poi.get("poi_id"),
+        "address": item.get("address") or poi.get("address"),
+        "longitude": longitude,
+        "latitude": latitude,
+    }
+
+
+def _payload_excluded_places(overrides: dict[str, Any]) -> list[str]:
+    payload = overrides.get("travel_payload")
+    payload = payload if isinstance(payload, dict) else {}
+    raw_items = (
+        payload.get("excluded_places")
+        or payload.get("removed_places")
+        or payload.get("deleted_places")
+        or payload.get("delete_places")
+        or []
+    )
+    if not isinstance(raw_items, list):
+        raw_items = [raw_items]
+    names: list[str] = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            value = item.get("candidate_id") or item.get("name")
+        else:
+            value = item
+        name = str(value or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _candidate_key(item: dict[str, Any]) -> str:
+    poi = item.get("poi") if isinstance(item.get("poi"), dict) else {}
+    return str(item.get("candidate_id") or poi.get("poi_id") or item.get("poi_id") or item.get("name") or "").strip()
+
+
+def _matches_excluded(item: dict[str, Any], excluded: list[str]) -> bool:
+    key = _candidate_key(item)
+    name = str(item.get("name") or "").strip()
+    return any(value and (value == key or value == name or value in name) for value in excluded)
 
 
 def _payload_itinerary(overrides: dict[str, Any]) -> dict[str, Any]:
@@ -369,7 +581,7 @@ def _collect_failed_places(state: Any) -> list[dict[str, Any]]:
     failed: list[dict[str, Any]] = []
     seen: set[str] = set()
     for observation in observations:
-        if not isinstance(observation, dict) or observation.get("tool") != "travel_search_poi":
+        if not isinstance(observation, dict) or observation.get("tool") not in {"travel_search_poi", "travel_search_nearby_poi"}:
             continue
         result = observation.get("result")
         if not isinstance(result, dict):
@@ -398,6 +610,60 @@ def _category_from_query(query: dict[str, Any]) -> str:
     if any(token in text for token in ("酒店", "住宿", "hotel")):
         return "hotel"
     return "attraction"
+
+
+def _category_from_text(text: str) -> str:
+    value = str(text or "").lower()
+    if any(token in value for token in ("餐", "饭", "美食", "咖啡", "拉面", "火锅", "restaurant", "food", "cafe")):
+        return "restaurant"
+    if any(token in value for token in ("酒店", "住宿", "民宿", "hotel")):
+        return "hotel"
+    if any(token in value for token in ("机场", "车站", "火车站", "地铁", "transport")):
+        return "transport_hub"
+    return "attraction"
+
+
+def _generic_food_additions(user_added_places: list[dict[str, Any]]) -> list[str]:
+    generic: list[str] = []
+    for item in user_added_places:
+        category = str(item.get("category") or "")
+        name = str(item.get("name") or "").strip()
+        if category in {"restaurant", "cafe", "nightlife", "food"} and _is_generic_food_name(name):
+            generic.append(name)
+    return generic
+
+
+def _is_generic_food_name(name: str) -> bool:
+    value = str(name or "").strip()
+    if not value:
+        return False
+    generic_exact = {
+        "美食",
+        "当地美食",
+        "特色美食",
+        "午餐",
+        "晚餐",
+        "早餐",
+        "餐厅",
+        "饭店",
+        "小吃",
+        "咖啡",
+        "火锅",
+        "烧烤",
+        "面馆",
+        "夜市",
+    }
+    if value in generic_exact:
+        return True
+    return any(token in value for token in ("附近", "随便", "吃饭", "吃点", "好吃的"))
+
+
+def _first_verified_poi(state: Any) -> dict[str, Any] | None:
+    for candidate in _collect_verified_candidates(state):
+        poi = candidate.get("poi") if isinstance(candidate.get("poi"), dict) else {}
+        if poi.get("longitude") is not None and poi.get("latitude") is not None:
+            return poi
+    return None
 
 
 def _latest_map_payload(state: Any) -> dict[str, Any] | None:
@@ -473,6 +739,31 @@ def _no_places_final(state: Any, result: Any) -> dict[str, Any]:
     }
 
 
+def _url_fetch_failed_final(state: Any, result: dict[str, Any]) -> dict[str, Any]:
+    error = str(result.get("error") or "URL 内容获取失败")
+    url = str(result.get("url") or "")
+    return {
+        "state": "ingesting_content",
+        "await_confirmation": False,
+        "trip_meta": _trip_meta(state, {}, _context_overrides(state)),
+        "sources": _sources(state),
+        "places": [],
+        "candidates": [],
+        "failed_places": [],
+        "itinerary": {"days": []},
+        "map": {"qr_code_url": None, "schema_url": None},
+        "raw_text": str(getattr(state, "message", "") or ""),
+        "recommendations": [
+            {
+                "title": "攻略链接暂时无法读取",
+                "reason": "我会跳过失败链接；为了提高成功率，建议上传攻略截图或直接粘贴攻略原文。",
+            }
+        ],
+        "followups": ["请补充截图或攻略原文后，我会继续提取候选地点。"],
+        "warnings": [f"{url}：{error}" if url else error],
+    }
+
+
 def _map_final(state: Any, result: dict[str, Any]) -> dict[str, Any]:
     line_list = result.get("line_list") if isinstance(result.get("line_list"), list) else []
     days = _days_from_line_list(line_list)
@@ -533,6 +824,7 @@ def _line_list_from_payload(overrides: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(raw_items, list):
             raw_items = []
         points: list[dict[str, Any]] = []
+        seen_poi_ids: set[str] = set()
         for item in raw_items:
             item_name = item.get("place_name") or item.get("name") or item.get("title") if isinstance(item, dict) else item
             name = str(item_name or "").strip()
@@ -553,12 +845,17 @@ def _line_list_from_payload(overrides: dict[str, Any]) -> list[dict[str, Any]]:
                 poi = item
             longitude = poi.get("longitude") or poi.get("lon")
             latitude = poi.get("latitude") or poi.get("lat")
-            if longitude is None or latitude is None:
+            poi_id = poi.get("poi_id") or poi.get("poiId")
+            if not poi_id or longitude is None or latitude is None:
                 continue
+            poi_id = str(poi_id)
+            if poi_id in seen_poi_ids:
+                continue
+            seen_poi_ids.add(poi_id)
             points.append(
                 {
                     "name": name,
-                    "poiId": poi.get("poi_id") or poi.get("poiId"),
+                    "poiId": poi_id,
                     "lon": longitude,
                     "lat": latitude,
                 }
@@ -570,6 +867,36 @@ def _line_list_from_payload(overrides: dict[str, Any]) -> list[dict[str, Any]]:
                     "pointInfoList": points[:16],
                 }
             )
+    return _connect_line_list_days(line_list)
+
+
+def _connect_line_list_days(line_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for index in range(len(line_list) - 1):
+        current_points = line_list[index].get("pointInfoList")
+        next_points = line_list[index + 1].get("pointInfoList")
+        if not isinstance(current_points, list) or not current_points:
+            continue
+        if not isinstance(next_points, list) or not next_points:
+            continue
+        current_end = current_points[-1]
+        next_start = next_points[0]
+        if not isinstance(current_end, dict) or not isinstance(next_start, dict):
+            continue
+        if current_end.get("poiId") == next_start.get("poiId"):
+            continue
+        shared = dict(current_end)
+        deduped = [shared]
+        seen = {str(shared.get("poiId"))}
+        for point in next_points:
+            if not isinstance(point, dict):
+                continue
+            poi_id = str(point.get("poiId") or "")
+            if poi_id and poi_id in seen:
+                continue
+            if poi_id:
+                seen.add(poi_id)
+            deduped.append(point)
+        line_list[index + 1]["pointInfoList"] = deduped[:16]
     return line_list
 
 

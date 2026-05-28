@@ -42,6 +42,9 @@ class SkillHooks(Protocol):
     def forced_tool_calls(self, state: Any) -> list[dict[str, Any]] | None:
         return None
 
+    def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
+        return None
+
 
 class BaseSkillHooks:
     def build_context(
@@ -71,6 +74,9 @@ class BaseSkillHooks:
         return None
 
     def forced_tool_calls(self, state: Any) -> list[dict[str, Any]] | None:
+        return None
+
+    def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
         return None
 
 
@@ -148,6 +154,14 @@ class SkillHookManager:
             if isinstance(hook_calls, list):
                 calls.extend(item for item in hook_calls if isinstance(item, dict))
         return calls
+
+    def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str]:
+        filtered = list(allowed_tools)
+        for hook in self.hooks:
+            next_tools = hook.filter_allowed_tools(state, filtered)
+            if isinstance(next_tools, list):
+                filtered = [item for item in next_tools if isinstance(item, str)]
+        return filtered
 
 
 def load_skill_hooks(skill: SkillSpec) -> SkillHooks | None:

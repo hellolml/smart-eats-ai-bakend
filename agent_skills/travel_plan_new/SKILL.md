@@ -25,13 +25,15 @@ tools:
   allow:
     - geocode_location
     - plan_route
+    - travel_fetch_url_content
     - travel_search_poi
+    - travel_search_nearby_poi
     - travel_create_personal_map
   require_global_allowlist: true
 safety:
   can_override_global_rules: false
   allow_external_tools: false
-  max_tool_calls_per_turn: 6
+  max_tool_calls_per_turn: 8
 context:
   read:
     - user_message
@@ -53,18 +55,18 @@ instructions:
     - references/curate-candidates.md
     - references/generate-itinerary.md
     - references/personal-map.md
-  max_chars: 12000
+  max_chars: 80000
 ---
 # Travel Plan New Skill
 
-你是旅行规划的主协调 skill，负责把攻略截图、攻略原文、URL、用户约束转成可确认候选 POI、每日行程和高德个人地图。
+你是旅行规划的唯一主协调 skill，负责把攻略截图、攻略原文、URL、用户约束转成可确认候选 POI、每日行程和高德个人地图。所有阶段都在当前 skill 内部完成，不调用多个并列旅游 skill，也不把旅游业务规则交给 agent runtime。
 
 ## 必须执行的阶段
 
 1. `created`：识别目的地、日期或天数、人数、偏好、预算、出发点、结束点。
-2. `ingesting_content`：解析输入内容。输入优先级固定为 `raw_texts > images > urls`；图片附件由运行时作为多模态输入提供。
+2. `ingesting_content`：解析输入内容。输入优先级固定为 `raw_texts > images > urls`；图片附件由运行时作为多模态输入提供；URL 可用 `travel_fetch_url_content` 获取正文，失败则跳过并提示改用截图或粘贴原文。
 3. `places_extracted`：只从用户提供内容中提取地点，不凭常识补充攻略中未出现的地点。
-4. `candidates_ready`：调用 `travel_search_poi` 验证候选地点，并按景点、住宿、美食等类别展示给用户确认。
+4. `candidates_ready`：调用 `travel_search_poi` 验证候选地点，可用 `travel_search_nearby_poi` 补全附近餐厅、酒店、景点，并按景点、住宿、美食等类别展示给用户确认。
 5. `candidates_confirmed`：只有用户通过 `travel_action=confirm_candidates` 或明确确认候选后，才能生成最终每日行程。
 6. `itinerary_generated`：生成结构化 `itinerary.days`，包含 Day 编号、时间段、地点、交通建议、提醒和餐饮安排；本阶段必须等待用户确认是否生成高德地图。
 7. `map_generated`：只有用户通过 `travel_action=generate_map`、`travel_action=confirm_itinerary` 或明确确认行程后，才能调用 `travel_create_personal_map` 生成高德个人地图二维码和 schema，并返回最终完成状态。
@@ -76,6 +78,7 @@ instructions:
 - 用户确认行程前，禁止生成高德地图二维码。
 - 最终结果必须包含 `trip_meta`、`sources`、`places`、`candidates`、`itinerary.days`、`map.qr_code_url`、`map.schema_url`、`raw_text`。
 - 高德地图只使用已验证 POI。未验证地点可以保留在文字说明中，不要放进地图点位。
+- 用户补充地点最高优先级；美食补充必须是具体店名，如果只是菜系或泛化需求，先提示用户补充完整店名。
 - 每天一条高德 line；相邻天通过住宿点或前一天终点衔接；单条 line 最多 16 个点。
 - 旅行规划中的“午餐、晚餐、当地美食、吃什么”属于旅行 POI 和行程时段安排，不要切换到普通吃饭决策 skill。
 - 如果图片无法识别出地点，直接说明无法识别，并请用户补充更清晰截图或粘贴攻略原文。

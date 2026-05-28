@@ -80,8 +80,6 @@ def _render_final_text(final_json: dict[str, Any]) -> str:
     recommendations = final_json.get("recommendations")
     followups = final_json.get("followups")
     warnings = final_json.get("warnings")
-    state = str(final_json.get("state") or "")
-    raw_text = str(final_json.get("raw_text") or "").strip()
 
     rec_lines: list[str] = []
     if isinstance(recommendations, list):
@@ -108,34 +106,6 @@ def _render_final_text(final_json: dict[str, Any]) -> str:
         warning_lines = [str(item).strip() for item in warnings if str(item).strip()]
 
     chunks: list[str] = []
-    if raw_text and state == "itinerary_generated":
-        chunks.append(raw_text)
-    elif state == "itinerary_generated":
-        itinerary = final_json.get("itinerary")
-        days = itinerary.get("days") if isinstance(itinerary, dict) else None
-        if isinstance(days, list) and days:
-            day_lines: list[str] = []
-            for index, day in enumerate(days, start=1):
-                if not isinstance(day, dict):
-                    continue
-                title = day.get("theme") or day.get("title") or f"Day {day.get('day_number') or index}"
-                day_lines.append(f"### {title}")
-                items = day.get("items")
-                if isinstance(items, list):
-                    for item in items:
-                        if isinstance(item, str):
-                            day_lines.append(f"- {item}")
-                        elif isinstance(item, dict):
-                            name = item.get("place_name") or item.get("name") or item.get("title")
-                            note = item.get("summary") or item.get("note") or item.get("transport")
-                            if name and note:
-                                day_lines.append(f"- {name}：{note}")
-                            elif name:
-                                day_lines.append(f"- {name}")
-                day_lines.append("")
-            rendered_days = "\n".join(day_lines).strip()
-            if rendered_days:
-                chunks.append(rendered_days)
     if rec_lines:
         chunks.append("\n".join([f"- {line}" for line in rec_lines]))
     if follow_lines:

@@ -22,6 +22,8 @@ from app.agent.tools.rag_search_recipes import rag_search_recipes_tool
 from app.agent.tools.search_recipes import search_recipes_tool
 from app.agent.tools.search_restaurants import search_restaurants_tool
 from app.agent.tools.travel_create_personal_map import travel_create_personal_map_tool
+from app.agent.tools.travel_fetch_url_content import travel_fetch_url_content_tool
+from app.agent.tools.travel_search_nearby_poi import travel_search_nearby_poi_tool
 from app.agent.tools.travel_search_poi import travel_search_poi_tool
 
 
@@ -41,7 +43,9 @@ ALL_TOOLS: tuple[BaseTool, ...] = (
     memory_update_tool,
     memory_forget_tool,
     source_event_search_tool,
+    travel_fetch_url_content_tool,
     travel_search_poi_tool,
+    travel_search_nearby_poi_tool,
     travel_create_personal_map_tool,
 )
 
