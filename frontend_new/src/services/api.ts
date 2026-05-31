@@ -653,5 +653,38 @@ export const appApi = {
         method: 'DELETE'
       });
     }
+  },
+  modelConfig: {
+    async list() {
+      return request<import('../types').ModelConfig[]>('/chat/model-configs');
+    },
+    async create(payload: import('../types').ModelConfigInput) {
+      return request<import('../types').ModelConfig>('/chat/model-configs', {
+        method: 'POST',
+        body: payload
+      });
+    },
+    async update(configId: string, payload: import('../types').ModelConfigInput) {
+      return request<import('../types').ModelConfig>(`/chat/model-configs/${configId}`, {
+        method: 'PATCH',
+        body: payload
+      });
+    },
+    async remove(configId: string) {
+      return request<{ deleted: boolean }>(`/chat/model-configs/${configId}`, {
+        method: 'DELETE'
+      });
+    },
+    async setDefault(configId: string) {
+      return request<import('../types').ModelConfig>(`/chat/model-configs/${configId}/default`, {
+        method: 'POST'
+      });
+    },
+    async test(payload: { config_id?: string; provider_type?: string; base_url?: string; api_key?: string; model?: string }) {
+      return request<import('../types').TestConfigResult>('/chat/model-configs/test', {
+        method: 'POST',
+        body: payload
+      });
+    }
   }
 };

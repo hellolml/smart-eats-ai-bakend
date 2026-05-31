@@ -83,12 +83,33 @@ instructions:
 - 旅行规划中的“午餐、晚餐、当地美食、吃什么”属于旅行 POI 和行程时段安排，不要切换到普通吃饭决策 skill。
 - 如果图片无法识别出地点，直接说明无法识别，并请用户补充更清晰截图或粘贴攻略原文。
 
-## 参考规则
+## 阶段与参考文件映射
 
-更完整的迁移规则存放在本 skill 的 `references/`：
+每个阶段必须按照下表执行：读取对应参考文件、调用指定工具、完成指定动作后才能流转到下一阶段。跳过任何阶段都会导致数据断裂，前端无法正确展示。
 
-- `orchestrate-travel-content.md`
-- `extract-places.md`
-- `curate-candidates.md`
-- `generate-itinerary.md`
-- `personal-map.md`
+| 阶段 | 参考文件 | 必须调用的工具 | 必须完成的动作 | 流转条件 |
+|------|---------|--------------|--------------|---------|
+| `created` | `orchestrate-travel-content.md` §1 | 无 | 从用户消息中识别并结构化 `trip_meta`（目的地、天数、偏好等） | `trip_meta.destination` 非空 |
+| `ingesting_content` | `extract-places.md` + `orchestrate-travel-content.md` §2 | `travel_fetch_url_content`（如有 URL） | 按优先级 `raw_texts > images > urls` 解析内容；图片通过多模态识别；URL 获取失败则跳过并提示 | 至少解析出一个地点名称 |
+| `places_extracted` | `extract-places.md` §3-9 | 无 | 从解析内容中提取结构化地点列表（名称、类别、上下文片段），不凭常识补充 | 地点列表非空 |
+| `candidates_ready` | `curate-candidates.md` | `travel_search_poi`（验证每个地点）+ `travel_search_nearby_poi`（补全附近餐厅酒店） | **必须调用** POI 验证工具；验证成功后按景点/住宿/美食分类展示候选列表；展示验证失败的地点和原因；**必须停下来等用户确认** | 用户通过 `travel_action=confirm_candidates` 或明确确认 |
+| `candidates_confirmed` | `curate-candidates.md` §8 | 无 | 记录用户增删后的最终候选列表 | 候选列表已确认 |
+| `itinerary_generated` | `generate-itinerary.md` | `plan_route`（可选，规划交通） | 生成结构化 `itinerary.days`；**必须停下来询问用户是否生成高德地图**，等待用户确认 | 用户通过 `travel_action=confirm_itinerary` 或 `travel_action=generate_map` 或明确确认 |
+| `map_generated` | `personal-map.md` + `generate-itinerary.md` §高德个人地图输出流程 | `travel_create_personal_map`（**必须调用**） | 用已验证 POI 构建 `line_list`，调用地图工具生成二维码；返回包含 `map.qr_code_url` 和 `map.schema_url` 的最终结果 | 地图工具返回成功 |
+
+### 关键交互节点（不可跳过）
+
+1. **`candidates_ready` → 用户确认**：展示候选 POI 后，输出必须包含 `await_confirmation: true`，并在文本中明确请求用户确认、删除或补充。**禁止在此阶段直接生成行程**。
+2. **`itinerary_generated` → 用户确认地图**：展示每日行程后，输出必须包含 `await_confirmation: true`，并在文本中明确询问用户是否需要生成高德地图二维码。**禁止在此阶段直接调用 `travel_create_personal_map`**（hooks 会拦截未授权的调用）。
+3. **`map_generated`**：只有用户确认后，前端会传入 `travel_action=confirm_itinerary` 或 `travel_action=generate_map`，hooks 才会自动解除工具过滤并强制调用 `travel_create_personal_map`。你不需要自己决定何时调用地图工具，**只需在前一步引导用户确认即可**。
+
+### 工具名称对照
+
+references 文件中可能使用旧名称，实际调用时必须使用以下注册工具名：
+
+| references 中的名称 | 实际注册工具名 |
+|--------------------|--------------|
+| `maps_text_search` | `travel_search_poi` |
+| `maps_around_search` | `travel_search_nearby_poi` |
+| `maps_direction_walking/driving/transit_integrated` | `plan_route` |
+| `maps_schema_personal_map` | `travel_create_personal_map` |

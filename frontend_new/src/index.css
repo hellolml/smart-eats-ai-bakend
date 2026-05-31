@@ -23,6 +23,12 @@
   }
 }
 
+@layer components {
+  .form-input {
+    @apply w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-black;
+  }
+}
+
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar {
     display: none;

@@ -52,8 +52,6 @@ def _is_valid_poi(item: dict[str, Any]) -> bool:
     return bool(
         item.get("poi_id")
         and item.get("name")
-        and item.get("longitude") is not None
-        and item.get("latitude") is not None
     )
 
 

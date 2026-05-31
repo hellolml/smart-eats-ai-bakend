@@ -496,6 +496,10 @@ async def _apply_official_tool_postprocess(
             final_payload = result.get("_final_answer")
             if isinstance(final_payload, dict):
                 chat_state.final_json = final_payload
+            # 先让 hooks 处理 submit_final_answer，如果 hooks 返回了结构化数据则覆盖 LLM 的输出
+            handled = _hook_manager_from_context(chat_state.context).handle_tool_result(chat_state, tool_name, result)
+            if handled:
+                chat_state.final_json = handled
             continue
 
         result_preview = _build_result_preview(chat_state, tool_name, result)
@@ -1025,11 +1029,37 @@ def build_agent_runtime_graph(
             )
         else:
             planner_messages = [SystemMessage(content=system), HumanMessage(content=user)]
-        ai_message = await active_planner.ainvoke_with_tools(
-            planner_messages,
-            current_langchain_tools,
-            image_parts=image_parts or None,
-        )
+        try:
+            ai_message = await active_planner.ainvoke_with_tools(
+                planner_messages,
+                current_langchain_tools,
+                image_parts=image_parts or None,
+            )
+        except Exception as exc:
+            msg = str(exc)
+            if image_parts and ("image input" in msg.lower() or "image" in msg.lower() or "vision" in msg.lower()):
+                logger.warning(
+                    "vision_llm_rejected session_id=%s model=%s reason=%s",
+                    chat_state.session_id,
+                    active_planner.config.model_planner,
+                    msg[:200],
+                )
+                chat_state.events.append(
+                    {
+                        "event": "vision_error",
+                        "data": {
+                            "message": "当前模型不支持图片识别，请用文字描述地点"
+                        },
+                    }
+                )
+                image_parts = []
+                ai_message = await active_planner.ainvoke_with_tools(
+                    planner_messages,
+                    current_langchain_tools,
+                    image_parts=None,
+                )
+            else:
+                raise
         raw_content = ai_message.content
         normalized_tool_calls = ai_message.tool_calls
         if not normalized_tool_calls:

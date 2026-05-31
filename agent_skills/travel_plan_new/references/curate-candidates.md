@@ -126,9 +126,9 @@
 对每个去重后的候选地点，**先查询 POI 缓存**：
 - **查询 key 命中中**：上文已有该 `amap_poi_keyword` 的查询结果，直接复用 POI 信息，跳过高德 API 调用。
 - **查询 key 未命中中但高德 key 命中中**：上文中虽无该关键词，但存在另一个关键词查到了相同 `amap_poi_id` 的结果（别名情况），直接复用。
-- **均未命中**：调用高德 `maps_text_search` 验证，查询成功后结果自然存入上下文，供后续复用。
+- **均未命中**：调用 `travel_search_poi` 验证，查询成功后结果自然存入上下文，供后续复用。
 
-执行 后端已注册旅游工具 `maps_text_search` 验证并补充全 POI 信息（禁止绕过后端工具直接调用高德 REST API。
+执行 `travel_search_poi` 验证并补充全 POI 信息（禁止绕过后端工具直接调用高德 REST API）。
 - 如搜索命中：
   - 设置 `poi_verified: true`。
   - 填充 `amap_poi_id`（高德 POI ID）。
@@ -139,7 +139,7 @@
   - 设置 `poi_verified: false`。
   - 尝试缩短关键词重新搜索（如 "杭州知味观湖滨店" → "知味观"）。
   - 若仍未命中，保留候选但在 `warnings` 中标注"未在高德找到对应 POI"。
-- 对于已验证 POI 的候选，可执行 `maps_around_search` 识别附近其他候选，填充 `nearby_candidates`。
+- 对于已验证 POI 的候选，可执行 `travel_search_nearby_poi` 识别附近其他候选，填充 `nearby_candidates`。
 
 ### 5. 生成推荐信息
 
@@ -224,7 +224,7 @@
 - **标记来源**：设置 `source: "user_added"`，与攻略提取的 `source: "extracted"` 区分。
 - **强制最高评分**：用户补充的地点自动获得满分 **10 分**，`score_breakdown` 各维度满分。
 - **添加 must-visit 标签**：自动添加 `tags: ["must-visit", "user-specified"]`。
-- **POI 验证**：同样执行步骤 4 的 POI 验证与补全流程（执行 `maps_text_search`）。
+- **POI 验证**：同样执行步骤 4 的 POI 验证与补全流程（执行 `travel_search_poi`）。
 - **分类**：根据地点名称和上下文推断类别。
 - **去重检查**：若用户补充的地点与已有候选重复，将已有候选的 `source` 更新为 `"user_added"`，提升至最高优先级。
 - **区域校验**：同样执行步骤 6 的区域校验，不在目的区域的附带温馨提示。
@@ -235,7 +235,7 @@
 
 用户补充的美食类地点（restaurant、cafe、nightlife）必须是**具体的店名**，且能在高德地图中查到对应 POI：
 
-- **合法示例**：`顶顶牛干锅牦牛肉` 、 `沙洲夜市` 、 `知味观湖滨店` → 执行 `maps_text_search` 能查到 POI ✅
+- **合法示例**：`顶顶牛干锅牦牛肉` 、 `沙洲夜市` 、 `知味观湖滨店` → 执行 `travel_search_poi` 能查到 POI ✅
 - **不合法示例**：`当地特色小吃` 、 `手抓羊肉` 、 `好吃的面馆` → 泛化描述，非具体店名 ❌
 
 当用户补充的美食不符合要求时，返回提示：
@@ -282,7 +282,7 @@
 
 ## 参考
 
-- 父 skill：`travel-content-to-itinerary` — 协调整个规划流程
-- 流水线上游：`extract-places-from-travel-urls` — 提供原始地点数据
-- 流水线下游：当前 skill 的行程生成阶段 — 消费精选候选列表
-- 外部依赖：后端高德工具封装（高德个人地图）— 提供 `maps_text_search` 和 `maps_around_search` 能力
+- 本 skill 主协调流程：详见 `orchestrate-travel-content.md`
+- 本 skill 地点提取阶段：详见 `extract-places.md`
+- 本 skill 行程生成阶段：详见 `generate-itinerary.md`
+- 高德工具：`travel_search_poi`（POI 搜索验证，对应旧名称 `maps_text_search`）、`travel_search_nearby_poi`（周边搜索，对应旧名称 `maps_around_search`）

@@ -10,6 +10,7 @@ import {
   DetailScreen,
   HomeScreen,
   LoginScreen,
+  ModelSettingsScreen,
   PhotoPreviewScreen,
   PlansScreen,
   ProfileScreen,
@@ -814,7 +815,11 @@ export default function App() {
           </Page>
 
           <Page active={screen === 'settings'}>
-            <SettingsScreen onBack={() => go('profile')} logout={handleLogout} />
+            <SettingsScreen onBack={() => go('profile')} logout={handleLogout} openModelSettings={() => go('model-settings')} />
+          </Page>
+
+          <Page active={screen === 'model-settings'}>
+            <ModelSettingsScreen onBack={() => go('settings')} />
           </Page>
         </main>
         <BottomTabs active={screen} visible={showTabs} go={go} />

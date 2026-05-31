@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     LANGGRAPH_STORE_DB: str | None = None
     CHAT_PAUSE_TTL: int = 600
     SEED_DEMO_USER_ID: str | None = None
+    AMAP_API_KEY: str | None = None
     AMAP_SEARCH_CACHE_TTL_SECONDS: int = 180
     TRAVEL_POI_CACHE_TTL_SECONDS: int = 604800
     RESTAURANT_DETAIL_CACHE_TTL_SECONDS: int = 300

@@ -102,10 +102,10 @@
 > 所有高德 API 调用必须通过 后端已注册旅游工具 统一进行，禁止绕过后端工具直接调用高德 REST API。详见本 skill 的 `personal-map.md`。
 
 - 在每一天内，按最小化相邻地点间出行时间排序。
-- 使用候选地点中的精确坐标（`longitude`, `latitude`），通过 `后端高德工具封装` 调用高德路径规划获取真实交通数据：
-  - 距离 < 1km → 执行 `client.maps_direction_walking(origin, destination)` 获取步行时间
-  - 距离 1-5km → 执行 `client.maps_direction_transit_integrated(origin, destination, city)` 获取公交/地铁时间
-  - 距离 > 5km → 执行 `client.maps_direction_driving(origin, destination)` 获取驾车时间
+- 使用候选地点中的精确坐标（`longitude`, `latitude`），调用 `plan_route` 获取真实交通数据：
+  - 距离 < 1km → 使用步行模式获取步行时间
+  - 距离 1-5km → 使用公交/地铁模式获取公交时间
+  - 距离 > 5km → 使用驾车模式获取驾车时间
 - 用 API 返回的真实时长和距离替换估算值，填入 `transport_to_next`
 - 若 API 调用失败，回退到距离估算（加 30% 缓冲）
 
@@ -144,7 +144,7 @@
 
 - **json**（默认）：返回上述结构化对象。
 - **pdf**：格式化为可打印的逐日行程指南（含地图占位）。
-- **amap_personal_map**：调用高德 `maps_schema_personal_map` 生成个人地图二维码。
+- **amap_personal_map**：调用 `travel_create_personal_map` 生成个人地图二维码。
 
 #### 高德个人地图输出流程
 
@@ -161,8 +161,8 @@
 具体规则：
 - **每天一条 line**：每天的行程组成一条独立的 line，`title` 标注为 `Day X: 主题`。
 - **前一天终点 = 下一天起点（强制）**：确定衔接点的优先级为：① 若当天有住宿点，使用住宿点；② 若无住宿点，使用当天行程的最后一个地点。该衔接点**必须**作为下一天 line 的第一个点重复出现（经纬度和 poiId 完全相同），确保地理连贯。
-- **start_point 处理**：若提供了 `start_point`（如"西宁站"），先通过 `maps_text_search` 获取 POI，然后将其作为 Day 1 的第一个点（标记为 `D1🚅 {地点名}`）。
-- **end_point 处理**：若提供了 `end_point`（如"西宁站"），先通过 `maps_text_search` 获取 POI，然后将其作为最后一天的最后一个点（标记为 `D{N}🚅 {地点名}`）。
+- **start_point 处理**：若提供了 `start_point`（如"西宁站"），先通过 `travel_search_poi` 获取 POI，然后将其作为 Day 1 的第一个点（标记为 `D1🚅 {地点名}`）。
+- **end_point 处理**：若提供了 `end_point`（如"西宁站"），先通过 `travel_search_poi` 获取 POI，然后将其作为最后一天的最后一个点（标记为 `D{N}🚅 {地点名}`）。
 - **视觉区分**：高德地图 App 会为不同的 line 自动分配不同的视觉样式（颜色/线型），用户打开地图即可直观看到每天行程的区分。
 - **每条 line 最多 16 个点**：单日行程通常不会超过此限制；若极端情况超限，拆为上下午两条 line。
 - **同一条 line 内禁止重复 `poiId`**：高德个人地图会合并相同 `poiId` 的点，导致路线显示异常（断线或不显示）。如果行程需要回到起点（闭环），应省略末尾的重复点，或替换为附近的其他 POI。注意：相邻 line 之间的共享端点不受此限制（那是跨 line 的衔接，不在同一条 line 内）。
@@ -232,14 +232,14 @@
 
 4. **选择 sceneType**：使用 `sceneType=1`（创建资源源点 + 路线），行程既有打卡点又有路线关系。
 
-5. **调用生成**：`maps_schema_personal_map(orgName="行程名称", lineList=lineList, sceneType=1)`。
+5. **调用生成**：`travel_create_personal_map(title="行程名称", line_list=lineList, scene_type=1)`。
 
 6. **返回结果**：将 `qr_code_url` 包含在输出中，用户扫码即可在高德地图 App 中打开完整行程。
 
 **注意事项：**
 
 - 仅使用 `poi_verified: true` 且有 `amap_poi_id` 的地点构建 `lineList`。
-- 住宿点如无精确 POI，可使用城市中心点或通过 `maps_text_search` 搜索酒店名获取。
+- 住宿点如无精确 POI，可使用城市中心点或通过 `travel_search_poi` 搜索酒店名获取。
 - 未验证 POI 的地点跳过，在输出中标注"以下地点未在高德地图中标记"。
 - 确保每条 line 内 pointInfoList 中点的顺序严格按照行程时间顺序排列，不出现地理上的回头路。
 - 相邻两条 line 通过共享端点实现地理连贯，高德 App 会为不同 line 自动区分视觉样式。
@@ -259,7 +259,7 @@ for i in range(len(lineList) - 1):
     assert day_end['poiId'] == next_start['poiId']   # POI ID 一致
 ```
 
-若校验发现任何不一致，**必须修复后再执行 `maps_schema_personal_map`**，不允许带着断裂的路线生成地图。
+若校验发现任何不一致，**必须修复后再调用 `travel_create_personal_map`**，不允许带着断裂的路线生成地图。
 
 ## 示例
 
@@ -284,7 +284,7 @@ for i in range(len(lineList) - 1):
 - **两点行程**：若某天只有两个地点，生成包含两点的 line，高德地图正常显示为一条连线。
 - **空行程**：若某天没有安排任何地点（如"自由活动时间"），跳过该天不生成对应的 line，但在输出 JSON 的 `days` 数组中保留该天的占位（`items: []`），`day_summary` 标注"自由活动"。
 - **跨区域大跨度**：若一天的行程跨度距离 > 200km，在 `tips` 中提醒用户"今日行程跨度较大，建议预留充足交通时间"。
-- **start_point / end_point 搜索失败**：若通过 `maps_text_search` 无法找到对应 POI，在 `warnings` 中标注"起点/终点未找到对应 POI，已忽略"，并按无起终点的方式生成行程。
+- **start_point / end_point 搜索失败**：若通过 `travel_search_poi` 无法找到对应 POI，在 `warnings` 中标注"起点/终点未找到对应 POI，已忽略"，并按无起终点的方式生成行程。
 
 ## 故障排查
 
@@ -306,8 +306,6 @@ for i in range(len(lineList) - 1):
 
 ## 参考
 
-- 父 skill：`travel-content-to-itinerary` — 协调整个规划流程
-- 流水线上游：当前 skill 的候选筛选阶段 — 提供已评分的候选列表（含精确坐标和 POI ID）
-- 外部依赖：后端高德工具封装（高德个人地图）— 提供路径规划 API 和个人地图二维码生成能力
-  - `maps_direction_walking/driving/transit_integrated` — 真实路径规划
-  - `maps_schema_personal_map` — 生成个人地图小程序二维码
+- 本 skill 主协调流程：详见 `orchestrate-travel-content.md`
+- 本 skill 候选筛选阶段：详见 `curate-candidates.md`
+- 高德工具：`plan_route`（路径规划，对应旧名称 `maps_direction_walking/driving/transit_integrated`）、`travel_create_personal_map`（个人地图二维码，对应旧名称 `maps_schema_personal_map`）

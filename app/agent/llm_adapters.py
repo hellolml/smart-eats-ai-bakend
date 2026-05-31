@@ -146,7 +146,7 @@ def _get_shared_client(config: ProviderConfig) -> AsyncOpenAI | None:
             api_key=config.api_key,
             base_url=config.base_url,
             max_retries=1,
-            timeout=httpx.Timeout(60.0, connect=5.0),
+            timeout=httpx.Timeout(float(settings.LLM_PLANNER_REQUEST_TIMEOUT_SECONDS), connect=10.0),
         )
         _CLIENT_POOL[key] = client
         return client
@@ -163,7 +163,7 @@ def _get_shared_anthropic_client(config: ProviderConfig) -> httpx.AsyncClient | 
         client = _ANTHROPIC_CLIENT_POOL.get(key)
         if client is not None:
             return client
-        client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
+        client = httpx.AsyncClient(timeout=httpx.Timeout(float(settings.LLM_PLANNER_REQUEST_TIMEOUT_SECONDS), connect=10.0))
         _ANTHROPIC_CLIENT_POOL[key] = client
         return client
 

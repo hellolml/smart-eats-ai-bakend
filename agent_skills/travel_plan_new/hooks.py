@@ -20,7 +20,7 @@ class TravelPlanNewHooks(BaseSkillHooks):
         trip_meta = _trip_meta(state, context, overrides)
         excluded_places = _payload_excluded_places(overrides)
         user_added_places = _payload_user_added_places(overrides)
-        phase = _phase(action=action, candidates=candidates, itinerary=itinerary, map_payload=map_payload)
+        phase = _phase(action=action, candidates=candidates, itinerary=itinerary, map_payload=map_payload, trip_meta=trip_meta)
 
         return {
             "intent": "travel",
@@ -114,7 +114,17 @@ class TravelPlanNewHooks(BaseSkillHooks):
     def handle_tool_result(self, state: Any, tool_name: str, result: Any) -> dict[str, Any] | None:
         overrides = _context_overrides(state)
         action = _travel_action(overrides)
-        if tool_name in {"travel_search_poi", "travel_search_nearby_poi"} and action != "confirm_candidates":
+        if tool_name == "submit_final_answer":
+            return _handle_submit_final_answer(state, action, result)
+
+        if tool_name in {"travel_search_poi", "travel_search_nearby_poi"}:
+            if action == "confirm_candidates":
+                # 用户已确认候选，不再继续搜索 POI，直接生成行程
+                candidates = _collect_verified_candidates(state)
+                if candidates:
+                    return _submit_final_for_confirmed(state, action, candidates)
+                return _no_places_final(state, result)
+            # 正常流程：收集候选并展示给用户确认
             candidates = _collect_verified_candidates(state)
             if not candidates:
                 return _no_places_final(state, result)
@@ -184,11 +194,13 @@ class TravelPlanNewHooks(BaseSkillHooks):
     def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
         overrides = _context_overrides(state)
         action = _travel_action(overrides)
+        trip_meta = _trip_meta(state, {}, overrides)
         phase = _phase(
             action=action,
             candidates=_collect_verified_candidates(state),
             itinerary=_payload_itinerary(overrides),
             map_payload=_latest_map_payload(state),
+            trip_meta=trip_meta,
         )
         if _is_map_action(action):
             return None
@@ -240,6 +252,7 @@ def _phase(
     candidates: list[dict[str, Any]],
     itinerary: dict[str, Any],
     map_payload: dict[str, Any] | None,
+    trip_meta: dict[str, Any] | None = None,
 ) -> str:
     if map_payload and (map_payload.get("qr_code_url") or map_payload.get("schema_url")):
         return "map_generated"
@@ -251,6 +264,10 @@ def _phase(
         return "itinerary_generated"
     if candidates:
         return "candidates_ready"
+    if trip_meta and trip_meta.get("destination"):
+        return "places_extracted"
+    if trip_meta:
+        return "created"
     return "ingesting_content"
 
 
@@ -557,7 +574,7 @@ def _candidate_key(item: dict[str, Any]) -> str:
 def _matches_excluded(item: dict[str, Any], excluded: list[str]) -> bool:
     key = _candidate_key(item)
     name = str(item.get("name") or "").strip()
-    return any(value and (value == key or value == name or value in name) for value in excluded)
+    return any(value and (value == key or value == name) for value in excluded)
 
 
 def _payload_itinerary(overrides: dict[str, Any]) -> dict[str, Any]:
@@ -652,6 +669,13 @@ def _is_generic_food_name(name: str) -> bool:
         "烧烤",
         "面馆",
         "夜市",
+        "甜品",
+        "奶茶",
+        "烤肉",
+        "串串",
+        "自助餐",
+        "农家菜",
+        "当地菜",
     }
     if value in generic_exact:
         return True
@@ -795,6 +819,118 @@ def _map_final(state: Any, result: dict[str, Any]) -> dict[str, Any]:
         "followups": ["你可以继续提出调整要求，我会在当前计划基础上修改。"],
         "warnings": [] if result.get("qr_code_url") or result.get("schema_url") else ["高德地图二维码暂不可用，请稍后重试。"],
     }
+
+
+def _submit_final_for_confirmed(state: Any, action: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """用户已确认候选地点，直接生成行程."""
+    overrides = _context_overrides(state)
+    trip_meta = _trip_meta(state, {}, overrides)
+    llm_days = _payload_itinerary(overrides).get("days")
+    if not isinstance(llm_days, list) or not llm_days:
+        llm_days = _build_rough_itinerary(candidates, trip_meta).get("days", [])
+    return {
+        "state": "itinerary_generated",
+        "await_confirmation": True,
+        "trip_meta": trip_meta,
+        "sources": _sources(state),
+        "places": [{"name": item.get("name"), "category": item.get("category")} for item in candidates],
+        "candidates": candidates,
+        "itinerary": {"days": llm_days},
+        "map": {"qr_code_url": None, "schema_url": None},
+        "raw_text": str(getattr(state, "message", "") or ""),
+        "recommendations": [
+            {"title": "行程已生成", "reason": "请确认最终行程，确认后可生成高德地图二维码。"}
+        ],
+        "followups": ["确认行程后即可生成高德地图二维码。"],
+        "warnings": [],
+    }
+
+
+def _handle_submit_final_answer(state: Any, action: str, result: Any) -> dict[str, Any] | None:
+    """当 LLM 调用 submit_final_answer 时，根据当前阶段返回结构化数据."""
+    final_answer = result.get("_final_answer") if isinstance(result, dict) else {}
+    if not isinstance(final_answer, dict):
+        final_answer = {}
+
+    overrides = _context_overrides(state)
+    candidates = _collect_verified_candidates(state)
+    trip_meta = _trip_meta(state, {}, overrides)
+    sources = _sources(state)
+
+    # 从 LLM 的输出中提取 itinerary，如果 LLM 没生成就用候选数据构造
+    itinerary = final_answer.get("itinerary") if isinstance(final_answer.get("itinerary"), dict) else _payload_itinerary(overrides)
+    llm_days = itinerary.get("days") if isinstance(itinerary, dict) and isinstance(itinerary.get("days"), list) else []
+
+    if action == "confirm_itinerary" or action == "generate_map":
+        return {
+            "state": "itinerary_generated",
+            "await_confirmation": True,
+            "trip_meta": trip_meta,
+            "sources": sources,
+            "places": [{"name": item.get("name"), "category": item.get("category")} for item in candidates],
+            "candidates": candidates,
+            "itinerary": {"days": llm_days} if llm_days else _build_rough_itinerary(candidates, trip_meta),
+            "map": {"qr_code_url": None, "schema_url": None},
+            "raw_text": str(getattr(state, "message", "") or ""),
+            "recommendations": [
+                {"title": "行程已生成", "reason": "请确认最终行程，确认后可生成高德地图二维码。"}
+            ],
+            "followups": ["确认行程后即可生成高德地图二维码。", "你可以继续调整行程内容。"],
+            "warnings": [],
+        }
+
+    if action == "confirm_candidates":
+        return {
+            "state": "itinerary_generated",
+            "await_confirmation": True,
+            "trip_meta": trip_meta,
+            "sources": sources,
+            "places": [{"name": item.get("name"), "category": item.get("category")} for item in candidates],
+            "candidates": candidates,
+            "itinerary": {"days": llm_days} if llm_days else _build_rough_itinerary(candidates, trip_meta),
+            "map": {"qr_code_url": None, "schema_url": None},
+            "raw_text": str(getattr(state, "message", "") or ""),
+            "recommendations": [
+                {"title": "行程已生成", "reason": "请确认最终行程，确认后可生成高德地图二维码。"}
+            ],
+            "followups": ["确认行程后即可生成高德地图二维码。"],
+            "warnings": [],
+        }
+
+    # 默认：返回现有的候选确认状态
+    if candidates:
+        return _candidate_confirmation_final(state, candidates)
+    return _no_places_final(state, {})
+
+
+def _build_rough_itinerary(candidates: list[dict[str, Any]], trip_meta: dict[str, Any]) -> dict[str, Any]:
+    """从候选列表构造粗略行程."""
+    try:
+        day_count = int(trip_meta.get("days") or 1)
+    except (TypeError, ValueError):
+        day_count = 1
+    day_count = max(1, min(day_count, 15))
+    if not candidates:
+        return {"days": []}
+    per_day = max(1, len(candidates) // day_count)
+    days = []
+    for day_index in range(day_count):
+        start = day_index * per_day
+        end = start + per_day if day_index < day_count - 1 else len(candidates)
+        day_candidates = candidates[start:end]
+        items = []
+        for item in day_candidates:
+            poi = item.get("poi") if isinstance(item.get("poi"), dict) else {}
+            items.append({
+                "place_name": item.get("name") or poi.get("name", ""),
+                "name": item.get("name") or poi.get("name", ""),
+                "poi_id": poi.get("poi_id"),
+                "longitude": poi.get("longitude"),
+                "latitude": poi.get("latitude"),
+                "address": poi.get("address"),
+            })
+        days.append({"day_number": day_index + 1, "theme": f"Day {day_index + 1}", "items": items})
+    return {"days": days}
 
 
 def _map_title(trip_meta: dict[str, Any]) -> str:

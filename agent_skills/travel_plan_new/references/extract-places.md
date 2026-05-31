@@ -182,7 +182,7 @@
 **查询流程：**
 1. **查主缓存**：用地点名称查主缓存 → 命中则直接返回 POI 信息，跳过高德 API 调用。
 2. **查别名索引**：用地点名称查别名索引 → 命中则用映射的标准名称查主缓存 → 返回 POI 信息。
-3. **缓存未命中中**：调用高德 `maps_text_search` 查询 POI。
+3. **缓存未命中中**：调用 `travel_search_poi` 查询 POI。
 4. **写入缓存**：查询成功后，将结果写入主缓存（key = 高德返回的标准名称），同时将以下名称写入别名索引指向标准名称：
    - 用户输入的原始名称（如 `"鸣沙山"`）
    - 该地点的 `name_aliases` 中的所有别名（如 `["月牙泉"]`）
@@ -292,5 +292,6 @@
 
 ## 参考
 
-- 父 skill：`travel-content-to-itinerary` — 协调整个规划流程
-- 流水线下游：`curate-trip-candidates` — 对提取的地点进行评分和筛选
+- 本 skill 主协调流程：详见 `orchestrate-travel-content.md`
+- 本 skill 候选筛选阶段：详见 `curate-candidates.md`
+- 高德工具：`travel_search_poi`（POI 验证）、`travel_search_nearby_poi`（周边搜索）

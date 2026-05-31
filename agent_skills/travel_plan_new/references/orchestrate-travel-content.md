@@ -25,7 +25,7 @@
     - `amap_personal_map` - 高德个人地图二维码（默认返回，用高德地图 App 扫码打开）
     - `pdf` - 可选，可打印的逐日行程指南
 
-> **输入优先级**: `images` > `raw_texts` > `urls`。前两者不依赖网络请求，成功率更高，推荐优先使用。三种输入至少提供一种。
+> **输入优先级**: `raw_texts` > `images` > `urls`。前两者不依赖网络请求，成功率更高，推荐优先使用。三种输入至少提供一种。
 
 ## 输出
 
@@ -191,6 +191,6 @@ created → ingesting_content → places_extracted → candidates_ready → cand
 
 ## 参考
 
-- 当前 skill 的内部阶段: `curate-trip-candidates` — 候选地点评分与筛选
-- 当前 skill 的内部阶段: `generate-itinerary-from-candidates` — 最终行程组装
-- 内部高德工具能力— POI 搜索验证、路径规划、个人地图二维码生成。**所有高德 API 调用必须通过此 skill 的 `后端高德工具封装`**
+- 本 skill 候选筛选阶段：详见 `curate-candidates.md`
+- 本 skill 行程生成阶段：详见 `generate-itinerary.md`
+- 高德工具能力：`travel_search_poi`（POI 搜索验证）、`travel_search_nearby_poi`（周边搜索）、`plan_route`（路径规划）、`travel_create_personal_map`（个人地图二维码生成）。**所有高德 API 调用必须通过以上注册工具，禁止直接调用高德 REST API**

@@ -29,12 +29,13 @@ function ProfileRow({ Icon, label, onClick }: { Icon: LucideIcon; label: string;
   return <button onClick={onClick} className="flex w-full items-center gap-3 py-4 text-left"><Icon size={18} /><span className="flex-1 text-sm font-bold">{label}</span><ChevronRight size={16} /></button>;
 }
 
-export function SettingsScreen({ onBack, logout }: { onBack: () => void; logout: () => void }) {
+export function SettingsScreen({ onBack, logout, openModelSettings }: { onBack: () => void; logout: () => void; openModelSettings: () => void }) {
   return (
     <>
       <Header title="设置" onBack={onBack} />
       <div className="px-5">
         {['个人信息', '账号与安全', '隐私设置', '通知设置', '清除缓存       12.5MB', '联系客服'].map((item) => <button key={item} className="flex w-full items-center justify-between border-b border-gray-100 py-4 text-sm font-bold"><span>{item}</span><ChevronRight size={16} /></button>)}
+        <button onClick={openModelSettings} className="flex w-full items-center justify-between border-b border-gray-100 py-4 text-sm font-bold"><span>AI 模型设置</span><ChevronRight size={16} /></button>
         <button onClick={logout} className="mt-5 text-sm font-bold text-red-500">退出登录</button>
       </div>
     </>
