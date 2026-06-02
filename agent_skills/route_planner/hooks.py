@@ -34,16 +34,44 @@ class RoutePlannerHooks(BaseSkillHooks):
 
                 cached = await load_cached_restaurants(redis_client, getattr(state, "session_id", ""))
                 candidates = cached if isinstance(cached, list) else []
+        cached_location: dict[str, Any] | None = None
+        redis_client = runtime.get("redis_client") if isinstance(runtime, dict) else None
+        if redis_client is not None:
+            from app.agent.tools.location_cache import load_cached_location
+
+            cached_location = await load_cached_location(redis_client, getattr(state, "session_id", ""))
         cleaned = [item for item in candidates or [] if isinstance(item, dict)]
         target = _extract_target_from_candidates(getattr(state, "message", None), cleaned)
         extra: dict[str, Any] = {}
         if cleaned and "last_restaurants" not in context:
             extra["last_restaurants"] = cleaned
+        if cached_location and "cached_location" not in context:
+            extra["cached_location"] = cached_location
+        origin = _extract_origin(context, cached_location)
+        if origin:
+            extra["route_origin"] = origin
         if isinstance(target, dict):
             extra["route_target_candidate"] = target
         return extra
 
     def normalize_tool_args(self, state: Any, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if tool_name == "plan_route":
+            updated = dict(args)
+            context = getattr(state, "context", None)
+            context = context if isinstance(context, dict) else {}
+            origin = _extract_origin(context, context.get("cached_location"))
+            target = context.get("route_target_candidate")
+            target_geo = _extract_target_geo(target)
+            if origin:
+                updated.setdefault("origin_lat", origin.get("lat"))
+                updated.setdefault("origin_lng", origin.get("lng"))
+            if target_geo:
+                updated.setdefault("destination_lat", target_geo.get("lat"))
+                updated.setdefault("destination_lng", target_geo.get("lng"))
+                if isinstance(target, dict) and target.get("name"):
+                    updated.setdefault("destination", target.get("name"))
+            updated.setdefault("mode", "walking")
+            return updated
         if tool_name != "geocode_location":
             return args
         updated = dict(args)
@@ -88,6 +116,29 @@ class RoutePlannerHooks(BaseSkillHooks):
                 ["想去哪儿？给我目的地名称。"],
             )
         return _note_final("路线规划失败", "暂时无法获取路线信息。", ["换个出发地或目的地试试？"])
+
+    def forced_tool_calls(self, state: Any) -> list[dict[str, Any]] | None:
+        context = getattr(state, "context", None)
+        context = context if isinstance(context, dict) else {}
+        target = context.get("route_target_candidate")
+        origin = _extract_origin(context, context.get("cached_location"))
+        target_geo = _extract_target_geo(target)
+        if not origin or not target_geo:
+            return None
+        return [
+            {
+                "name": "plan_route",
+                "args": {
+                    "origin_lat": origin.get("lat"),
+                    "origin_lng": origin.get("lng"),
+                    "destination_lat": target_geo.get("lat"),
+                    "destination_lng": target_geo.get("lng"),
+                    "destination": target.get("name") if isinstance(target, dict) else None,
+                    "mode": "walking",
+                },
+                "type": "tool_call",
+            }
+        ]
 
 
 def _ensure_context_overrides(state: Any) -> dict[str, Any]:
@@ -160,6 +211,36 @@ def _coerce_geo_candidate(payload: Any) -> dict[str, float] | None:
         return {"lat": float(payload.get("lat")), "lng": float(payload.get("lng"))}
     except (TypeError, ValueError):
         return None
+
+
+def _extract_origin(context: dict[str, Any], cached_location: Any = None) -> dict[str, float] | None:
+    for source in (
+        context.get("location"),
+        context.get("route_origin"),
+        context.get("cached_location"),
+        cached_location,
+    ):
+        if not isinstance(source, dict):
+            continue
+        lat = source.get("lat") if source.get("lat") is not None else source.get("latitude")
+        lng = source.get("lng") if source.get("lng") is not None else source.get("longitude")
+        try:
+            return {"lat": float(lat), "lng": float(lng)}
+        except (TypeError, ValueError):
+            continue
+    environment = context.get("environment")
+    if isinstance(environment, dict):
+        return _extract_origin({"location": environment.get("location")})
+    return None
+
+
+def _extract_target_geo(target: Any) -> dict[str, float] | None:
+    if not isinstance(target, dict):
+        return None
+    geo = _coerce_geo_candidate(target.get("geo"))
+    if geo:
+        return geo
+    return _extract_origin({"location": target})
 
 
 def _extract_target_from_candidates(

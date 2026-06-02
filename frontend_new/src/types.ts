@@ -8,6 +8,7 @@ export type Message = {
   content: string;
   kind?: MessageKind;
   createdAt?: number;
+  finalJson?: Record<string, unknown>;
 };
 
 export interface PlanInfo {
