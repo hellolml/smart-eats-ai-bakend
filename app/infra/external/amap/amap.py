@@ -59,6 +59,10 @@ def _extract_pois(payload: Any) -> list[dict[str, Any]]:
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
+            if isinstance(value, dict):
+                nested = _extract_pois(value)
+                if nested:
+                    return nested
     return []
 
 
@@ -249,26 +253,18 @@ def _pick_geocode_location(
 async def _fallback_geocode_from_poi(
     address: str,
     city: str | None,
-    *,
-    servers_path: str | None,
 ) -> dict[str, float] | None:
-    pois = await text_search(
-        keywords=address,
-        types=None,
-        city=city,
-        page_size=1,
-        servers_path=servers_path,
-    )
+    pois = await text_search(keywords=address, types=None, city=city, page_size=1)
     if not pois:
         return None
     first = pois[0]
-    poi_id = first.get("id") or first.get("poi_id")
-    if isinstance(poi_id, str) and poi_id:
-        detail = await search_detail(poi_id, servers_path=servers_path)
-        detail_location = _parse_location(detail.get("location") if isinstance(detail, dict) else None)
-        if detail_location:
-            return detail_location
-    return _parse_location(first.get("location"))
+    loc = first.get("location")
+    if isinstance(loc, dict):
+        longitude = loc.get("longitude")
+        latitude = loc.get("latitude")
+        if longitude is not None and latitude is not None:
+            return {"lng": float(longitude), "lat": float(latitude)}
+    return _parse_location(loc)
 
 
 def _route_tool_key(mode: str | None) -> str:
@@ -428,42 +424,34 @@ def _extract_weather_payload(payload: Any) -> dict[str, Any]:
 async def get_ip_location(
     ip: str,
     *,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> tuple[dict[str, float] | None, str | None]:
-    args = {"ip": ip}
-    payload = await _fetch_tool_payload("maps_ip_location", args, servers_path)
-    if payload is None:
+    from app.infra.external.amap.amap_direct_client import get_amap_direct_client
+    client = get_amap_direct_client()
+    result = await client.ip_location(ip)
+    if "error" in result:
         return None, None
-    return _extract_ip_location(payload)
+    return _extract_ip_location(result)
 
 
 async def reverse_geocode_region(
     location: dict[str, float],
     *,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> dict[str, str] | None:
+    from app.infra.external.amap.amap_direct_client import get_amap_direct_client
+    client = get_amap_direct_client()
     normalized = _normalize_coord_pair(location)
-    lat = normalized.get("lat")
-    lng = normalized.get("lng")
-    if lat is None or lng is None:
+    result = await client.regeocode(longitude=normalized.get("lng", 0) or 0, latitude=normalized.get("lat", 0) or 0)
+    if "error" in result:
         return None
-
-    args = {"location": f"{lng},{lat}", "extensions": "all"}
-    # 优先使用当前 MCP 实际可用工具名，避免无效探测导致噪声报错
-    for tool_key in ("maps_regeocode", "maps_reverse_geocode"):
-        payload = await _fetch_tool_payload(tool_key, args, servers_path)
-        if payload is None:
-            continue
-        region = _extract_regeo_region(payload)
-        if region:
-            return region
-    return None
+    return {"city": result.get("city", ""), "province": result.get("province", ""), "district": result.get("district", "")}
 
 
 async def reverse_geocode_city(
     location: dict[str, float],
     *,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> str | None:
     region = await reverse_geocode_region(location, servers_path=servers_path)
     if not region:
@@ -475,19 +463,17 @@ async def geocode_address(
     address: str,
     city: str | None,
     *,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> dict[str, float] | None:
-    args: dict[str, Any] = {"address": address}
-    if city:
-        args["city"] = city
-    payload = await _fetch_tool_payload("maps_geo", args, servers_path)
-    if payload is None:
+    from app.infra.external.amap.amap_direct_client import get_amap_direct_client
+    client = get_amap_direct_client()
+    result = await client.geo(address, city)
+    if "error" in result:
+        fallback = await _fallback_geocode_from_poi(address, city)
+        if fallback:
+            return _normalize_coord_pair({"lng": fallback.get("longitude", 0), "lat": fallback.get("latitude", 0)})
         return None
-    location, low_confidence = _pick_geocode_location(payload, city)
-    if location and not low_confidence:
-        return location
-    fallback = await _fallback_geocode_from_poi(address, city, servers_path=servers_path)
-    return fallback or location
+    return _normalize_coord_pair({"lng": result.get("longitude", 0), "lat": result.get("latitude", 0)})
 
 
 async def text_search(
@@ -497,20 +483,14 @@ async def text_search(
     city: str | None = None,
     location: str | None = None,
     page_size: int = 5,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> list[dict[str, Any]]:
-    args: dict[str, Any] = {
-        "keywords": keywords,
-        "types": types,
-        "city": city,
-        "location": location,
-        "page_size": page_size,
-    }
-    args = {key: value for key, value in args.items() if value not in (None, "")}
-    payload = await _fetch_tool_payload("maps_text_search", args, servers_path)
-    if payload is None:
+    from app.infra.external.amap.amap_direct_client import get_amap_direct_client
+    client = get_amap_direct_client()
+    if client.api_key_missing:
+        logger.warning("amap_text_search api_key_missing keywords=%s", keywords)
         return []
-    return _extract_pois(payload)
+    return await client.text_search(keywords=keywords, city=city, offset=page_size)
 
 
 async def around_search(
@@ -520,84 +500,36 @@ async def around_search(
     *,
     radius: int | None = None,
     page_size: int = 5,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> list[dict[str, Any]]:
-    args: dict[str, Any] = {
-        "location": location,
-        "keywords": keywords,
-        "types": types,
-        "radius": radius,
-        "page_size": page_size,
-    }
-    args = {key: value for key, value in args.items() if value not in (None, "")}
-    payload = await _fetch_tool_payload("maps_around_search", args, servers_path)
-    if payload is None:
+    from app.infra.external.amap.amap_direct_client import get_amap_direct_client
+    client = get_amap_direct_client()
+    if client.api_key_missing:
+        logger.warning("amap_around_search api_key_missing keywords=%s", keywords)
         return []
-    return _extract_pois(payload)
+    return await client.around_search(keywords=keywords or "", location=location, radius=radius or 1000, offset=page_size)
 
 
 async def get_weather(
     city: str | None,
     *,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> dict[str, Any]:
-    args: dict[str, Any] = {"city": city or ""}
-    args = {key: value for key, value in args.items() if value not in (None, "")}
-    payload = await _fetch_tool_payload("maps_weather", args, servers_path)
-    if payload is None:
-        return _weather_fallback(city)
-
-    weather_payload = _extract_weather_payload(payload)
-
-    status = (
-        weather_payload.get("weather")
-        or weather_payload.get("status")
-        or weather_payload.get("text")
-        or weather_payload.get("dayweather")
-        or weather_payload.get("nightweather")
-    )
-    temperature = (
-        weather_payload.get("temperature")
-        or weather_payload.get("temp")
-        or weather_payload.get("daytemp")
-        or weather_payload.get("nighttemp")
-    )
-    payload_city = (
-        weather_payload.get("city")
-        or weather_payload.get("province")
-        or weather_payload.get("district")
-    )
-
-    if temperature is not None:
-        try:
-            temperature = float(temperature)
-        except (TypeError, ValueError):
-            temperature = None
-
-    if temperature is None and weather_payload.get("daytemp_float") is not None:
-        try:
-            temperature = float(weather_payload.get("daytemp_float"))
-        except (TypeError, ValueError):
-            temperature = None
-
-    return {
-        "city": payload_city or city or "",
-        "status": str(status).strip() if isinstance(status, str) and status.strip() else "sunny",
-        "temperature_c": temperature,
-        "raw": payload,
-    }
+    # 直连客户端没有天气 API，使用 fallback
+    return _weather_fallback(city)
 
 
 async def search_detail(
     poi_id: str,
     *,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> dict[str, Any] | None:
-    args = {"id": poi_id}
-    payload = await _fetch_tool_payload("maps_search_detail", args, servers_path)
-    if payload is None:
-        return None
-    return _extract_detail(payload)
+    from app.infra.external.amap.amap_direct_client import get_amap_direct_client
+    client = get_amap_direct_client()
+    result = await client.text_search(keywords=poi_id, offset=1)
+    if result and isinstance(result, list) and isinstance(result[0], dict) and "error" not in result[0]:
+        return result[0]
+    return None
 
 
 async def create_personal_map(
@@ -605,16 +537,15 @@ async def create_personal_map(
     line_list: list[dict[str, Any]],
     *,
     scene_type: int = 1,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> dict[str, Any] | None:
-    args = {
-        "orgName": org_name,
-        "lineList": line_list,
-        "sceneType": scene_type,
-    }
-    payload = await _fetch_tool_payload("maps_schema_personal_map", args, servers_path)
-    parsed = _parse_json_payload(payload)
-    return parsed if isinstance(parsed, dict) else None
+    from app.infra.external.amap.amap_direct_client import get_amap_direct_client
+    client = get_amap_direct_client()
+    result = await client.schema_personal_map(org_name=org_name, line_list=line_list, scene_type=scene_type)
+    if "error" in result:
+        logger.warning("create_personal_map failed error=%s", result.get("error"))
+        return None
+    return result
 
 
 async def get_route(
@@ -623,41 +554,44 @@ async def get_route(
     mode: str | None,
     strategy: str | None,
     *,
-    servers_path: str | None,
+    servers_path: str | None = None,
 ) -> dict[str, Any] | None:
-    tool_key = _route_tool_key(mode)
+    from app.infra.external.amap.amap_direct_client import get_amap_direct_client
+    client = get_amap_direct_client()
     origin = _normalize_coord_pair(origin)
     destination = _normalize_coord_pair(destination)
-    args = {
-        "origin": f"{origin.get('lng')},{origin.get('lat')}",
-        "destination": f"{destination.get('lng')},{destination.get('lat')}",
-    }
-    if strategy:
-        args["strategy"] = strategy
-    payload = await _fetch_tool_payload(tool_key, args, servers_path)
-    if payload is None:
-        normalized_mode = (mode or "driving").strip().lower()
-        if normalized_mode in {"walk", "walking", "bike", "bicycling", "cycling"}:
-            fallback_payload = await _fetch_tool_payload(
-                "maps_direction_driving",
-                args,
-                servers_path,
-            )
-            if fallback_payload is None:
+    origin_str = f"{origin.get('lng')},{origin.get('lat')}"
+    dest_str = f"{destination.get('lng')},{destination.get('lat')}"
+    normalized_mode = (mode or "driving").strip().lower()
+
+    if normalized_mode in {"walk", "walking"}:
+        result = await client.direction_walking(origin_str, dest_str)
+    elif normalized_mode in {"bike", "bicycling", "cycling"}:
+        result = await client.direction_walking(origin_str, dest_str)
+    elif normalized_mode in {"transit", "bus", "public"}:
+        result = await client.direction_transit_integrated(origin_str, dest_str, city="")
+    else:
+        result = await client.direction_driving(origin_str, dest_str)
+
+    if "error" in result:
+        logger.warning("get_route failed mode=%s error=%s", normalized_mode, result.get("error"))
+        if normalized_mode not in {"driving", "drive"}:
+            result = await client.direction_driving(origin_str, dest_str)
+            if "error" in result:
                 return None
-            route = _extract_route(fallback_payload)
-            if not route:
-                return None
-            route["origin"] = origin
-            route["destination"] = destination
-            route["mode"] = "driving"
-            route["fallback_from"] = normalized_mode
+            route = _extract_route(result)
+            if route:
+                route["origin"] = origin
+                route["destination"] = destination
+                route["mode"] = "driving"
+                route["fallback_from"] = normalized_mode
             return route
         return None
-    route = _extract_route(payload)
+
+    route = _extract_route(result)
     if not route:
         return None
     route["origin"] = origin
     route["destination"] = destination
-    route["mode"] = (mode or "driving").strip().lower()
+    route["mode"] = normalized_mode
     return route

@@ -17,6 +17,8 @@ openai==1.40.0
 langgraph==0.2.76
 langgraph-checkpoint==2.0.22
 langgraph-checkpoint-sqlite==2.0.11
+langgraph-checkpoint-postgres==2.0.22
+psycopg[binary,pool]>=3.2.0,<4.0.0
 langchain-core==0.3.83
 langchain-community==0.3.18
 email-validator==2.2.0
@@ -26,3 +28,4 @@ langchain-mcp-adapters==0.1.9
 faiss-cpu==1.8.0
 numpy==1.26.4
 rank_bm25==0.2.2
+pgvector==0.3.6

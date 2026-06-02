@@ -20,7 +20,7 @@ from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.state import ChatState
-from app.agent import history
+from app.agent import conversation
 from app.agent.llm_adapters import ProviderRegistry
 from app.common.config import settings
 from app.common.errors import (
@@ -63,6 +63,7 @@ from app.infra.models.fridge import FridgeItem, FridgePhoto, RecognitionJob
 from app.infra.models.game import BlindboxRoll, WheelConfig, WheelSpin
 from app.infra.models.auth import AuthEvent, OAuthAccount, UserSession
 from app.infra.models.grocery import GroceryList, GroceryListItem
+from app.infra.models.plan import TravelPlan
 from app.infra.models.preference import UserPreference, UserProfile
 from app.infra.models.user import User
 from app.infra.external.amap import amap
@@ -71,6 +72,68 @@ logger = logging.getLogger(__name__)
 
 
 class AppBffService:
+    @staticmethod
+    def _map_travel_plan(plan: TravelPlan) -> dict[str, Any]:
+        return {
+            "id": plan.id,
+            "user_id": plan.user_id,
+            "session_id": plan.session_id,
+            "title": plan.title,
+            "plan_type": plan.plan_type,
+            "status": plan.status,
+            "date_text": plan.date_text,
+            "source_text": plan.source_text or "",
+            "qr_code_url": plan.qr_code_url,
+            "schema_url": plan.schema_url,
+            "plan_json": plan.plan_json or {},
+            "created_at": plan.created_at.isoformat() if plan.created_at else None,
+            "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+        }
+
+    @staticmethod
+    async def list_plans(user_id: str, db: AsyncSession) -> list[dict[str, Any]]:
+        result = await db.execute(
+            select(TravelPlan)
+            .where(TravelPlan.user_id == user_id)
+            .order_by(desc(TravelPlan.created_at))
+        )
+        return [AppBffService._map_travel_plan(item) for item in result.scalars().all()]
+
+    @staticmethod
+    async def create_plan(user_id: str, payload: dict[str, Any], db: AsyncSession) -> dict[str, Any]:
+        plan = TravelPlan(
+            id=str(uuid4()),
+            user_id=user_id,
+            session_id=payload.get("session_id"),
+            title=(payload.get("title") or "旅行计划")[:160],
+            plan_type=(payload.get("plan_type") or "travel")[:32],
+            status=(payload.get("status") or "saved")[:32],
+            date_text=payload.get("date_text"),
+            source_text=payload.get("source_text"),
+            qr_code_url=payload.get("qr_code_url"),
+            schema_url=payload.get("schema_url"),
+            plan_json=payload.get("plan_json") if isinstance(payload.get("plan_json"), dict) else {},
+        )
+        db.add(plan)
+        await db.commit()
+        await db.refresh(plan)
+        return AppBffService._map_travel_plan(plan)
+
+    @staticmethod
+    async def delete_plan(user_id: str, plan_id: str, db: AsyncSession) -> dict[str, Any]:
+        result = await db.execute(
+            select(TravelPlan).where(
+                TravelPlan.id == plan_id,
+                TravelPlan.user_id == user_id,
+            )
+        )
+        plan = result.scalar_one_or_none()
+        if plan is None:
+            raise HTTPException(status_code=404, detail="plan not found")
+        await db.delete(plan)
+        await db.commit()
+        return {"deleted": True, "id": plan_id}
+
     @staticmethod
     def list_chat_models() -> dict[str, Any]:
         configured_providers = [
@@ -2455,7 +2518,7 @@ class AppBffService:
         session.deleted_at = datetime.utcnow()
         await db.commit()
 
-        await history.clear_session_cache(redis_client, session_id)
+        await conversation.clear_session_cache(redis_client, session_id)
 
         return {"deleted": True}
 
@@ -2466,6 +2529,7 @@ class AppBffService:
         limit: int,
         offset: int,
         q: str | None,
+        scene: str | None = None,
     ) -> dict[str, Any]:
         stmt = (
             select(ChatSession)
@@ -2478,6 +2542,8 @@ class AppBffService:
             stmt = stmt.where(ChatSession.user_id == user_id)
         if q:
             stmt = stmt.where(ChatSession.title.contains(q))
+        if scene:
+            stmt = stmt.where(ChatSession.scene == scene)
 
         rows = (await db.execute(stmt)).scalars().all()
         updated = False
@@ -2617,21 +2683,144 @@ class AppBffService:
             if clean_attachments:
                 context_overrides = context_overrides or {}
                 context_overrides["attachments"] = clean_attachments
+        scene = payload.get("scene") or "chat"
+        inferred_intent = None if scene == "travel_planner" else AppBffService._infer_chat_intent(payload.get("message"))
+        if inferred_intent:
+            context_overrides = context_overrides or {}
+            context_overrides.setdefault("intent", inferred_intent)
+            forced_skill_ids = AppBffService._forced_skill_ids_for_intent(inferred_intent)
+            if forced_skill_ids:
+                existing_forced = context_overrides.get("forced_skill_ids")
+                merged_forced = []
+                if isinstance(existing_forced, list):
+                    merged_forced.extend(item for item in existing_forced if isinstance(item, str))
+                merged_forced.extend(item for item in forced_skill_ids if item not in merged_forced)
+                context_overrides["forced_skill_ids"] = merged_forced
+        if payload.get("travel_action"):
+            context_overrides = context_overrides or {}
+            context_overrides["travel_action"] = payload.get("travel_action")
+        if isinstance(payload.get("travel_payload"), dict):
+            context_overrides = context_overrides or {}
+            context_overrides["travel_payload"] = payload.get("travel_payload")
 
         return ChatState(
             session_id=session_id,
             user_id=user_id,
             message=payload.get("message"),
-            scene=(payload.get("scene") or "chat"),
+            scene=scene,
             context_overrides=context_overrides,
             provider=AppBffService.resolve_chat_provider(payload.get("model")) or payload.get("provider"),
-            agent_type=payload.get("agent_type"),
             client_ip=request_client_ip,
             resume_from_checkpoint=bool(payload.get("resume_from_checkpoint")),
             checkpoint_ref=payload.get("checkpoint_ref"),
             replay_from_checkpoint=bool(payload.get("replay_from_checkpoint")),
             resume_payload=payload.get("resume_payload"),
         )
+
+    @staticmethod
+    async def _latest_travel_final_json(db: AsyncSession, session_id: str) -> dict[str, Any] | None:
+        result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session_id, ChatMessage.role == "assistant")
+            .order_by(desc(ChatMessage.created_at))
+            .limit(10)
+        )
+        for row in result.scalars().all():
+            payload = row.tool_payload_json if isinstance(row.tool_payload_json, dict) else {}
+            answer = payload.get("answer")
+            if isinstance(answer, dict) and answer.get("state"):
+                return answer
+        return None
+
+    @staticmethod
+    async def _merge_current_session_travel_context(
+        db: AsyncSession,
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        scene = payload.get("scene") or "chat"
+        if scene != "travel_planner":
+            return payload
+        latest = await AppBffService._latest_travel_final_json(db, session_id)
+        if not latest:
+            return payload
+        current = payload.get("travel_payload")
+        current = current if isinstance(current, dict) else {}
+        base = {
+            "previous_final_json": latest,
+            "state": latest.get("state"),
+            "trip_meta": latest.get("trip_meta"),
+            "sources": latest.get("sources"),
+            "places": latest.get("places"),
+            "candidates": latest.get("candidates"),
+            "failed_places": latest.get("failed_places"),
+            "itinerary": latest.get("itinerary"),
+            "map": latest.get("map"),
+            "raw_text": latest.get("raw_text"),
+        }
+        merged = {key: value for key, value in base.items() if value not in (None, [], {})}
+        merged.update(current)
+        next_payload = dict(payload)
+        next_payload["travel_payload"] = merged
+        return next_payload
+
+    @staticmethod
+    def _infer_chat_intent(message: Any) -> str | None:
+        text = str(message or "")
+        if not text:
+            return None
+        if any(token in text for token in ("路线", "导航", "怎么走", "怎么去")):
+            return "route"
+        if any(
+            token in text
+            for token in (
+                "吃点啥",
+                "吃什么",
+                "吃的",
+                "吃啥",
+                "今天吃",
+                "晚饭",
+                "午饭",
+                "早餐",
+                "夜宵",
+                "外卖",
+                "餐厅",
+                "饭店",
+                "美食",
+                "好吃",
+                "周边吃",
+                "附近吃",
+                "附近美食",
+                "推荐吃",
+                "出去吃",
+                "外面吃",
+                "去哪吃",
+                "换一家",
+                "下一家",
+                "第二家",
+                "第三家",
+                "近一点",
+                "不辣",
+                "做饭",
+                "在家做",
+                "家里做",
+                "菜谱",
+                "食谱",
+                "冰箱",
+                "食材",
+                "自己做",
+            )
+        ):
+            return "food"
+        return None
+
+    @staticmethod
+    def _forced_skill_ids_for_intent(intent: str) -> list[str]:
+        if intent == "food":
+            return ["food_assistant"]
+        if intent == "route":
+            return ["route_planner"]
+        return []
 
     @staticmethod
     async def prepare_chat_stream_state(
@@ -2648,10 +2837,15 @@ class AppBffService:
     ) -> ChatState:
         await AppBffService.ensure_chat_session_access(user_id, session_id, db)
         client_ip = AppBffService.resolve_client_ip(forwarded_for, real_ip, request_client_host)
+        payload = await AppBffService._merge_current_session_travel_context(
+            db,
+            session_id,
+            dict(payload or {}),
+        )
         state = await AppBffService.build_chat_state(
             session_id=session_id,
             user_id=user_id,
-            payload=payload or {},
+            payload=payload,
             request_client_ip=client_ip,
             redis_client=redis_client,
             rate_limit_key_prefix=rate_limit_key_prefix,

@@ -8,8 +8,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.agent.tools_registry import register_tool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+
 from app.agent.rag import base as rag
+from app.agent.tools.native import RuntimeContext
 from app.domain.recipe import recipe_index
 
 logger = logging.getLogger("rag")
@@ -89,69 +92,46 @@ def _expand_query(query: str) -> str:
     return expanded
 
 
-@register_tool(
-    name="rag_search_recipes",
-    description=(
-        "Search local recipe knowledge base with keyword + vector recall. "
-        "Input: {query:string, top_k?:integer, min_score?:number, filters?:object}. "
-        "Output: {items:[{id,title,snippet,source,score,metadata}], error?:string}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "query": {"type": "string"},
-            "top_k": {"type": "integer"},
-            "min_score": {"type": "number", "description": "Minimum score threshold (0.0-1.0)"},
-            "filters": {"type": "object"},
-        },
-        "required": ["query"],
-    },
-    output_schema={
-        "type": "object",
-        "properties": {
-            "items": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string"},
-                        "title": {"type": "string"},
-                        "snippet": {"type": "string"},
-                        "source": {"type": "string"},
-                        "score": {"type": "number"},
-                        "metadata": {"type": "object"},
-                    },
-                },
-            },
-            "error": {"type": "string"},
-        },
-    },
-)
-async def rag_search_recipes(args: dict[str, Any]) -> dict[str, Any]:
-    query = str(args.get("query") or "").strip()
+class RagSearchRecipesArgs(BaseModel):
+    query: str = Field(..., description="Recipe search query.")
+    top_k: int | None = Field(default=None, description="Maximum number of results.")
+    min_score: float | None = Field(default=None, description="Minimum score threshold.")
+    filters: dict[str, Any] | None = Field(default=None, description="Optional metadata filters.")
+    runtime_context: RuntimeContext = Field(default_factory=dict)
+
+
+async def _rag_search_recipes(
+    query: str,
+    top_k: int | None = None,
+    min_score: float | None = None,
+    filters: dict[str, Any] | None = None,
+    runtime_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ctx = runtime_context or {}
+    query = str(query or "").strip()
     
     # Fallback: use last user message if query is empty
     if not query:
-        query = str(args.get("last_user_message") or "").strip()
+        query = str(ctx.get("last_user_message") or "").strip()
         if query:
             logger.info("rag_search_recipes: using last_user_message as query fallback: %s", query)
     
     if not query:
         return {"items": [], "error": "Empty query"}
     
-    top_k = args.get("top_k") or 5
+    top_k = top_k or 5
     try:
         top_k = int(top_k)
     except (TypeError, ValueError):
         top_k = 5
     
-    min_score = args.get("min_score") or 0.0
+    min_score = min_score or 0.0
     try:
         min_score = float(min_score)
     except (TypeError, ValueError):
         min_score = 0.0
     
-    filters = args.get("filters") if isinstance(args.get("filters"), dict) else {}
+    filters = filters if isinstance(filters, dict) else {}
 
     # Load indices
     success, error = _load_index()
@@ -169,6 +149,18 @@ async def rag_search_recipes(args: dict[str, Any]) -> dict[str, Any]:
     merged = _merge_hits(vector_hits, keyword_hits, top_k=top_k)
     
     return {"items": _format_items(merged, filters, min_score)}
+
+
+rag_search_recipes_tool = StructuredTool.from_function(
+    coroutine=_rag_search_recipes,
+    name="rag_search_recipes",
+    description=(
+        "Search local recipe knowledge base with keyword + vector recall. "
+        "Input: {query:string, top_k?:integer, min_score?:number, filters?:object}."
+    ),
+    args_schema=RagSearchRecipesArgs,
+    infer_schema=False,
+)
 
 
 def _keyword_search(query: str, top_k: int) -> list[dict[str, Any]]:

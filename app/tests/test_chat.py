@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from app.agent.agents.smart_eats import _best_effort_final_from_observations, get_smart_eats_agent_config
 from app.agent.graph import _render_final_text, run_chat_stream
+from app.agent.runtime.graph import _best_effort_final_from_observations, get_agent_runtime_config
 from app.agent.state import ChatState
 
 
@@ -16,6 +16,17 @@ class _FakeRequest:
 class _FakeRedis:
     async def get(self, key):
         return None
+
+
+class _MemoryRedis:
+    def __init__(self):
+        self.values = {}
+
+    async def get(self, key):
+        return self.values.get(key)
+
+    async def setex(self, key, _ttl, value):
+        self.values[key] = value
 
 
 class _FakeCheckpointerContext:
@@ -52,6 +63,97 @@ class _FakeStatefulCheckpointerContext:
 
 
 @pytest.mark.asyncio
+async def test_travel_scene_uses_generic_runtime_and_waits_for_confirmation(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    final_json = {
+        "state": "candidates_ready",
+        "await_confirmation": True,
+        "candidates": [
+            {
+                "candidate_id": "candidate_001",
+                "name": "西湖",
+                "poi": {"poi_id": "B001", "longitude": 120.1, "latitude": 30.2},
+            }
+        ],
+        "itinerary": {"days": []},
+        "map": {"qr_code_url": None, "schema_url": None},
+        "recommendations": [{"title": "已验证 1 个候选地点", "reason": "等待确认"}],
+        "followups": [],
+        "warnings": [],
+    }
+
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.graph.build_agent_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-travel", "message": "目的地：杭州\n西湖\n灵隐寺", "final_json": final_json}]),
+    )
+
+    events = [
+        item
+        async for item in run_chat_stream(
+            _FakeRequest(),
+            db=None,
+            redis_client=_MemoryRedis(),
+            state=ChatState(session_id="s-travel", scene="travel_planner", message="目的地：杭州\n西湖\n灵隐寺"),
+        )
+    ]
+
+    final = [item for item in events if item["event"] == "final"][-1]["data"]["answer"]
+    assert final["state"] == "candidates_ready"
+    assert final["await_confirmation"] is True
+    assert final["candidates"]
+    assert final["candidates"][0]["poi"]["poi_id"]
+
+
+@pytest.mark.asyncio
+async def test_travel_confirmation_generates_itinerary_and_map_in_generic_runtime(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    final_json = {
+        "state": "map_generated",
+        "await_confirmation": False,
+        "itinerary": {"days": [{"day_number": 1, "items": [{"place_name": "西湖"}]}]},
+        "map": {"qr_code_url": "https://example.com/qr.png", "schema_url": "amapuri://travel"},
+        "recommendations": [{"title": "杭州行程已生成", "reason": "地图已生成"}],
+        "followups": [],
+        "warnings": [],
+    }
+
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.graph.build_agent_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-travel", "message": "确认生成", "final_json": final_json}]),
+    )
+
+    events = [
+        item
+        async for item in run_chat_stream(
+            _FakeRequest(),
+            db=None,
+            redis_client=_MemoryRedis(),
+            state=ChatState(
+                session_id="s-travel",
+                scene="travel_planner",
+                message="确认生成",
+                context_overrides={"travel_action": "confirm_candidates"},
+            ),
+        )
+    ]
+
+    final = [item for item in events if item["event"] == "final"][-1]["data"]["answer"]
+    assert final["state"] == "map_generated"
+    assert final["itinerary"]["days"]
+    assert final["map"]["qr_code_url"] == "https://example.com/qr.png"
+
+
+@pytest.mark.asyncio
 async def test_run_chat_stream_resume_without_pending_checkpoint_uses_state_input(monkeypatch):
     async def _noop_save_assistant_message(*_args, **_kwargs):
         return None
@@ -76,10 +178,10 @@ async def test_run_chat_stream_resume_without_pending_checkpoint_uses_state_inpu
         def compile(self, **_kwargs):
             return _ResumeGraph()
 
-    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeStatefulCheckpointerContext())
-    monkeypatch.setattr("app.agent.graph.build_smart_eats_graph", lambda **_kwargs: _ResumeGraphBuilder())
+    monkeypatch.setattr("app.agent.graph.build_agent_runtime_graph", lambda **_kwargs: _ResumeGraphBuilder())
 
     state = ChatState(
         session_id="s-resume",
@@ -109,11 +211,11 @@ async def test_run_chat_stream_preserves_core_event_contract(monkeypatch):
         "warnings": [],
     }
 
-    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_smart_eats_graph",
+        "app.agent.graph.build_agent_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-contract", "message": "你好", "final_json": final_json}]),
     )
 
@@ -140,11 +242,11 @@ async def test_run_chat_stream_cancellation_emits_single_stopped_final(monkeypat
         async def get(self, key):
             return b"1"
 
-    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_smart_eats_graph",
+        "app.agent.graph.build_agent_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([
             {
                 "session_id": "s-cancel",
@@ -250,9 +352,12 @@ def test_render_final_text_empty_returns_default():
 
 
 def test_best_effort_with_empty_fridge_avoids_fallback():
-    state = ChatState(session_id="s1", context={"fridge_items": []})
+    state = ChatState(
+        session_id="s1",
+        context={"active_skills": [{"id": "food_assistant"}], "food_mode": "cook_home", "fridge_items": []},
+    )
 
-    final_json = _best_effort_final_from_observations(state, get_smart_eats_agent_config())
+    final_json = _best_effort_final_from_observations(state, get_agent_runtime_config())
 
     assert final_json["recommendations"][0]["reason"] != "fallback"
     assert "冰箱" in final_json["recommendations"][0]["title"]
@@ -261,6 +366,7 @@ def test_best_effort_with_empty_fridge_avoids_fallback():
 def test_best_effort_with_rag_recipe_results_avoids_fallback():
     state = ChatState(
         session_id="s1",
+        context={"active_skills": [{"id": "food_assistant"}], "food_mode": "cook_home"},
         observations=[
             {
                 "tool": "rag_search_recipes",
@@ -274,7 +380,7 @@ def test_best_effort_with_rag_recipe_results_avoids_fallback():
         ],
     )
 
-    final_json = _best_effort_final_from_observations(state, get_smart_eats_agent_config())
+    final_json = _best_effort_final_from_observations(state, get_agent_runtime_config())
 
     assert final_json["recommendations"][0]["reason"] != "fallback"
     assert final_json["recommendations"][0]["type"] == "recipe"
@@ -284,7 +390,7 @@ def test_best_effort_with_rag_recipe_results_avoids_fallback():
 def test_best_effort_without_business_signal_falls_back():
     state = ChatState(session_id="s1")
 
-    final_json = _best_effort_final_from_observations(state, get_smart_eats_agent_config())
+    final_json = _best_effort_final_from_observations(state, get_agent_runtime_config())
 
     assert final_json["recommendations"][0]["reason"] == "fallback"
     assert "抱歉" in final_json["recommendations"][0]["title"]

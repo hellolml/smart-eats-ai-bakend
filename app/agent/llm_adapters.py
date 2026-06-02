@@ -95,7 +95,7 @@ class ProviderRegistry:
         provider_key, _, model_override = raw.partition(":")
         key = provider_key or "qwen"
         override = model_override.strip() or None
-        vision_model = (settings.LLM_VISION_MODEL_PLANNER or None) or override
+        vision_model = settings.LLM_VISION_MODEL_PLANNER or None
         if key == "deepseek":
             return ProviderConfig(
                 name="deepseek",
@@ -146,7 +146,7 @@ def _get_shared_client(config: ProviderConfig) -> AsyncOpenAI | None:
             api_key=config.api_key,
             base_url=config.base_url,
             max_retries=1,
-            timeout=httpx.Timeout(60.0, connect=5.0),
+            timeout=httpx.Timeout(float(settings.LLM_PLANNER_REQUEST_TIMEOUT_SECONDS), connect=10.0),
         )
         _CLIENT_POOL[key] = client
         return client
@@ -163,7 +163,7 @@ def _get_shared_anthropic_client(config: ProviderConfig) -> httpx.AsyncClient | 
         client = _ANTHROPIC_CLIENT_POOL.get(key)
         if client is not None:
             return client
-        client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
+        client = httpx.AsyncClient(timeout=httpx.Timeout(float(settings.LLM_PLANNER_REQUEST_TIMEOUT_SECONDS), connect=10.0))
         _ANTHROPIC_CLIENT_POOL[key] = client
         return client
 
@@ -184,17 +184,29 @@ class OpenAIPlanner:
         tools: list[Any],
         image_parts: list[dict[str, Any]] | None = None,
     ) -> AIMessage:
-        system, user = self._messages_to_system_user(messages)
         available_tools = self._langchain_tools_to_available_schemas(tools)
-        if image_parts:
-            decision = await self.plan_tool_calls(
-                system,
-                user,
+        plan_tool_calls_overridden = getattr(type(self).plan_tool_calls, "__module__", __name__) != __name__
+        if self._is_simple_system_user_turn(messages) or plan_tool_calls_overridden:
+            system, user = (
+                self._messages_to_system_latest_user(messages)
+                if plan_tool_calls_overridden and not self._is_simple_system_user_turn(messages)
+                else self._messages_to_system_user(messages)
+            )
+            if image_parts:
+                decision = await self.plan_tool_calls(
+                    system,
+                    user,
+                    available_tools,
+                    image_parts=image_parts,
+                )
+            else:
+                decision = await self.plan_tool_calls(system, user, available_tools)
+        else:
+            decision = await self.plan_native_messages_with_tools(
+                messages,
                 available_tools,
                 image_parts=image_parts,
             )
-        else:
-            decision = await self.plan_tool_calls(system, user, available_tools)
         content = decision.get("content") if isinstance(decision, dict) else ""
         tool_calls = decision.get("tool_calls") if isinstance(decision, dict) else []
         return AIMessage(
@@ -212,8 +224,32 @@ class OpenAIPlanner:
             if isinstance(message, SystemMessage):
                 system_parts.append(content)
             elif isinstance(message, HumanMessage):
-                user_parts.append(content)
+                user_parts.append(f"user: {content}" if user_parts else content)
+            elif isinstance(message, AIMessage):
+                user_parts.append(f"assistant: {content}")
+            else:
+                message_type = getattr(message, "type", None) or getattr(message, "role", None) or "context"
+                user_parts.append(f"{message_type}: {content}")
         return "\n".join(system_parts).strip(), "\n".join(user_parts).strip()
+
+    def _messages_to_system_latest_user(self, messages: list[Any]) -> tuple[str, str]:
+        system_parts: list[str] = []
+        latest_user = ""
+        for message in messages:
+            content = self._message_content_to_text(getattr(message, "content", None))
+            if isinstance(message, SystemMessage) and content:
+                system_parts.append(content)
+            elif isinstance(message, HumanMessage) and content:
+                latest_user = content
+        return "\n".join(system_parts).strip(), latest_user
+
+    @staticmethod
+    def _is_simple_system_user_turn(messages: list[Any]) -> bool:
+        return (
+            len(messages) == 2
+            and isinstance(messages[0], SystemMessage)
+            and isinstance(messages[1], HumanMessage)
+        )
 
     def _langchain_tools_to_available_schemas(self, tools: list[Any]) -> list[dict[str, Any]]:
         available: list[dict[str, Any]] = []
@@ -221,13 +257,12 @@ class OpenAIPlanner:
             name = getattr(tool, "name", None)
             if not isinstance(name, str) or not name or name == "submit_final_answer":
                 continue
-            args_schema = getattr(tool, "args_schema", None)
-            if hasattr(args_schema, "model_json_schema"):
-                input_schema = args_schema.model_json_schema()
-            elif isinstance(args_schema, dict):
-                input_schema = args_schema
+            tool_call_schema = getattr(tool, "tool_call_schema", None)
+            if hasattr(tool_call_schema, "model_json_schema"):
+                input_schema = tool_call_schema.model_json_schema()
             else:
-                input_schema = {"type": "object", "properties": {}}
+                args = getattr(tool, "args", None)
+                input_schema = {"type": "object", "properties": args} if isinstance(args, dict) else {"type": "object", "properties": {}}
             available.append(
                 {
                     "name": name,
@@ -326,7 +361,7 @@ class OpenAIPlanner:
             messages=messages,
             tools=openai_tools,
             tool_choice="auto",
-            timeout=35,
+            timeout=settings.LLM_PLANNER_REQUEST_TIMEOUT_SECONDS,
         )
 
         message = response.choices[0].message
@@ -368,6 +403,92 @@ class OpenAIPlanner:
             "tool_calls": normalized_calls,
         }
 
+    async def plan_native_messages_with_tools(
+        self,
+        messages: list[Any],
+        available_tools: list[dict[str, Any]],
+        image_parts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if not self.client:
+            raise RuntimeError("LLM provider is not configured")
+        context = _log_context()
+        requested_image_parts = image_parts if isinstance(image_parts, list) else []
+        model = (
+            self.config.model_vision_planner
+            if requested_image_parts and self.config.model_vision_planner
+            else self.config.model_planner
+        )
+        payload_messages = self._messages_to_openai_payload(
+            messages,
+            requested_image_parts,
+        )
+        if _should_log_request("user"):
+            logger.info(
+                "planner request provider=%s model=%s session_id=%s turn=%s step=%s messages=%s",
+                self.config.name,
+                model,
+                context.get("session_id"),
+                context.get("turn"),
+                context.get("step"),
+                payload_messages,
+            )
+        response = await self.client.chat.completions.create(
+            model=model,
+            messages=payload_messages,
+            tools=self._build_openai_tools(available_tools),
+            tool_choice="auto",
+            timeout=settings.LLM_PLANNER_REQUEST_TIMEOUT_SECONDS,
+        )
+
+        message = response.choices[0].message
+        content = self._message_content_to_text(getattr(message, "content", None))
+        raw_tool_calls = getattr(message, "tool_calls", None) or []
+        logger.info(
+            "planner response provider=%s model=%s session_id=%s turn=%s step=%s tool_calls=%s content=%s",
+            self.config.name,
+            model,
+            context.get("session_id"),
+            context.get("turn"),
+            context.get("step"),
+            [getattr(getattr(item, "function", None), "name", None) for item in raw_tool_calls],
+            content,
+        )
+        normalized_calls = [
+            self._normalize_openai_tool_call(item, index)
+            for index, item in enumerate(raw_tool_calls)
+            if getattr(item, "function", None) is not None
+        ]
+        return {"content": content, "tool_calls": normalized_calls}
+
+    def _messages_to_openai_payload(
+        self,
+        messages: list[Any],
+        image_parts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        payload: list[dict[str, Any]] = []
+        for message in messages:
+            content = self._message_content_to_text(getattr(message, "content", None))
+            if not content:
+                continue
+            if isinstance(message, SystemMessage):
+                payload.append({"role": "system", "content": content})
+            elif isinstance(message, HumanMessage):
+                payload.append({"role": "user", "content": content})
+            elif isinstance(message, AIMessage):
+                payload.append({"role": "assistant", "content": content})
+            else:
+                message_type = getattr(message, "type", None) or getattr(message, "role", None) or "context"
+                payload.append({"role": "user", "content": f"{message_type}: {content}"})
+        if not payload:
+            payload.append({"role": "user", "content": ""})
+        if image_parts:
+            for item in reversed(payload):
+                if item.get("role") == "user":
+                    text = item.get("content") if isinstance(item.get("content"), str) else ""
+                    item["content"] = [{"type": "text", "text": text}, *image_parts]
+                    break
+        return payload
+
     def final_action_from_text(self, content: str) -> FinalAction:
         return self._build_fallback_final_action(content)
 
@@ -405,6 +526,22 @@ class OpenAIPlanner:
             }
         )
         return tools
+
+    def _normalize_openai_tool_call(self, call: Any, index: int) -> dict[str, Any]:
+        function = getattr(call, "function", None)
+        tool_name = getattr(function, "name", None)
+        if not isinstance(tool_name, str) or not tool_name:
+            raise RuntimeError("invalid planner response: missing tool name")
+        args = self._normalize_tool_args(tool_name, getattr(function, "arguments", None))
+        call_id = getattr(call, "id", None)
+        if not isinstance(call_id, str) or not call_id:
+            call_id = f"call_{index}"
+        return {
+            "name": tool_name,
+            "args": args,
+            "id": call_id,
+            "type": "tool_call",
+        }
 
     def _normalize_tool_args(self, tool_name: str, raw_args: Any) -> dict[str, Any]:
         payload = raw_args if isinstance(raw_args, str) else json.dumps(raw_args or {}, ensure_ascii=False)
@@ -483,7 +620,7 @@ class OpenAIPlanner:
                 messages=messages,
                 tools=tools,
                 tool_choice={"type": "function", "function": {"name": "decide_intent"}},
-                timeout=20,
+                timeout=settings.LLM_INTENT_REQUEST_TIMEOUT_SECONDS,
             )
             message = response.choices[0].message
             tool_calls = getattr(message, "tool_calls", None) or []
@@ -505,6 +642,27 @@ class AnthropicPlanner(OpenAIPlanner):
     def __init__(self, config: ProviderConfig) -> None:
         self.config = config
         self.client = _get_shared_anthropic_client(config)
+
+    async def ainvoke_with_tools(
+        self,
+        messages: list[Any],
+        tools: list[Any],
+        image_parts: list[dict[str, Any]] | None = None,
+    ) -> AIMessage:
+        system, user = self._messages_to_system_user(messages)
+        available_tools = self._langchain_tools_to_available_schemas(tools)
+        decision = await self.plan_tool_calls(
+            system,
+            user,
+            available_tools,
+            image_parts=image_parts,
+        )
+        content = decision.get("content") if isinstance(decision, dict) else ""
+        tool_calls = decision.get("tool_calls") if isinstance(decision, dict) else []
+        return AIMessage(
+            content=content if isinstance(content, str) else "",
+            tool_calls=tool_calls if isinstance(tool_calls, list) else [],
+        )
 
     async def plan_tool_calls(
         self,

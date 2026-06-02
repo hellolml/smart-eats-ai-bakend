@@ -2,32 +2,30 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.tools_registry import register_tool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+
+from app.agent.tools.native import RuntimeContext
 from app.infra.external.amap import amap
 
 
-@register_tool(
+class GetWeatherArgs(BaseModel):
+    city: str = Field(..., description="City name.")
+    runtime_context: RuntimeContext = Field(default_factory=dict)
+
+
+async def _get_weather(
+    city: str,
+    runtime_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ctx = runtime_context or {}
+    return await amap.get_weather(city or "unknown", servers_path=ctx.get("servers_path"))
+
+
+get_weather_tool = StructuredTool.from_function(
+    coroutine=_get_weather,
     name="get_weather",
-    description=(
-        "Get weather by city name. Input: {city:string}. "
-        "Output: {city,status,temperature_c,raw}. "
-        "Example input: {\"city\":\"长沙\"}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {"city": {"type": "string"}},
-        "required": ["city"],
-    },
-    output_schema={
-        "type": "object",
-        "properties": {
-            "city": {"type": "string"},
-            "status": {"type": "string"},
-            "temperature_c": {"type": ["number", "null"]},
-            "raw": {},
-        },
-    },
+    description="Get weather by city name. Input: {city:string}. Output: {city,status,temperature_c,raw}.",
+    args_schema=GetWeatherArgs,
+    infer_schema=False,
 )
-async def get_weather(args: dict[str, Any]) -> dict[str, Any]:
-    city = args.get("city") or "unknown"
-    return await amap.get_weather(city, servers_path=args.get("servers_path"))

@@ -5,49 +5,35 @@ import logging
 
 import httpx
 import redis.asyncio as redis
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 
 from app.agent.tools.location_cache import cache_location
-from app.agent.tools_registry import register_tool
+from app.agent.tools.native import RuntimeContext
 from app.infra.external.amap import amap
 
 logger = logging.getLogger("agent.tools.location")
 
 
-@register_tool(
-    name="get_ip_location",
-    description=(
-        "Resolve current location using device coordinates first, then IP. Input: {ip:string?}. "
-        "Output: {lat:number,lng:number,city:string,location_source:string} or {error:string}. "
-        "Example input: {\"ip\":\"8.8.8.8\"}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {"ip": {"type": "string"}},
-        "required": [],
-    },
-    output_schema={
-        "type": "object",
-        "properties": {
-            "lat": {"type": "number"},
-            "lng": {"type": "number"},
-            "city": {"type": "string"},
-            "location_source": {"type": "string"},
-            "address": {"type": "string"},
-            "region": {"type": "object"},
-            "error": {"type": "string"},
-        },
-    },
-)
-async def get_ip_location(args: dict[str, Any]) -> dict[str, Any]:
-    redis_client = args.get("redis_client")
+class GetIpLocationArgs(BaseModel):
+    ip: str | None = Field(default=None, description="Optional client IP address.")
+    runtime_context: RuntimeContext = Field(default_factory=dict)
+
+
+async def _get_ip_location(
+    ip: str | None = None,
+    runtime_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ctx = runtime_context or {}
+    redis_client = ctx.get("redis_client")
     if not isinstance(redis_client, redis.Redis):
         raise RuntimeError("redis client unavailable")
 
-    session_id = args.get("session_id")
-    servers_path = args.get("servers_path")
+    session_id = ctx.get("session_id")
+    servers_path = ctx.get("servers_path")
 
     # 1) Prefer frontend device location, same priority as /home/overview
-    context = args.get("context") if isinstance(args.get("context"), dict) else {}
+    context = ctx.get("context") if isinstance(ctx.get("context"), dict) else {}
     device_location = _extract_device_location(context)
     if device_location:
         region = await amap.reverse_geocode_region(device_location, servers_path=servers_path)
@@ -74,7 +60,7 @@ async def get_ip_location(args: dict[str, Any]) -> dict[str, Any]:
         }
 
     # 2) Fallback to AMap IP location (MCP)
-    ip = args.get("ip") or args.get("client_ip")
+    ip = ip or ctx.get("client_ip")
     if _is_local_ip(ip):
         ip = await _fetch_public_ip()
     if not isinstance(ip, str) or not ip:
@@ -105,6 +91,18 @@ async def get_ip_location(args: dict[str, Any]) -> dict[str, Any]:
 
     logger.info("location_tool_result session_id=%s source=amap_ip ip=%s error=missing_location", session_id, ip)
     return {"error": "missing_location"}
+
+
+get_ip_location_tool = StructuredTool.from_function(
+    coroutine=_get_ip_location,
+    name="get_ip_location",
+    description=(
+        "Resolve current location using device coordinates first, then IP. "
+        "Input: {ip?:string}. Output: {lat,lng,city,location_source,address,region} or {error}."
+    ),
+    args_schema=GetIpLocationArgs,
+    infer_schema=False,
+)
 
 
 def _format_region(region: dict[str, Any] | None) -> str:

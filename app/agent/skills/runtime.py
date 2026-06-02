@@ -88,6 +88,7 @@ class SkillRuntime:
             )
 
         return SkillRuntimeResult(
+            active_skill_specs=active.skills,
             active_skills=active_infos,
             system_prompt_addendum=prompt_addendum,
             allowed_tools=tool_output.allowed_tools,

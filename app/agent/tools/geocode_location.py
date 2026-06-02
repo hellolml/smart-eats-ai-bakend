@@ -3,49 +3,34 @@ from __future__ import annotations
 from typing import Any
 
 import redis.asyncio as redis
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 
 from app.agent.tools.location_cache import cache_location
-from app.agent.tools_registry import register_tool
+from app.agent.tools.native import RuntimeContext
 from app.infra.external.amap import amap
 
 
-@register_tool(
-    name="geocode_location",
-    description=(
-        "Geocode a place name to coordinates. "
-        "Input: {query:string, city?:string}. "
-        "Output: {lat:number,lng:number,city?:string,query:string} or {error:string}. "
-        "Example input: {\"query\":\"长沙岳麓区黄鹤小区\"}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "query": {"type": "string"},
-            "city": {"type": "string"},
-        },
-        "required": ["query"],
-    },
-    output_schema={
-        "type": "object",
-        "properties": {
-            "lat": {"type": "number"},
-            "lng": {"type": "number"},
-            "city": {"type": "string"},
-            "query": {"type": "string"},
-            "error": {"type": "string"},
-        },
-    },
-)
-async def geocode_location(args: dict[str, Any]) -> dict[str, Any]:
-    redis_client = args.get("redis_client")
+class GeocodeLocationArgs(BaseModel):
+    query: str = Field(..., description="Place name or address to geocode.")
+    city: str | None = Field(default=None, description="Optional city hint.")
+    runtime_context: RuntimeContext = Field(default_factory=dict)
+
+
+async def _geocode_location(
+    query: str,
+    city: str | None = None,
+    runtime_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ctx = runtime_context or {}
+    redis_client = ctx.get("redis_client")
     if not isinstance(redis_client, redis.Redis):
         raise RuntimeError("redis client unavailable")
-    session_id = args.get("session_id")
-    query = args.get("query") or ""
+    session_id = ctx.get("session_id")
     if not query.strip():
         return {"error": "missing_query"}
-    context = args.get("context") if isinstance(args.get("context"), dict) else {}
-    city = args.get("city") or _extract_city(context)
+    context = ctx.get("context") if isinstance(ctx.get("context"), dict) else {}
+    city = city or _extract_city(context)
     query, city = _normalize_query_city(query, city)
     query = _ensure_city_in_query(query, city)
     location = None
@@ -56,12 +41,12 @@ async def geocode_location(args: dict[str, Any]) -> dict[str, Any]:
     if city and simplified and city not in simplified:
         candidates.append(f"{simplified} {city}")
     for candidate in candidates:
-        location = await amap.geocode_address(candidate, city, servers_path=args.get("servers_path"))
+        location = await amap.geocode_address(candidate, city, servers_path=ctx.get("servers_path"))
         if location:
             query = candidate
             break
     if not location:
-        poi_location, poi_query = await _fallback_poi_location(query, city, args.get("servers_path"))
+        poi_location, poi_query = await _fallback_poi_location(query, city, ctx.get("servers_path"))
         if not poi_location:
             return {"error": "not_found"}
         location = poi_location
@@ -73,6 +58,18 @@ async def geocode_location(args: dict[str, Any]) -> dict[str, Any]:
         "city": city,
         "query": query,
     }
+
+
+geocode_location_tool = StructuredTool.from_function(
+    coroutine=_geocode_location,
+    name="geocode_location",
+    description=(
+        "Geocode a place name to coordinates. Input: {query:string, city?:string}. "
+        "Output: {lat,lng,city,query} or {error}."
+    ),
+    args_schema=GeocodeLocationArgs,
+    infer_schema=False,
+)
 
 
 def _normalize_query_city(query: str, city: str | None) -> tuple[str, str | None]:

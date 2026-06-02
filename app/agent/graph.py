@@ -18,16 +18,17 @@ except ImportError:
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.checkpoint import checkpointer_context
-from app.agent.agents.smart_eats import (
-    _fallback_final,
+from app.agent.langgraph_store import langgraph_store_context
+from app.agent.runtime.graph import (
     _state_from_dict,
-    build_smart_eats_graph,
+    build_agent_runtime_graph,
 )
+from app.agent.runtime.finalization import fallback_final
 from app.agent.metrics import record_agent_metric
 from app.agent.state import ChatState
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
-from app.agent import history
+from app.agent import conversation
 from app.domain.preferences.service import apply_extracted_preferences, extract_preferences_from_text
 
 logger = logging.getLogger("agent")
@@ -50,6 +51,15 @@ def _normalize_llm_upstream_error_message(exc: Exception) -> str:
 
     if error_type == "AllocationQuota.FreeTierOnly" or "free tier" in combined_lower:
         return "当前模型免费额度已用尽，请在模型管理控制台关闭“仅使用免费额度”模式，或切换到可用模型后重试。"
+
+    if "coding_plan_subscription_expired" in combined_lower or "subscription is expired" in combined_lower:
+        return "当前模型订阅已过期，请在模型管理中切换到可用模型，或更新后端 LLM_PROVIDER / 模型配置后重试。"
+
+    if "request timed out" in combined_lower or "timed out" in combined_lower:
+        return "模型响应超时，请稍后重试；如果旅行规划较复杂，请减少一次输入的信息量，或在后端调大 LLM_PLANNER_REQUEST_TIMEOUT_SECONDS。"
+
+    if "unexpected item type in content" in combined_lower or "messages input is invalid" in combined_lower:
+        return "模型未接受本次图片输入，请确认当前模型支持多模态图片，或重新上传图片后再试。"
 
     if error_message:
         return error_message
@@ -175,23 +185,27 @@ async def run_chat_stream(
     provider = state.provider or settings.LLM_PROVIDER
     cancel_key = f"chat:cancel:{state.session_id}"
     trace_id = state.trace_id or ""
-    history_cache = history.create_history_cache()
-    history.set_current_cache(history_cache)
+    conversation_cache = conversation.create_conversation_cache()
+    conversation.set_current_cache(conversation_cache)
     try:
-        async with checkpointer_context() as checkpointer:
+        delete_cancel = getattr(redis_client, "delete", None)
+        if callable(delete_cancel):
+            result = delete_cancel(cancel_key)
+            if inspect.isawaitable(result):
+                await result
+        async with checkpointer_context() as checkpointer, langgraph_store_context() as store:
             logger.info(
-                "agent_runtime_dispatch session_id=%s trace_id=%s runtime_path=%s agent_type=%s",
+                "agent_runtime_dispatch session_id=%s trace_id=%s runtime_path=%s",
                 state.session_id,
                 trace_id,
-                "dedicated_smart_eats",
-                state.agent_type or "smart_eats",
+                "generic_skill_runtime",
             )
-            graph = build_smart_eats_graph(
+            graph = build_agent_runtime_graph(
                 db=db,
                 redis_client=redis_client,
                 provider=provider,
                 resolved_model_config=state.resolved_model_config,
-            ).compile(checkpointer=checkpointer)
+            ).compile(checkpointer=checkpointer, store=store)
             latest_state = state
             last_final_json: dict[str, Any] | None = None
             config = _build_graph_config(state)
@@ -266,7 +280,7 @@ async def run_chat_stream(
         if not final_json:
             final_json = last_final_json
         if not final_json:
-            final_json = _fallback_final()
+            final_json = fallback_final()
             if hasattr(latest_state, "final_json"):
                 latest_state.final_json = final_json
             else:
@@ -291,7 +305,7 @@ async def run_chat_stream(
         await asyncio.sleep(0)
 
         if isinstance(latest_state, ChatState):
-            await history.save_assistant_message(
+            await conversation.save_assistant_message(
                 db,
                 redis_client,
                 latest_state.session_id,
@@ -305,7 +319,7 @@ async def run_chat_stream(
             )
         else:
             temp_state = _state_from_dict(latest_state)
-            await history.save_assistant_message(
+            await conversation.save_assistant_message(
                 db,
                 redis_client,
                 temp_state.session_id,
@@ -335,6 +349,6 @@ async def run_chat_stream(
         }
         return
     finally:
-        if history_cache:
-            history_cache.close()
-        history.clear_current_cache()
+        if conversation_cache:
+            conversation_cache.close()
+        conversation.clear_current_cache()

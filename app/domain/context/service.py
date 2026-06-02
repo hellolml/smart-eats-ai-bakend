@@ -13,6 +13,52 @@ from app.infra.models.user import User
 
 class ContextService:
     @staticmethod
+    async def build_debug_snapshot(
+        db: AsyncSession,
+        *,
+        thread_id: str,
+    ) -> dict[str, Any]:
+        from app.agent.langgraph_context import search_source_events, store_search
+        from app.agent.langgraph_store import langgraph_store_context
+
+        async with langgraph_store_context() as store:
+            source_events = await search_source_events(
+                store,
+                thread_id=thread_id,
+                query="",
+                top_k=20,
+            )
+            compaction_runs = await store_search(
+                store,
+                ("compaction_runs", thread_id),
+                query=None,
+                limit=20,
+            )
+        return {
+            "thread_id": thread_id,
+            "runtime": "langgraph_native",
+            "source_event_count": len(source_events),
+            "source_events": [
+                {
+                    "id": item.get("event_id"),
+                    "tool_name": item.get("tool_name"),
+                    "content_preview": item.get("content_preview"),
+                    "metadata": item.get("metadata"),
+                }
+                for item in source_events
+            ],
+            "compaction_runs": [
+                {
+                    "id": getattr(item, "key", None),
+                    "status": (getattr(item, "value", {}) or {}).get("status"),
+                    "error_type": (getattr(item, "value", {}) or {}).get("error_type"),
+                    "budget": (getattr(item, "value", {}) or {}).get("budget"),
+                }
+                for item in compaction_runs
+            ],
+        }
+
+    @staticmethod
     async def build(
         db: AsyncSession,
         user_id: str | None,
@@ -96,6 +142,12 @@ class ContextService:
 
         if overrides:
             snapshot = _merge_overrides(snapshot, overrides)
+
+        if session_id:
+            snapshot["langgraph_context"] = await ContextService.build_debug_snapshot(
+                db,
+                thread_id=session_id,
+            )
 
         if user_id:
             db.add(

@@ -16,6 +16,49 @@ async def _register_and_get_headers(client, email: str) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
+async def test_food_decision_generic_eat_query_searches_restaurants_not_recipe(monkeypatch):
+    captured: dict = {}
+
+    class FakeRedis:
+        async def get(self, _key):
+            return None
+
+        async def setex(self, *_args):
+            return None
+
+    async def fake_restaurant_search(_redis, query, tag, lat, lng, sort, city=None):
+        captured["restaurant_query"] = query
+        captured["lat"] = lat
+        captured["lng"] = lng
+        return []
+
+    async def fail_recipe_search(*_args, **_kwargs):
+        raise AssertionError("eat scene should not fall back to recipe placeholders")
+
+    async def fake_ai_fallback(**_kwargs):
+        return "番茄炒蛋盖饭"
+
+    monkeypatch.setattr("app.domain.decision.service.RestaurantService.search", fake_restaurant_search)
+    monkeypatch.setattr("app.domain.decision.service.RecipeService.search", fail_recipe_search)
+    monkeypatch.setattr("app.domain.decision.service._generate_cn_home_style_fallback", fake_ai_fallback)
+
+    result = await DecisionService.blindbox(
+        None,
+        FakeRedis(),
+        user_id=None,
+        query="今天吃点啥？",
+        city=None,
+        lat=31.23,
+        lng=121.47,
+        budget_level=None,
+        scene="eat",
+    )
+
+    assert captured["restaurant_query"] == "美食"
+    assert result["decision"]["title"] == "番茄炒蛋盖饭"
+
+
+@pytest.mark.asyncio
 async def test_app_decision_blindbox(client, monkeypatch):
     async def fake_blindbox(*args, **kwargs):
         return {

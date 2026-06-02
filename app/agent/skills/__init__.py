@@ -1,2 +1,1 @@
-"""Runtime skill framework for SmartEats agents."""
-
+"""Runtime skill framework for generic agents."""

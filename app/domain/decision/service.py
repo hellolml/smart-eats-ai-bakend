@@ -51,9 +51,10 @@ class DecisionService:
         taste_profile = await _get_taste_profile(db, user_id)
         hard_filter_terms = _hard_filter_terms(pref, taste_profile)
 
+        restaurant_query = _restaurant_search_query(query, scene)
         restaurants = await RestaurantService.search(
             redis_client,
-            query=query or "美食",
+            query=restaurant_query,
             tag=None,
             lat=lat,
             lng=lng,
@@ -94,7 +95,7 @@ class DecisionService:
                     "raw": picked,
                 }
 
-        if chosen is None and scene not in {"blindbox"}:
+        if chosen is None and _allow_recipe_fallback(scene):
             recipes = await RecipeService.search(redis_client, query or "快手菜")
             if recipes and hard_filter_terms:
                 recipes = [
@@ -437,10 +438,36 @@ def _build_reasons(title: str, ctx: DecisionContext, scene: str | None) -> list[
         reasons.append(f"结合当前天气（{weather_text}），这道选择更对胃口。")
     reasons.append(f"现在是{_time_slot(ctx.now)}时段，这个选择执行成本低，不容易拖延。")
     if scene:
-        reasons.append(f"按你当前场景“{scene}”做了收敛，减少纠结。")
+        scene_label = {"eat": "吃点啥", "food_decision": "吃点啥", "cook_home": "在家做饭"}.get(scene, scene)
+        reasons.append(f"按你当前场景“{scene_label}”做了收敛，减少纠结。")
     else:
         reasons.append("这是综合口味、时间和便利性后最稳的一票。")
     return reasons[:3]
+
+
+def _restaurant_search_query(query: str | None, scene: str | None) -> str:
+    text = (query or "").strip()
+    compact = text.replace("？", "").replace("?", "").replace("！", "").replace("!", "").strip()
+    generic_terms = {
+        "",
+        "吃点啥",
+        "吃什么",
+        "今天吃点啥",
+        "今天吃点啥？",
+        "今天吃什么",
+        "今天吃什么？",
+        "午饭吃什么",
+        "晚饭吃什么",
+        "早餐吃什么",
+        "夜宵吃什么",
+    }
+    if compact in generic_terms or scene in {"eat", "food_decision"} and len(compact) <= 8 and any(token in compact for token in ("吃", "饭", "餐")):
+        return "美食"
+    return text or "美食"
+
+
+def _allow_recipe_fallback(scene: str | None) -> bool:
+    return scene not in {"blindbox", "eat", "food_decision"}
 
 
 def _build_actions(chosen: dict[str, Any]) -> list[dict[str, Any]]:

@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import Any
 import math
 
-from app.agent.tools_registry import register_tool
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+
+from app.agent.tools.native import RuntimeContext
 from app.infra.external.amap import amap
 
 
@@ -53,60 +56,45 @@ def _haversine_meters(origin: dict[str, float], destination: dict[str, float]) -
     return 6371000 * c
 
 
-@register_tool(
-    name="plan_route",
-    description=(
-        "Plan a route between origin and destination coordinates. "
-        "Input: {origin_lat:number,origin_lng:number,destination_lat:number,destination_lng:number,mode?:string,strategy?:string}. "
-        "Output: {distance_m,duration_s,steps,origin,destination,mode} or {error:string}. "
-        "IMPORTANT: All coordinates are required. Call geocode_location first if you only have addresses. "
-        "Example input: {\"origin_lat\":28.17,\"origin_lng\":112.93,\"destination_lat\":28.20,\"destination_lng\":112.97,\"mode\":\"driving\"}."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "origin_lat": {"type": "number"},
-            "origin_lng": {"type": "number"},
-            "destination_lat": {"type": "number"},
-            "destination_lng": {"type": "number"},
-            "mode": {"type": "string", "enum": ["walking", "bicycling", "transit", "driving"]},
-            "strategy": {"type": "string"},
-        },
-        "required": ["origin_lat", "origin_lng", "destination_lat", "destination_lng"],
-    },
-    output_schema={
-        "type": "object",
-        "properties": {
-            "distance_m": {"type": ["number", "string", "null"]},
-            "duration_s": {"type": ["number", "string", "null"]},
-            "steps": {"type": "array", "items": {"type": "string"}},
-            "origin": {"type": "object"},
-            "destination": {"type": "object"},
-            "mode": {"type": "string"},
-            "error": {"type": "string"},
-        },
-    },
-)
-async def plan_route(args: dict[str, Any]) -> dict[str, Any]:
+class PlanRouteArgs(BaseModel):
+    origin_lat: float = Field(..., description="Origin latitude.")
+    origin_lng: float = Field(..., description="Origin longitude.")
+    destination_lat: float = Field(..., description="Destination latitude.")
+    destination_lng: float = Field(..., description="Destination longitude.")
+    mode: str | None = Field(default=None, description="walking, bicycling, transit, or driving.")
+    strategy: str | None = Field(default=None, description="Optional routing strategy.")
+    runtime_context: RuntimeContext = Field(default_factory=dict)
+
+
+async def _plan_route(
+    origin_lat: float,
+    origin_lng: float,
+    destination_lat: float,
+    destination_lng: float,
+    mode: str | None = None,
+    strategy: str | None = None,
+    runtime_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     规划路线（原子化工具）
     
     位置获取/地理编码逻辑已移除，由 Agent 负责先调用 geocode_location 获取坐标。
     """
-    servers_path = args.get("servers_path")
+    ctx = runtime_context or {}
+    servers_path = ctx.get("servers_path")
     
     # 获取起点坐标
-    origin = _coerce_location(args.get("origin_lat"), args.get("origin_lng"))
+    origin = _coerce_location(origin_lat, origin_lng)
     if not origin:
         return {"error": "missing_origin"}
     
     # 获取终点坐标
-    destination = _coerce_location(args.get("destination_lat"), args.get("destination_lng"))
+    destination = _coerce_location(destination_lat, destination_lng)
     if not destination:
         return {"error": "missing_destination"}
     
     # 确定出行模式
-    mode = _normalize_mode(args.get("mode"))
+    mode = _normalize_mode(mode)
     if mode is None:
         # 如果用户未指定，根据距离自动选择
         direct_distance = _haversine_meters(origin, destination)
@@ -117,7 +105,7 @@ async def plan_route(args: dict[str, Any]) -> dict[str, Any]:
         origin,
         destination,
         mode,
-        args.get("strategy"),
+        strategy,
         servers_path=servers_path,
     )
     
@@ -125,3 +113,16 @@ async def plan_route(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "route_unavailable"}
     
     return route
+
+
+plan_route_tool = StructuredTool.from_function(
+    coroutine=_plan_route,
+    name="plan_route",
+    description=(
+        "Plan a route between origin and destination coordinates. "
+        "Input: {origin_lat,origin_lng,destination_lat,destination_lng,mode?,strategy?}. "
+        "IMPORTANT: all coordinates are required."
+    ),
+    args_schema=PlanRouteArgs,
+    infer_schema=False,
+)

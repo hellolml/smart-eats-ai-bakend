@@ -55,11 +55,11 @@ async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monke
         "warnings": [],
     }
 
-    monkeypatch.setattr("app.agent.graph.history.save_assistant_message", _noop)
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_smart_eats_graph",
+        "app.agent.graph.build_agent_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-values", "message": "你好", "final_json": final_json}]),
     )
 
@@ -69,6 +69,29 @@ async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monke
 
     assert events[-1]["event"] == "final"
     assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "typed state final"
+
+
+@pytest.mark.asyncio
+async def test_app_chat_sessions_can_filter_by_eat_scene(client):
+    resp = await client.post(
+        "/api/v1/app/auth/register",
+        json={"email": "app_chat_scene_filter@example.com", "password": "secret123", "name": "scene"},
+    )
+    assert resp.status_code == 200
+    headers = {"Authorization": f"Bearer {resp.json()['data']['access_token']}"}
+
+    eat = await client.post("/api/v1/app/chat/session", headers=headers, json={"scene": "eat", "title": "今天吃点啥"})
+    travel = await client.post("/api/v1/app/chat/session", headers=headers, json={"scene": "travel_planner", "title": "旅行计划"})
+    assert eat.status_code == 200
+    assert travel.status_code == 200
+
+    resp = await client.get("/api/v1/app/chat/sessions?scene=eat", headers=headers)
+    assert resp.status_code == 200
+    sessions = resp.json()["data"]["sessions"]
+
+    assert sessions
+    assert {item["scene"] for item in sessions} == {"eat"}
+    assert sessions[0]["title"] == "今天吃点啥"
 
 
 @pytest.mark.asyncio
@@ -244,3 +267,14 @@ def test_normalize_llm_upstream_error_message_maps_free_tier_quota():
 
     assert "免费额度已用尽" in message
     assert "仅使用免费额度" in message
+
+
+def test_normalize_llm_upstream_error_message_maps_invalid_image_payload():
+    exc = RuntimeError(
+        "Error code: 400 - {'error': {'message': '<400> InternalError.Algo.InvalidParameter: "
+        "The provided messages input is invalid. The error info is [Unexpected item type in content.]'}}"
+    )
+
+    message = _normalize_llm_upstream_error_message(exc)
+
+    assert "模型未接受本次图片输入" in message

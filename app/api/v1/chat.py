@@ -35,10 +35,11 @@ class ChatStreamRequest(BaseModel):
     message: str | None = None
     scene: str | None = None
     attachments: list[dict[str, Any]] | None = None
+    travel_action: str | None = None
+    travel_payload: dict[str, Any] | None = None
     client_context_overrides: dict[str, Any] | None = None
     provider: str | None = None
     model: str | None = None
-    agent_type: str | None = None
     resume_from_checkpoint: bool | None = None
     checkpoint_ref: str | None = None
     replay_from_checkpoint: bool | None = None
@@ -97,9 +98,10 @@ async def list_chat_sessions(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     q: str | None = Query(None),
+    scene: str | None = Query(None),
 ):
     user_id = _resolve_user_id(user_id)
-    data = await AppBffService.list_chat_sessions(user_id, db, limit, offset, q)
+    data = await AppBffService.list_chat_sessions(user_id, db, limit, offset, q, scene=scene)
     trace_id = getattr(request.state, "trace_id", "")
     return envelope(data, trace_id)
 

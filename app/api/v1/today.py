@@ -24,7 +24,6 @@ class TodayDecisionRequest(BaseModel):
     mood: str | None = None
     budget: str | None = None
     provider: str | None = None
-    agent_type: str | None = None
 
 
 @router.get("/overview")
@@ -76,7 +75,6 @@ async def decision_stream(
         trace_id=getattr(request.state, "trace_id", None),
         context_overrides=overrides,
         provider=payload.provider,
-        agent_type=payload.agent_type or "smart_eats",
         scene="today_decision",
     )
 

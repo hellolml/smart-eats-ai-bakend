@@ -15,6 +15,7 @@ class SkillActivationPolicy(BaseModel):
 
 class SkillInstructions(BaseModel):
     file: str = "instructions.md"
+    includes: list[str] = Field(default_factory=list)
     max_chars: int = 3000
     content: str = ""
 
@@ -35,9 +36,13 @@ class SkillSafetyPolicy(BaseModel):
     max_tool_calls_per_turn: int | None = None
 
 
+class SkillHookPolicy(BaseModel):
+    class_path: str | None = Field(default=None, alias="class")
+
+
 class SkillSpec(BaseModel):
     id: str
-    name: str
+    name: str = ""
     version: str
     description: str = ""
     enabled: bool = True
@@ -47,7 +52,9 @@ class SkillSpec(BaseModel):
     tools: SkillToolPolicy = Field(default_factory=SkillToolPolicy)
     context: SkillContextPolicy | None = None
     safety: SkillSafetyPolicy = Field(default_factory=SkillSafetyPolicy)
+    hooks: SkillHookPolicy | None = None
     source_path: Path | None = None
+    skill_file: str = "SKILL.md"
 
 
 class SkillPromptBlock(BaseModel):
@@ -88,9 +95,9 @@ class SkillDiagnostics(BaseModel):
 
 
 class SkillRuntimeResult(BaseModel):
+    active_skill_specs: list[SkillSpec] = Field(default_factory=list, exclude=True)
     active_skills: list[ActiveSkillInfo] = Field(default_factory=list)
     system_prompt_addendum: str = ""
     allowed_tools: list[str] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)
     diagnostics: SkillDiagnostics = Field(default_factory=SkillDiagnostics)
-
