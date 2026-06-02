@@ -55,6 +55,7 @@ export default function App() {
   const [travelPeople, setTravelPeople] = useState('1');
   const streamAbortRef = useRef<AbortController | null>(null);
   const stopRequestedRef = useRef(false);
+  const travelAttachmentsRef = useRef<Record<string, ChatAttachment[]>>({});
   const eatLocationRef = useRef<ChatLocationContext | null>(null);
   const eatPlaceRef = useRef('');
   const eatLocationPromptResolverRef = useRef<((result: EatLocationPromptResult) => void) | null>(null);
@@ -118,6 +119,18 @@ export default function App() {
       prev.forEach((item) => URL.revokeObjectURL(item.previewUrl));
       return [];
     });
+  };
+
+  const mergeTravelAttachments = (sessionId: string, next: ChatAttachment[]) => {
+    const previous = travelAttachmentsRef.current[sessionId] || [];
+    const merged = [...previous, ...next].reduce<ChatAttachment[]>((items, item) => {
+      const key = item.attachment_id || item.object_key;
+      if (!key || items.some((existing) => (existing.attachment_id || existing.object_key) === key)) return items;
+      items.push(item);
+      return items;
+    }, []);
+    travelAttachmentsRef.current[sessionId] = merged;
+    return merged;
   };
 
   const handleAuthFailure = (error: unknown) => {
@@ -280,6 +293,7 @@ export default function App() {
     setMode('travel');
     setActiveSessionId('');
     setDraftPlan(null);
+    travelAttachmentsRef.current = {};
     setInput('');
     setMessages([agentIntro('travel')]);
     go('agent');
@@ -290,6 +304,7 @@ export default function App() {
     setMode('eat');
     setActiveSessionId('');
     setDraftPlan(null);
+    travelAttachmentsRef.current = {};
     clearPendingImages();
     setInput('');
     setMessages([]);
@@ -314,6 +329,9 @@ export default function App() {
     setDraftPlan(null);
     clearPendingImages();
     setActiveSessionId(target.sessionId || '');
+    if (target.sessionId && Array.isArray(target.raw?.attachments)) {
+      travelAttachmentsRef.current[target.sessionId] = target.raw.attachments as ChatAttachment[];
+    }
     setMessages([
       ...(target.messages?.length ? target.messages : [
         agentIntro('travel'),
@@ -343,6 +361,7 @@ export default function App() {
         sid = appApi.chat.getSessionId(created);
         if (!sid) throw new ApiError('后端未返回会话 ID');
         setActiveSessionId(sid);
+        travelAttachmentsRef.current[sid] = [];
       }
       const uploadedAttachments = imagesToUpload.length
         ? await Promise.allSettled(imagesToUpload.map((item) => appApi.chat.uploadAttachment(sid, item.file)))
@@ -350,15 +369,19 @@ export default function App() {
       const successfulAttachments = uploadedAttachments
         .filter((item): item is PromiseFulfilledResult<ChatAttachment> => item.status === 'fulfilled')
         .map((item) => item.value);
+      const allSessionAttachments = mergeTravelAttachments(sid, successfulAttachments);
       const failedUploadCount = uploadedAttachments.filter((item) => item.status === 'rejected').length;
       imagesToUpload.forEach((item) => URL.revokeObjectURL(item.previewUrl));
       const controller = new AbortController();
       streamAbortRef.current = controller;
       stopRequestedRef.current = false;
       const uploadNotice = failedUploadCount ? `\n\n[提示：${failedUploadCount} 张图片上传失败，请检查图片大小后重试]` : '';
-      const reply = await appApi.chat.stream(sid, `${visibleText || '请根据我上传的图片生成旅行计划'}${uploadNotice}\n\n请先输出候选行程，等待用户确认后由应用层创建计划记录。不要直接操作数据库。`, {
+      const imageContextNotice = allSessionAttachments.length
+        ? `\n\n[系统提示：当前旅行会话共有 ${allSessionAttachments.length} 张攻略图片，请结合之前和本次上传的攻略一起分析。]`
+        : '';
+      const reply = await appApi.chat.stream(sid, `${visibleText || '请根据我上传的图片生成旅行计划'}${uploadNotice}${imageContextNotice}\n\n请先输出候选行程，等待用户确认后由应用层创建计划记录。不要直接操作数据库。`, {
         scene: 'travel_planner',
-        attachments: successfulAttachments,
+        attachments: allSessionAttachments,
         signal: controller.signal,
         onDelta: (partial) => {
           setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: partial || '正在整理...' } : item));
@@ -368,40 +391,54 @@ export default function App() {
         }
       });
       const finalText = reply.text || '候选行程已完成，确认后即可生成计划记录。';
-      const parsedDays = travelDaysFromFinalJson(reply.finalJson || {}, {}, finalText);
-      const finalAssistantMessage = { ...assistantMessage, content: finalText, kind: options.createDraft ? 'travel-draft' as const : undefined };
+      const currentDraft = draftPlan?.sessionId === sid ? draftPlan : undefined;
+      const previousRaw = currentDraft?.raw && typeof currentDraft.raw === 'object' ? currentDraft.raw as Record<string, unknown> : {};
+      const previousFinalJson = previousRaw.finalJson && typeof previousRaw.finalJson === 'object' && !Array.isArray(previousRaw.finalJson)
+        ? previousRaw.finalJson as Record<string, unknown>
+        : {};
+      const nextFinalJson = reply.finalJson || previousFinalJson;
+      const parsedDays = travelDaysFromFinalJson(nextFinalJson, previousRaw, finalText);
+      const stage = getTravelStage(nextFinalJson);
+      const rawText = typeof nextFinalJson.raw_text === 'string' && nextFinalJson.raw_text.trim()
+        ? nextFinalJson.raw_text.trim()
+        : '';
+      const displayText = stage === 'candidates_ready' && rawText ? rawText : finalText;
+      const shouldShowTravelAction = options.createDraft || stage === 'candidates_ready' || stage === 'itinerary_generated';
+      const finalAssistantMessage = { ...assistantMessage, content: displayText, kind: shouldShowTravelAction ? 'travel-draft' as const : undefined, finalJson: nextFinalJson };
       const conversationSnapshot = [...(options.seedMessages || messages), userMessage, finalAssistantMessage];
       const nextDraft: PlanInfo = {
-        ...defaultPlan,
+        ...(currentDraft || defaultPlan),
         id: sid,
         sessionId: sid,
-        title: destination ? `${destination} ${travelDays || '5'} 日游计划` : defaultPlan.title,
-        date: travelDate || defaultPlan.date,
+        title: destination ? `${destination} ${travelDays || '5'} 日游计划` : currentDraft?.title || defaultPlan.title,
+        date: travelDate || currentDraft?.date || defaultPlan.date,
         status: '候选中',
-        sourceText: finalText,
-        qrCodeUrl: reply.qrCodeUrl,
-        schemaUrl: reply.schemaUrl,
-        days: parsedDays.length ? parsedDays : defaultPlan.days,
+        sourceText: displayText,
+        qrCodeUrl: reply.qrCodeUrl || currentDraft?.qrCodeUrl,
+        schemaUrl: reply.schemaUrl || currentDraft?.schemaUrl,
+        days: parsedDays.length ? parsedDays : currentDraft?.days || defaultPlan.days,
         basicInfo: {
-          destination,
-          travelDate,
-          travelDays,
-          travelPeople
+          destination: destination || currentDraft?.basicInfo?.destination,
+          travelDate: travelDate || currentDraft?.basicInfo?.travelDate,
+          travelDays: travelDays || currentDraft?.basicInfo?.travelDays,
+          travelPeople: travelPeople || currentDraft?.basicInfo?.travelPeople
         },
         messages: conversationSnapshot,
         raw: {
+          ...previousRaw,
           destination,
           travelDate,
           travelDays,
           travelPeople,
           source: 'agent',
           generatedAt: new Date().toISOString(),
-          finalJson: reply.finalJson || {},
-          candidates: Array.isArray(reply.finalJson?.candidates) ? reply.finalJson.candidates : []
+          finalJson: nextFinalJson,
+          candidates: Array.isArray(nextFinalJson.candidates) ? nextFinalJson.candidates : previousRaw.candidates || [],
+          attachments: allSessionAttachments
         }
       };
-      if (options.createDraft) setDraftPlan(nextDraft);
-      setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: finalText, kind: options.createDraft ? 'travel-draft' : undefined } : item));
+      if (shouldShowTravelAction) setDraftPlan(nextDraft);
+      setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: displayText, kind: shouldShowTravelAction ? 'travel-draft' : undefined, finalJson: nextFinalJson } : item));
       toast.success('候选行程已生成');
     } catch (error) {
       imagesToUpload.forEach((item) => URL.revokeObjectURL(item.previewUrl));
@@ -428,7 +465,7 @@ export default function App() {
     setMessages((prev) => [
       ...prev,
       message('user', value),
-      { ...message('assistant', '正在帮你认真挑一个...'), id: assistantId }
+      { ...message('assistant', '正在思考...'), id: assistantId }
     ]);
     try {
       let sid = sessionId || activeSessionId;
@@ -511,7 +548,7 @@ export default function App() {
         const finalText = reply.text || draftPlan.sourceText;
         const nextFinalJson = reply.finalJson || draftFinalJson;
         const parsedDays = travelDaysFromFinalJson(nextFinalJson, raw, finalText);
-        const finalAssistant = { ...assistantMessage, content: finalText, kind: 'travel-draft' as const };
+        const finalAssistant = { ...assistantMessage, content: finalText, kind: 'travel-draft' as const, finalJson: nextFinalJson };
         const nextDraft = {
           ...draftPlan,
           status: '进行中' as const,
@@ -564,7 +601,7 @@ export default function App() {
       const planText = draftPlan.sourceText || finalText;
       const mapFinalJson = reply.finalJson || draftFinalJson;
       const parsedDays = travelDaysFromFinalJson(mapFinalJson, { ...raw, itinerary }, planText);
-      const finalAssistant = { ...assistantMessage, content: finalText, kind: 'travel-plan' as const };
+      const finalAssistant = { ...assistantMessage, content: finalText, kind: 'travel-plan' as const, finalJson: mapFinalJson };
       const planToSave = {
         ...draftPlan,
         sourceText: planText,
@@ -671,6 +708,7 @@ export default function App() {
     setActiveSessionId('');
     setPlan(null);
     setDraftPlan(null);
+    travelAttachmentsRef.current = {};
     clearPendingImages();
     go('login');
   };
@@ -846,7 +884,14 @@ function getTravelCandidates(finalJson: Record<string, unknown>, raw: Record<str
 }
 
 function getTravelStage(finalJson: Record<string, unknown>) {
-  return typeof finalJson.state === 'string' ? finalJson.state : '';
+  if (typeof finalJson.state === 'string') return finalJson.state;
+  if (Array.isArray(finalJson.candidates) && finalJson.candidates.length) return 'candidates_ready';
+  const itinerary = finalJson.itinerary;
+  if (itinerary && typeof itinerary === 'object' && !Array.isArray(itinerary)) {
+    const days = (itinerary as Record<string, unknown>).days;
+    if (Array.isArray(days) && days.length) return 'itinerary_generated';
+  }
+  return '';
 }
 
 function getTravelItinerary(finalJson: Record<string, unknown>, raw: Record<string, unknown>) {

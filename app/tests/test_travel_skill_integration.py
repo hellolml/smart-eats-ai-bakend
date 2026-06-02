@@ -133,6 +133,62 @@ async def test_travel_search_poi_normalizes_amap_results(monkeypatch):
     assert result["pois"][0]["poi_id"] == "B001"
     assert result["pois"][0]["longitude"] == 120.148
     assert result["pois"][0]["latitude"] == 30.242
+    assert result["selected_poi"]["poi_id"] == "B001"
+
+
+@pytest.mark.asyncio
+async def test_travel_search_poi_selects_travel_poi_over_transport_affix(monkeypatch):
+    from app.agent.tools.travel_search_poi import travel_search_poi
+
+    async def _fake_text_search(*_args, **_kwargs):
+        return [
+            {
+                "id": "M001",
+                "name": "武侯祠(地铁站)",
+                "address": "成都市武侯区",
+                "location": "104.043,30.645",
+                "type": "地铁站",
+            },
+            {
+                "id": "A001",
+                "name": "成都武侯祠博物馆",
+                "address": "成都市武侯区武侯祠大街231号",
+                "location": "104.047,30.646",
+                "type": "博物馆",
+            },
+        ]
+
+    monkeypatch.setattr("app.agent.tools.travel_search_poi.amap.text_search", _fake_text_search)
+
+    result = await travel_search_poi({"keywords": "武侯祠", "city": "成都", "category": "attraction"})
+
+    assert result["selected_poi"]["poi_id"] == "A001"
+    assert result["selected_poi"]["name"] == "成都武侯祠博物馆"
+    assert result["match_status"] == "selected"
+    assert result["rejected_pois"][0]["reason"] == "交通附属点不是攻略地点本体"
+
+
+@pytest.mark.asyncio
+async def test_travel_search_poi_returns_failed_match_for_transport_only(monkeypatch):
+    from app.agent.tools.travel_search_poi import travel_search_poi
+
+    async def _fake_text_search(*_args, **_kwargs):
+        return [
+            {
+                "id": "M001",
+                "name": "武侯祠(地铁站)",
+                "address": "成都市武侯区",
+                "location": "104.043,30.645",
+                "type": "地铁站",
+            }
+        ]
+
+    monkeypatch.setattr("app.agent.tools.travel_search_poi.amap.text_search", _fake_text_search)
+
+    result = await travel_search_poi({"keywords": "武侯祠", "city": "成都", "category": "attraction"})
+
+    assert result["selected_poi"] is None
+    assert result["match_status"] == "only_transport_affix"
 
 
 @pytest.mark.asyncio
@@ -144,14 +200,14 @@ async def test_travel_search_poi_uses_cache_for_valid_pois(monkeypatch):
 
     class FakeRedis:
         def __init__(self):
-            self.value = None
+            self.values = {}
 
-        async def get(self, _key):
-            return self.value
+        async def get(self, key):
+            return self.values.get(key)
 
-        async def setex(self, _key, _ttl, value):
+        async def setex(self, key, _ttl, value):
             assert _ttl == settings.TRAVEL_POI_CACHE_TTL_SECONDS
-            self.value = value
+            self.values[key] = value
 
     async def _fake_text_search(*_args, **_kwargs):
         calls["count"] += 1
@@ -205,13 +261,13 @@ async def test_travel_search_poi_does_not_cache_invalid_pois(monkeypatch):
 
     class FakeRedis:
         def __init__(self):
-            self.value = None
+            self.values = {}
 
-        async def get(self, _key):
-            return self.value
+        async def get(self, key):
+            return self.values.get(key)
 
-        async def setex(self, _key, _ttl, value):
-            self.value = value
+        async def setex(self, key, _ttl, value):
+            self.values[key] = value
 
     async def _fake_text_search(*_args, **_kwargs):
         return [{"name": "无坐标地点"}]
@@ -221,7 +277,7 @@ async def test_travel_search_poi_does_not_cache_invalid_pois(monkeypatch):
 
     await travel_search_poi({"keywords": "无坐标", "redis_client": redis})
 
-    assert redis.value is None
+    assert redis.values == {}
 
 
 @pytest.mark.asyncio
@@ -249,6 +305,26 @@ async def test_travel_create_personal_map_returns_qr_payload(monkeypatch):
 
     assert result["qr_code_url"] == "https://example.com/qr.png"
     assert result["line_list"][0]["pointInfoList"][0]["name"] == "西湖"
+
+
+@pytest.mark.asyncio
+async def test_travel_create_personal_map_rejects_invalid_line_list():
+    from app.agent.tools.travel_create_personal_map import travel_create_personal_map_tool
+
+    result = await travel_create_personal_map_tool.ainvoke(
+        {
+            "title": "杭州3天2晚",
+            "line_list": [
+                {
+                    "title": "Day 1",
+                    "pointInfoList": [{"name": "西湖", "lon": 120.148, "lat": 30.242}],
+                }
+            ],
+        }
+    )
+
+    assert result["error"] == "invalid_line_list"
+    assert "poiId" in result["message"]
 
 
 @pytest.mark.asyncio

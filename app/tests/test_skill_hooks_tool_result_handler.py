@@ -209,6 +209,85 @@ def test_travel_plan_new_hook_stops_at_candidate_confirmation():
     assert handled["itinerary"]["days"] == []
 
 
+def test_travel_plan_new_verifies_all_extracted_places_before_candidate_confirmation():
+    content = """
+**识别到的地点：**
+1. **大熊猫繁育研究基地** - 成都必去的熊猫基地
+2. **武侯祠** - 三国文化景点
+3. **锦里** - 与武侯祠相邻的古街
+
+**美食推荐：**
+- 火锅、串串、龙抄手
+"""
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message="成都3天",
+        skill_state={"last_ai_message_content": content},
+    )
+    state.context_overrides = {"travel_payload": {"destination": "成都"}}
+    hook = TravelPlanNewHooks()
+    state.observations.extend(
+        [
+            {
+                "tool": "travel_search_poi",
+                "result": {
+                    "query": {"keywords": "大熊猫繁育研究基地", "city": "成都", "category": "attraction"},
+                    "selected_poi": {
+                        "poi_id": "PANDA",
+                        "name": "成都大熊猫繁育研究基地",
+                        "address": "熊猫大道1375号",
+                        "longitude": 104.145,
+                        "latitude": 30.738,
+                    },
+                    "pois": [],
+                },
+            },
+            {
+                "tool": "travel_search_poi",
+                "result": {
+                    "query": {"keywords": "武侯祠", "city": "成都", "category": "attraction"},
+                    "match_status": "only_transport_affix",
+                    "rejected_pois": [{"name": "武侯祠(地铁站)"}],
+                    "pois": [],
+                },
+            },
+        ]
+    )
+
+    handled = hook.handle_tool_result(state, "travel_search_poi", state.observations[-1]["result"])
+
+    assert handled is None
+    calls = hook.forced_tool_calls(state)
+    assert calls and calls[0]["args"]["keywords"] == "锦里"
+
+    state.observations.append(
+        {
+            "tool": "travel_search_poi",
+            "result": {
+                "query": {"keywords": "锦里", "city": "成都", "category": "attraction"},
+                "selected_poi": {
+                    "poi_id": "JINLI",
+                    "name": "锦里古街",
+                    "address": "武侯祠大街231号",
+                    "longitude": 104.047,
+                    "latitude": 30.644,
+                },
+                "pois": [],
+            },
+        }
+    )
+
+    handled = hook.handle_tool_result(state, "travel_search_poi", state.observations[-1]["result"])
+
+    assert handled is not None
+    assert handled["state"] == "candidates_ready"
+    assert [item["source_name"] for item in handled["candidates"]] == ["大熊猫繁育研究基地", "锦里"]
+    assert handled["failed_places"][0]["source_name"] == "武侯祠"
+    assert handled["candidate_groups"]["failed"][0]["reason"] == "只匹配到地铁站、公交站、停车场或出入口，不是攻略地点本体"
+    assert [item["name"] for item in handled["food_items"]] == ["火锅", "串串", "龙抄手"]
+
+
 def test_travel_plan_new_hook_returns_map_final():
     state = AgentRuntimeState(
         session_id="s1",

@@ -45,6 +45,9 @@ class SkillHooks(Protocol):
     def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
         return None
 
+    def allow_submit_final_answer(self, state: Any) -> bool:
+        return True
+
 
 class BaseSkillHooks:
     def build_context(
@@ -78,6 +81,9 @@ class BaseSkillHooks:
 
     def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
         return None
+
+    def allow_submit_final_answer(self, state: Any) -> bool:
+        return True
 
 
 class SkillHookManager:
@@ -162,6 +168,13 @@ class SkillHookManager:
             if isinstance(next_tools, list):
                 filtered = [item for item in next_tools if isinstance(item, str)]
         return filtered
+
+    def allow_submit_final_answer(self, state: Any) -> bool:
+        for hook in self.hooks:
+            checker = getattr(hook, "allow_submit_final_answer", None)
+            if callable(checker) and checker(state) is False:
+                return False
+        return True
 
 
 def load_skill_hooks(skill: SkillSpec) -> SkillHooks | None:

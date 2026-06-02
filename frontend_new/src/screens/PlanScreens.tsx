@@ -51,6 +51,7 @@ export function DetailScreen({ plan, onBack, onAdjust, onQr }: { plan: PlanInfo;
     plan.basicInfo?.travelDays ? `${plan.basicInfo.travelDays}天` : `${plan.days.length}天`,
     plan.basicInfo?.travelPeople || ''
   ].filter(Boolean).join(' | ');
+  const routePreview = findRoutePreview(plan.raw);
   return (
     <>
       <Header title={plan.title.replace('计划', '地图')} subtitle={subtitle || plan.date} onBack={onBack} />
@@ -82,6 +83,27 @@ export function DetailScreen({ plan, onBack, onAdjust, onQr }: { plan: PlanInfo;
           <div className="absolute inset-0 bg-[linear-gradient(90deg,transparent_24%,rgba(255,255,255,.65)_25%,transparent_26%),linear-gradient(0deg,transparent_24%,rgba(255,255,255,.65)_25%,transparent_26%)] bg-[length:44px_44px]" />
           {[['left-16 top-16 bg-blue-500'], ['left-28 top-24 bg-red-500'], ['right-14 top-12 bg-blue-500'], ['right-8 bottom-8 bg-red-500'], ['left-10 bottom-8 bg-blue-500']].map(([cls], i) => <span key={i} className={cn('absolute h-4 w-4 rounded-full border-2 border-white shadow', cls)} />)}
         </div>
+        {routePreview.length > 0 && (
+          <div className="mt-4 rounded-2xl bg-gray-50 p-4">
+            <p className="text-sm font-black">路线预览</p>
+            <div className="mt-3 space-y-3">
+              {routePreview.slice(0, 6).map((route, index) => (
+                <div key={index} className="rounded-xl bg-white px-3 py-3 text-xs">
+                  <p className="font-black text-gray-900">{routePreviewTitle(route, index)}</p>
+                  {Array.isArray(route.points) && route.points.length > 0 && (
+                    <p className="mt-1 text-gray-500">{route.points.map((point: Record<string, unknown>) => String(point.name || '')).filter(Boolean).join(' -> ')}</p>
+                  )}
+                  {Array.isArray(route.legs) && route.legs.length > 0 && (
+                    <p className="mt-1 text-gray-500">{route.legs.map((leg: Record<string, unknown>) => `${leg.from || ''} -> ${leg.to || ''}`).join('，')}</p>
+                  )}
+                  {(route.distance_m || route.duration_s) && (
+                    <p className="mt-1 text-gray-400">{formatRouteMetric(route)}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
       <div className="absolute inset-x-0 bottom-0 grid grid-cols-2 gap-3 bg-white px-5 pb-8 pt-3">
         <button onClick={onAdjust} className="rounded-full bg-black py-3 text-sm font-bold text-white">调整计划</button>
@@ -89,6 +111,52 @@ export function DetailScreen({ plan, onBack, onAdjust, onQr }: { plan: PlanInfo;
       </div>
     </>
   );
+}
+
+function routePreviewTitle(route: Record<string, unknown>, index: number): string {
+  const destination = route.destination;
+  if (route.title) return String(route.title);
+  if (destination && typeof destination === 'object' && !Array.isArray(destination)) {
+    const name = (destination as Record<string, unknown>).name;
+    if (name) return String(name);
+  }
+  if (destination) return String(destination);
+  return `路线 ${index + 1}`;
+}
+
+function findRoutePreview(raw: unknown): Record<string, unknown>[] {
+  const found = findArrayByKeys(raw, ['route_preview', 'routes']);
+  return found.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)));
+}
+
+function findArrayByKeys(value: unknown, keys: string[]): unknown[] {
+  if (!value || typeof value !== 'object') return [];
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findArrayByKeys(item, keys);
+      if (found.length) return found;
+    }
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const direct = record[key];
+    if (Array.isArray(direct) && direct.length) return direct;
+  }
+  for (const child of Object.values(record)) {
+    const found = findArrayByKeys(child, keys);
+    if (found.length) return found;
+  }
+  return [];
+}
+
+function formatRouteMetric(route: Record<string, unknown>): string {
+  const distance = Number(route.distance_m || 0);
+  const duration = Number(route.duration_s || 0);
+  const parts = [];
+  if (distance > 0) parts.push(distance >= 1000 ? `${(distance / 1000).toFixed(1)} km` : `${Math.round(distance)} m`);
+  if (duration > 0) parts.push(`${Math.round(duration / 60)} 分钟`);
+  return parts.join(' | ');
 }
 
 function InfoPill({ label, value }: { label: string; value: string }) {

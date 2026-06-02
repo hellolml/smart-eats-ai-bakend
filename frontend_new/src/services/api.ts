@@ -356,7 +356,7 @@ function extractSseText(value: unknown): string {
   if (Array.isArray(value)) return value.map(extractSseText).filter(Boolean).join('');
   if (typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    for (const key of ['token', 'content', 'text', 'delta', 'message', 'answer', 'response', 'result', 'final', 'output']) {
+    for (const key of ['token', 'content', 'text', 'delta', 'message', 'raw_text', 'answer', 'response', 'result', 'final', 'output']) {
       const text = extractSseText(record[key]);
       if (text) return text;
     }

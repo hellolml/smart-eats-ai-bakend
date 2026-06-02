@@ -24,7 +24,7 @@ from app.common.config import settings
 
 def _generate_qr_code_url(schema_url: str, size: str = "300x300") -> str:
     qr_service = "https://api.qrserver.com/v1/create-qr-code/"
-    return f"{qr_service}?size={size}&data={urlparse.quote(schema_url)}"
+    return f"{qr_service}?size={size}&data={urlparse.quote(schema_url, safe='')}"
 
 
 class AMapDirectClient:
@@ -171,7 +171,15 @@ class AMapDirectClient:
         payload = {"channel": "60000001", "orgName": org_name, "lineList": line_list, "sceneType": scene_type}
         result = await self._post(f"{self.wia_base_url}/rest/wia/mcp/schema", {"source": "personal-map"}, payload)
         if result.get("code") == 1 and result.get("result") is True:
-            schema_url = result.get("data", {}).get("schemaUrl", "")
+            data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            schema_url = (
+                data.get("schemaUrl")
+                or data.get("schema_url")
+                or data.get("url")
+                or result.get("schemaUrl")
+                or result.get("schema_url")
+                or ""
+            )
             if schema_url:
                 return {"qr_code_url": _generate_qr_code_url(schema_url), "schema_url": schema_url, "line_list": line_list, "title": org_name}
             return {"error": "生成地图行程失败", "message": "未返回有效的行程链接"}

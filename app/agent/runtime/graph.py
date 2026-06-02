@@ -68,6 +68,7 @@ class AgentRuntimeState:
     user_message_logged: bool = False
     history: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
+    skill_state: dict[str, Any] = field(default_factory=dict)
     summary: str | None = None
     context_budget: dict[str, Any] = field(default_factory=dict)
     retrieved_memories: list[dict[str, Any]] = field(default_factory=list)
@@ -124,6 +125,7 @@ class AgentRuntimeGraphState(TypedDict, total=False):
     user_message_logged: bool
     history: list[dict[str, Any]]
     events: list[dict[str, Any]]
+    skill_state: dict[str, Any]
     summary: str | None
     context_budget: dict[str, Any]
     retrieved_memories: list[dict[str, Any]]
@@ -965,10 +967,9 @@ def build_agent_runtime_graph(
             active_skill_ids,
             current_allowed_tools,
         )
-        current_langchain_tools = [
-            *select_tools(current_allowed_tools),
-            _build_submit_final_answer_tool(),
-        ]
+        current_langchain_tools = [*select_tools(current_allowed_tools)]
+        if hook_manager.allow_submit_final_answer(chat_state):
+            current_langchain_tools.append(_build_submit_final_answer_tool())
 
         image_parts: list[dict[str, Any]] = []
         active_planner = planner
@@ -1061,6 +1062,16 @@ def build_agent_runtime_graph(
             else:
                 raise
         raw_content = ai_message.content
+        content = raw_content if isinstance(raw_content, str) else ""
+        if content:
+            skill_state = dict(chat_state.skill_state or {})
+            skill_state["last_ai_message_content"] = content
+            ai_message_contents = skill_state.get("ai_message_contents")
+            if not isinstance(ai_message_contents, list):
+                ai_message_contents = []
+            ai_message_contents.append(content)
+            skill_state["ai_message_contents"] = ai_message_contents[-6:]
+            chat_state.skill_state = skill_state
         normalized_tool_calls = ai_message.tool_calls
         if not normalized_tool_calls:
             forced_tool_calls = hook_manager.forced_tool_calls(chat_state)
@@ -1122,7 +1133,6 @@ def build_agent_runtime_graph(
                 output["messages"] = [ai_message]
                 return output
 
-        content = raw_content if isinstance(raw_content, str) else ""
         chat_state.final_json = final_json_from_text(content)
         return _state_update(chat_state)
 
