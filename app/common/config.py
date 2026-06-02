@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -107,6 +108,7 @@ class Settings(BaseSettings):
     LLM_CONFIG_ENCRYPTION_KEY: str | None = None
     LLM_CONFIG_TEST_TIMEOUT_SECONDS: int = 15
     AGENT_MAX_STEPS: int = 6
+    AGENT_RUNTIME_MODE: Literal["generic", "supervisor"] = "generic"
     AGENT_SKILLS_ENABLED: bool = True
     AGENT_SKILLS_PATH: str = "agent_skills"
     AGENT_SKILLS_MAX_ACTIVE: int = 3

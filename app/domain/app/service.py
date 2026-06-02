@@ -2784,6 +2784,32 @@ class AppBffService:
         return prepared.payload
 
     @staticmethod
+    async def _prepare_supervisor_payload(
+        db: AsyncSession,
+        session_id: str,
+        user_id: str | None,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        next_payload = dict(payload)
+        context_overrides = next_payload.get("client_context_overrides")
+        context_overrides = dict(context_overrides) if isinstance(context_overrides, dict) else {}
+        latest_travel = await AppBffService._latest_travel_final_json(db, session_id)
+        if latest_travel:
+            context_overrides["latest_travel_final_json"] = latest_travel
+        if user_id:
+            from app.domain.preferences.markdown_profile import build_preference_context, ensure_user_preference_file
+
+            profile = await ensure_user_preference_file(user_id)
+            preference_context = build_preference_context(profile)
+            context_overrides["user_preference_md"] = preference_context
+            context_overrides["food_profile"] = preference_context.get("profile") or {}
+            context_overrides["travel_food_preferences"] = preference_context.get("profile") or {}
+            context_overrides["travel_food_preference_summary"] = preference_context.get("summary")
+        if context_overrides:
+            next_payload["client_context_overrides"] = context_overrides
+        return next_payload
+
+    @staticmethod
     async def _merge_current_session_travel_context(
         db: AsyncSession,
         session_id: str,
@@ -2893,12 +2919,20 @@ class AppBffService:
             session_id,
             dict(payload or {}),
         )
-        payload = await AppBffService._prepare_multi_agent_payload(
-            db,
-            session_id,
-            user_id,
-            payload,
-        )
+        if str(getattr(settings, "AGENT_RUNTIME_MODE", "generic") or "generic").strip().lower() == "supervisor":
+            payload = await AppBffService._prepare_supervisor_payload(
+                db,
+                session_id,
+                user_id,
+                payload,
+            )
+        else:
+            payload = await AppBffService._prepare_multi_agent_payload(
+                db,
+                session_id,
+                user_id,
+                payload,
+            )
         state = await AppBffService.build_chat_state(
             session_id=session_id,
             user_id=user_id,

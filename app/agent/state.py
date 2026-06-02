@@ -31,6 +31,7 @@ class ChatState:
     resume_payload: dict[str, Any] | None = None
     last_user_message: str | None = None
     user_message_logged: bool = False
+    persist_user_message: bool = True
     history: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
     summary: str | None = None

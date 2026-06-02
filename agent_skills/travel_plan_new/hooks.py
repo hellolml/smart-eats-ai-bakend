@@ -1188,6 +1188,7 @@ def _extract_food_mentions_from_context(content: str) -> list[dict[str, Any]]:
 
 def _extract_food_names_from_line(line: str, *, restaurant_context: bool) -> list[str]:
     names: list[str] = []
+    line = _clean_food_segment(line) or str(line or "")
     segments = re.split(r"[，,、；;。！？!?]+", line)
     for segment in segments:
         segment_names: list[str] = []
@@ -1196,16 +1197,18 @@ def _extract_food_names_from_line(line: str, *, restaurant_context: bool) -> lis
             continue
         if restaurant_context and _looks_like_named_food_place(cleaned):
             segment_names.append(cleaned)
-            continue
-        for match in FOOD_PLACE_PATTERN.findall(cleaned):
-            name = _clean_extracted_name(match)
-            if name and not _is_non_place_text(name):
-                segment_names.append(name)
-        for match in FOOD_PHRASE_PATTERN.findall(cleaned):
-            name = _clean_extracted_name(match)
-            if name and not _is_non_place_text(name):
-                segment_names.append(name)
+        else:
+            for match in FOOD_PLACE_PATTERN.findall(cleaned):
+                name = _clean_extracted_name(match)
+                if name and not _is_non_place_text(name):
+                    segment_names.append(name)
+            for match in FOOD_PHRASE_PATTERN.findall(cleaned):
+                name = _clean_extracted_name(match)
+                if name and not _is_non_place_text(name):
+                    segment_names.append(name)
         if not segment_names and restaurant_context and 2 <= len(cleaned) <= 18:
+            segment_names.append(cleaned)
+        if not segment_names and not restaurant_context and _is_generic_food_name(cleaned):
             segment_names.append(cleaned)
         names.extend(segment_names)
     return list(dict.fromkeys(names))
@@ -1410,7 +1413,10 @@ def _is_food_context_sentence(text: str) -> bool:
     value = str(text or "")
     if not _has_food_context(value):
         return False
-    return bool(re.search(r"[、,，；;]", value) or any(token in value for token in ("吃", "喝", "推荐", "美食攻略", "午餐", "晚餐", "早餐")))
+    return bool(
+        re.search(r"[、,，；;]", value)
+        or any(token in value for token in ("吃", "喝", "推荐", "美食攻略", "午餐", "晚餐", "早餐", "饭后", "餐后"))
+    )
 
 
 def _collect_failed_places(state: Any) -> list[dict[str, Any]]:

@@ -2,8 +2,10 @@ import asyncio
 import json
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.agent.graph import _render_final_text, run_chat_stream
+from app.common.config import settings
 from app.agent.runtime.graph import _best_effort_final_from_observations, get_agent_runtime_config
 from app.agent.state import ChatState
 
@@ -231,6 +233,88 @@ async def test_run_chat_stream_preserves_core_event_contract(monkeypatch):
     assert events[1]["data"] == {"status": "done"}
     assert events[-1]["data"]["stopped"] is False
     assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "你好"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_supervisor_runtime_uses_message_final_json(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    final_json = {
+        "recommendations": [{"type": "note", "title": "主管回答", "reason": "supervisor"}],
+        "followups": [],
+        "warnings": [],
+    }
+
+    monkeypatch.setattr(settings, "AGENT_RUNTIME_MODE", "supervisor")
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.supervisor.build_supervisor_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder(
+            [
+                {
+                    "session_id": "s-supervisor",
+                    "message": "今天吃什么",
+                    "messages": [
+                        AIMessage(
+                            content="主管回答",
+                            additional_kwargs={"final_json": final_json},
+                        )
+                    ],
+                    "events": [{"event": "tool_call", "data": {"name": "food_advisor"}}],
+                }
+            ]
+        ),
+    )
+
+    events = []
+    async for item in run_chat_stream(
+        _FakeRequest(),
+        db=None,
+        redis_client=_FakeRedis(),
+        state=ChatState(session_id="s-supervisor", message="今天吃什么"),
+    ):
+        events.append(item)
+
+    assert [item["event"] for item in events] == ["thinking", "tool_call", "thinking", "delta", "final"]
+    assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "主管回答"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_supervisor_runtime_converts_direct_text(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(settings, "AGENT_RUNTIME_MODE", "supervisor")
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.supervisor.build_supervisor_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder(
+            [
+                {
+                    "session_id": "s-supervisor-direct",
+                    "message": "你好",
+                    "messages": [AIMessage(content="你好，我在。")],
+                }
+            ]
+        ),
+    )
+
+    events = [
+        item
+        async for item in run_chat_stream(
+            _FakeRequest(),
+            db=None,
+            redis_client=_FakeRedis(),
+            state=ChatState(session_id="s-supervisor-direct", message="你好"),
+        )
+    ]
+
+    assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "你好，我在。"
 
 
 @pytest.mark.asyncio

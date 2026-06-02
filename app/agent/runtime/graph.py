@@ -68,6 +68,7 @@ class AgentRuntimeState:
     resume_payload: dict[str, Any] | None = None
     last_user_message: str | None = None
     user_message_logged: bool = False
+    persist_user_message: bool = True
     history: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
     skill_state: dict[str, Any] = field(default_factory=dict)
@@ -127,6 +128,7 @@ class AgentRuntimeGraphState(TypedDict, total=False):
     resume_payload: dict[str, Any] | None
     last_user_message: str | None
     user_message_logged: bool
+    persist_user_message: bool
     history: list[dict[str, Any]]
     events: list[dict[str, Any]]
     skill_state: dict[str, Any]
@@ -135,6 +137,7 @@ class AgentRuntimeGraphState(TypedDict, total=False):
     retrieved_memories: list[dict[str, Any]]
     source_refs: list[dict[str, Any]]
     runtime_context: dict[str, Any]
+    remaining_steps: int
 
 
 _AGENT_RUNTIME_STATE_FIELDS = set(AgentRuntimeState.__dataclass_fields__.keys())
@@ -189,6 +192,7 @@ def _initialize_graph_state(payload: dict[str, Any]) -> dict[str, Any]:
     if current and latest_content != current:
         pending_messages.append(HumanMessage(content=current))
     output["messages"] = pending_messages
+    output.setdefault("remaining_steps", int(output.get("steps_left") or get_agent_runtime_config().max_steps))
     return output
 
 
@@ -665,7 +669,11 @@ async def _ensure_chat_session(db: Any, state: AgentRuntimeState) -> None:
 
 
 def _should_persist_user_message(state: AgentRuntimeState) -> bool:
-    return bool(state.message and (not state.user_message_logged or state.last_user_message != state.message))
+    return bool(
+        state.persist_user_message
+        and state.message
+        and (not state.user_message_logged or state.last_user_message != state.message)
+    )
 
 
 def _build_base_prompt_context(
