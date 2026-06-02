@@ -48,6 +48,8 @@ class AgentRuntimeState:
     message: str | None = None
     trace_id: str | None = None
     scene: str = "chat"
+    agent_id: str | None = None
+    plan_type: str | None = None
     context_overrides: dict[str, Any] | None = None
     snapshot: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
@@ -105,6 +107,8 @@ class AgentRuntimeGraphState(TypedDict, total=False):
     message: str | None
     trace_id: str | None
     scene: str
+    agent_id: str | None
+    plan_type: str | None
     context_overrides: dict[str, Any] | None
     snapshot: dict[str, Any] | None
     context: dict[str, Any] | None
@@ -671,6 +675,10 @@ def _build_base_prompt_context(
     summary: str | None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {"ui_scene": state.scene or "chat"}
+    if state.agent_id:
+        context["agent_id"] = state.agent_id
+    if state.plan_type:
+        context["plan_type"] = state.plan_type
     context["user_message"] = state.message or ""
     context["history"] = state.history
     if summary:

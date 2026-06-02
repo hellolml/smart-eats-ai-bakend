@@ -288,6 +288,205 @@ def test_travel_plan_new_verifies_all_extracted_places_before_candidate_confirma
     assert [item["name"] for item in handled["food_items"]] == ["火锅", "串串", "龙抄手"]
 
 
+def test_travel_plan_new_extracts_general_food_context_and_filters_structure_titles():
+    content = """
+## 阶段2：攻略图片内容解析
+
+**景点类：**
+1. **人民公园** - 慢生活体验
+
+**美食类：**
+1. 推荐餐厅：A饭店、B茶社
+2. 午饭吃火锅、米粉、酸奶
+3. 饭后去人民公园
+7. 阶段3
+住宿区域
+
+现在调用高德 POI 搜索来验证这些地点。
+"""
+    state = AgentRuntimeState(
+        session_id="s-food-context",
+        scene="travel_planner",
+        message="帮我规划旅行",
+        skill_state={"last_ai_message_content": content},
+        context_overrides={"travel_payload": {"destination": "杭州"}},
+    )
+    hook = TravelPlanNewHooks()
+
+    context = hook.build_context(state, {})
+    extracted_names = [item["name"] for item in context["travel_state"]["extracted_places"]]
+    food_names = [item["name"] for item in context["travel_state"]["food_items"]]
+    calls = hook.forced_tool_calls(state) or []
+    call_keywords = [item["args"]["keywords"] for item in calls]
+
+    assert "阶段3" not in extracted_names
+    assert "住宿区域" not in extracted_names
+    assert "阶段3" not in food_names
+    assert "住宿区域" not in food_names
+    assert "A饭店" in call_keywords
+    assert "B茶社" in call_keywords
+    assert "火锅" in food_names
+    assert "米粉" in food_names
+    assert "酸奶" in food_names
+    assert "人民公园" in call_keywords
+
+
+def test_travel_plan_new_uses_llm_structured_extraction_and_curate_lists():
+    state = AgentRuntimeState(
+        session_id="s-structured",
+        scene="travel_planner",
+        message="根据图片规划旅行",
+        context_overrides={"travel_payload": {"destination": "杭州"}},
+    )
+    hook = TravelPlanNewHooks()
+    final_payload = {
+        "extracted_places": [
+            {
+                "name": "西湖",
+                "category": "nature",
+                "source": "image_extracted",
+                "score": 10,
+                "business_hours": "全天",
+                "suggested_duration_minutes": 180,
+                "recommended_reason": "攻略重点推荐的湖区景观",
+            },
+            {
+                "name": "湖边酒店",
+                "category": "hotel",
+                "source": "image_extracted",
+                "score": 8,
+                "price_range": "¥300-500/晚",
+                "recommended_reason": "靠近湖区，方便第二天出发",
+            },
+            {
+                "name": "知味观湖滨店",
+                "category": "restaurant",
+                "source": "image_extracted",
+                "score": 9,
+                "average_cost_yuan": 80,
+                "business_hours": "10:00-21:00",
+                "recommended_reason": "攻略推荐的本地餐饮",
+            },
+            {"name": "阶段3", "category": "restaurant", "source": "image_extracted"},
+            {"name": "小笼包", "category": "food_item", "source": "image_extracted", "recommended_reason": "当地特色"},
+            {"name": "踩雷餐厅", "category": "excluded", "exclude_reason": "攻略明确避雷"},
+        ],
+        "excluded_places": [{"name": "旧酒店", "exclude_reason": "位置偏远"}],
+    }
+
+    state.final_json = final_payload
+    handled = hook.handle_tool_result(state, "submit_final_answer", {"_final_answer": final_payload})
+
+    assert handled is None
+    assert state.final_json is None
+    calls = hook.forced_tool_calls(state) or []
+    call_keywords = [item["args"]["keywords"] for item in calls]
+    assert call_keywords == ["西湖", "湖边酒店", "知味观湖滨店"]
+    assert "阶段3" not in call_keywords
+    assert state.context_overrides["travel_payload"]["food_items"][0]["name"] == "小笼包"
+    assert state.context_overrides["travel_payload"]["excluded_places"][0]["name"] == "旧酒店"
+
+    state.observations.extend(
+        [
+            {
+                "tool": "travel_search_poi",
+                "result": {
+                    "query": {"keywords": "西湖", "city": "杭州", "category": "nature"},
+                    "selected_poi": {"poi_id": "WESTLAKE", "name": "西湖风景名胜区", "address": "杭州市西湖区", "longitude": 120.1, "latitude": 30.2},
+                },
+            },
+            {
+                "tool": "travel_search_poi",
+                "result": {
+                    "query": {"keywords": "湖边酒店", "city": "杭州", "category": "hotel"},
+                    "selected_poi": {"poi_id": "HOTEL", "name": "湖边酒店", "address": "湖滨路1号", "longitude": 120.11, "latitude": 30.21},
+                },
+            },
+            {
+                "tool": "travel_search_poi",
+                "result": {
+                    "query": {"keywords": "知味观湖滨店", "city": "杭州", "category": "restaurant"},
+                    "selected_poi": {"poi_id": "FOOD", "name": "知味观(湖滨店)", "address": "湖滨路", "longitude": 120.12, "latitude": 30.22},
+                },
+            },
+        ]
+    )
+
+    handled = hook.handle_tool_result(state, "travel_search_poi", state.observations[-1]["result"])
+
+    assert handled is not None
+    raw_text = handled["raw_text"]
+    assert "### 景点类" in raw_text
+    assert "|---|" not in raw_text
+    assert "西湖（高德：西湖风景名胜区）" in raw_text
+    assert "- 来源：攻略提取" in raw_text
+    assert "- 营业时间：全天" in raw_text
+    assert "- 预计时长：3小时" in raw_text
+    assert "攻略重点推荐的湖区景观" in raw_text
+    assert "### 住宿类" in raw_text
+    assert "- 价格区间：¥300-500/晚" in raw_text
+    assert "¥300-500/晚" in raw_text
+    assert "### 美食类" in raw_text
+    assert "知味观湖滨店（高德：知味观(湖滨店)）" in raw_text
+    assert "- 人均消费：¥80" in raw_text
+    assert "### 已排除的地点" in raw_text
+    assert "旧酒店" in raw_text
+    assert "阶段3" not in raw_text
+
+
+def test_travel_plan_new_falls_back_to_llm_vision_text_and_shows_pending_places():
+    content = """
+**景点类：**
+1. **西湖** - 攻略重点推荐
+2. **灵隐寺** - 寺庙景点
+3. **法喜寺** - 寺庙景点
+
+**美食类：**
+1. 火锅
+2. 米粉
+"""
+    state = AgentRuntimeState(
+        session_id="s-fallback",
+        scene="travel_planner",
+        message="根据图片规划旅行",
+        skill_state={"last_ai_message_content": content},
+        context_overrides={
+            "attachments": [{"kind": "image", "object_key": "guide.jpg"}],
+            "travel_payload": {
+                "destination": "杭州",
+                "extracted_places": [{"name": "西湖", "category": "nature", "source": "image_extracted"}],
+            },
+        },
+    )
+    hook = TravelPlanNewHooks()
+
+    calls = hook.forced_tool_calls(state) or []
+    call_keywords = [item["args"]["keywords"] for item in calls]
+
+    assert call_keywords == ["西湖", "灵隐寺", "法喜寺"]
+    assert [item["name"] for item in hook.build_context(state, {})["travel_state"]["food_items"]] == ["火锅", "米粉"]
+
+    state.observations.append(
+        {
+            "tool": "travel_search_poi",
+            "result": {
+                "query": {"keywords": "西湖", "city": "杭州", "category": "nature"},
+                "selected_poi": {"poi_id": "WESTLAKE", "name": "西湖风景名胜区", "address": "杭州市西湖区", "longitude": 120.1, "latitude": 30.2},
+            },
+        }
+    )
+
+    handled = hook.best_effort_fallback(state)
+
+    assert handled is not None
+    assert handled["state"] == "candidates_ready"
+    assert [item["name"] for item in handled["pending_places"]] == ["灵隐寺", "法喜寺"]
+    assert "### 待继续验证" in handled["raw_text"]
+    assert "灵隐寺" in handled["raw_text"]
+    assert "法喜寺" in handled["raw_text"]
+    assert "|---|" not in handled["raw_text"]
+
+
 def test_travel_plan_new_hook_returns_map_final():
     state = AgentRuntimeState(
         session_id="s1",

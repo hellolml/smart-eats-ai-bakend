@@ -370,6 +370,47 @@ export default function App() {
         .filter((item): item is PromiseFulfilledResult<ChatAttachment> => item.status === 'fulfilled')
         .map((item) => item.value);
       const allSessionAttachments = mergeTravelAttachments(sid, successfulAttachments);
+      const matchedTravelPlan = draftPlan?.sessionId === sid
+        ? draftPlan
+        : selectedPlan.sessionId === sid
+          ? selectedPlan
+          : plan?.sessionId === sid
+            ? plan
+            : undefined;
+      const currentDraftBeforeStream = draftPlan?.sessionId === sid ? draftPlan : undefined;
+      const previousRawBeforeStream = matchedTravelPlan?.raw && typeof matchedTravelPlan.raw === 'object'
+        ? matchedTravelPlan.raw as Record<string, unknown>
+        : {};
+      const nestedRawBeforeStream = previousRawBeforeStream.raw && typeof previousRawBeforeStream.raw === 'object' && !Array.isArray(previousRawBeforeStream.raw)
+        ? previousRawBeforeStream.raw as Record<string, unknown>
+        : {};
+      const previousFinalJsonSource = previousRawBeforeStream.finalJson || nestedRawBeforeStream.finalJson;
+      const previousFinalJsonBeforeStream = previousFinalJsonSource
+        && typeof previousFinalJsonSource === 'object'
+        && !Array.isArray(previousFinalJsonSource)
+        ? previousFinalJsonSource as Record<string, unknown>
+        : {};
+      const isRefreshSources = !options.newSession && successfulAttachments.length > 0 && Boolean(
+        matchedTravelPlan || currentDraftBeforeStream || previousFinalJsonBeforeStream.state
+      );
+      const refreshPayload = isRefreshSources ? {
+        refresh_reason: 'new_attachments',
+        new_attachments: successfulAttachments,
+        all_attachments: allSessionAttachments,
+        previous_final_json: previousFinalJsonBeforeStream,
+        user_instruction: visibleText,
+        basic_info: {
+          destination,
+          travelDate,
+          travelDays,
+          travelPeople
+        },
+        stale_artifacts: {
+          itinerary: Boolean(previousFinalJsonBeforeStream.itinerary || previousRawBeforeStream.itinerary),
+          map: Boolean(previousFinalJsonBeforeStream.map || previousRawBeforeStream.map),
+          reason: 'new_attachments'
+        }
+      } : undefined;
       const failedUploadCount = uploadedAttachments.filter((item) => item.status === 'rejected').length;
       imagesToUpload.forEach((item) => URL.revokeObjectURL(item.previewUrl));
       const controller = new AbortController();
@@ -381,7 +422,13 @@ export default function App() {
         : '';
       const reply = await appApi.chat.stream(sid, `${visibleText || '请根据我上传的图片生成旅行计划'}${uploadNotice}${imageContextNotice}\n\n请先输出候选行程，等待用户确认后由应用层创建计划记录。不要直接操作数据库。`, {
         scene: 'travel_planner',
+        agentId: 'travel_plan',
+        planType: 'travel',
+        action: isRefreshSources ? 'refresh_sources' : undefined,
+        payload: refreshPayload,
         attachments: allSessionAttachments,
+        travelAction: isRefreshSources ? 'refresh_sources' : undefined,
+        travelPayload: refreshPayload,
         signal: controller.signal,
         onDelta: (partial) => {
           setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: partial || '正在整理...' } : item));
@@ -402,7 +449,7 @@ export default function App() {
       const rawText = typeof nextFinalJson.raw_text === 'string' && nextFinalJson.raw_text.trim()
         ? nextFinalJson.raw_text.trim()
         : '';
-      const displayText = stage === 'candidates_ready' && rawText ? rawText : finalText;
+      const displayText = rawText || finalText;
       const shouldShowTravelAction = options.createDraft || stage === 'candidates_ready' || stage === 'itinerary_generated';
       const finalAssistantMessage = { ...assistantMessage, content: displayText, kind: shouldShowTravelAction ? 'travel-draft' as const : undefined, finalJson: nextFinalJson };
       const conversationSnapshot = [...(options.seedMessages || messages), userMessage, finalAssistantMessage];
@@ -481,6 +528,7 @@ export default function App() {
       const location = locationOverride === undefined ? eatLocationRef.current : locationOverride;
       const reply = await appApi.chat.stream(sid, value, {
         scene: 'eat',
+        agentId: 'food_decision',
         clientContextOverrides: buildEatContextOverrides(location || null),
         signal: controller.signal,
         onDelta: (partial) => {
@@ -533,6 +581,15 @@ export default function App() {
         stopRequestedRef.current = false;
         const reply = await appApi.chat.stream(draftPlan.sessionId, userMessage.content, {
           scene: 'travel_planner',
+          agentId: 'travel_plan',
+          planType: 'travel',
+          action: 'confirm_candidates',
+          payload: {
+            candidates: confirmedCandidates,
+            confirmed_candidates: confirmedCandidates,
+            basic_info: draftPlan.basicInfo || {},
+            trip_meta: tripMeta
+          },
           travelAction: 'confirm_candidates',
           travelPayload: {
             candidates: confirmedCandidates,
@@ -545,8 +602,11 @@ export default function App() {
             setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: partial || '正在生成...' } : item));
           }
         });
-        const finalText = reply.text || draftPlan.sourceText;
         const nextFinalJson = reply.finalJson || draftFinalJson;
+        const finalRawText = typeof nextFinalJson.raw_text === 'string' && nextFinalJson.raw_text.trim()
+          ? nextFinalJson.raw_text.trim()
+          : '';
+        const finalText = finalRawText || reply.text || draftPlan.sourceText;
         const parsedDays = travelDaysFromFinalJson(nextFinalJson, raw, finalText);
         const finalAssistant = { ...assistantMessage, content: finalText, kind: 'travel-draft' as const, finalJson: nextFinalJson };
         const nextDraft = {
@@ -584,6 +644,16 @@ export default function App() {
       stopRequestedRef.current = false;
       const reply = await appApi.chat.stream(draftPlan.sessionId, userMessage.content, {
         scene: 'travel_planner',
+        agentId: 'travel_plan',
+        planType: 'travel',
+        action: 'generate_map',
+        payload: {
+          candidates: confirmedCandidates,
+          confirmed_candidates: confirmedCandidates,
+          itinerary,
+          basic_info: draftPlan.basicInfo || {},
+          trip_meta: tripMeta
+        },
         travelAction: 'generate_map',
         travelPayload: {
           candidates: confirmedCandidates,
@@ -597,16 +667,41 @@ export default function App() {
           setMessages((prev) => prev.map((item) => item.id === assistantId ? { ...item, content: partial || '正在生成...' } : item));
         }
       });
-      const finalText = reply.text || draftPlan.sourceText;
-      const planText = draftPlan.sourceText || finalText;
       const mapFinalJson = reply.finalJson || draftFinalJson;
+      const mapRawText = typeof mapFinalJson.raw_text === 'string' && mapFinalJson.raw_text.trim()
+        ? mapFinalJson.raw_text.trim()
+        : '';
+      const finalText = mapRawText || reply.text || draftPlan.sourceText;
+      const mapPayload = mapFinalJson.map && typeof mapFinalJson.map === 'object' && !Array.isArray(mapFinalJson.map)
+        ? mapFinalJson.map as Record<string, unknown>
+        : {};
+      const mapError = String(mapPayload.error || mapPayload.message || '').trim();
+      const nextQrCodeUrl = reply.qrCodeUrl || findTravelMapUrl(mapFinalJson, 'qr_code_url') || draftPlan.qrCodeUrl;
+      const nextSchemaUrl = reply.schemaUrl || findTravelMapUrl(mapFinalJson, 'schema_url') || draftPlan.schemaUrl;
+      if (mapError || (!nextQrCodeUrl && !nextSchemaUrl)) {
+        const failedAssistant = { ...assistantMessage, content: finalText || `高德地图生成失败：${mapError || '未返回二维码或地图链接'}`, kind: 'travel-draft' as const, finalJson: mapFinalJson };
+        setMessages((prev) => prev.map((item) => item.id === assistantId ? failedAssistant : item));
+        setDraftPlan({
+          ...draftPlan,
+          sourceText: draftPlan.sourceText || finalText,
+          raw: {
+            ...raw,
+            finalJson: mapFinalJson,
+            mapError: mapError || 'missing_map_url',
+            mapFailedAt: new Date().toISOString()
+          }
+        });
+        toast.error(mapError || '高德地图生成失败，未返回可用二维码');
+        return;
+      }
+      const planText = draftPlan.sourceText || finalText;
       const parsedDays = travelDaysFromFinalJson(mapFinalJson, { ...raw, itinerary }, planText);
       const finalAssistant = { ...assistantMessage, content: finalText, kind: 'travel-plan' as const, finalJson: mapFinalJson };
       const planToSave = {
         ...draftPlan,
         sourceText: planText,
-        qrCodeUrl: reply.qrCodeUrl || findTravelMapUrl(mapFinalJson, 'qr_code_url') || draftPlan.qrCodeUrl,
-        schemaUrl: reply.schemaUrl || findTravelMapUrl(mapFinalJson, 'schema_url') || draftPlan.schemaUrl,
+        qrCodeUrl: nextQrCodeUrl,
+        schemaUrl: nextSchemaUrl,
         days: parsedDays.length ? parsedDays : draftPlan.days,
         raw: {
           ...raw,

@@ -215,7 +215,7 @@ async def _extract_names_from_attachments(state: ChatState) -> list[str]:
         if not image_parts:
             return []
         result = await planner.plan_tool_calls(
-            "你是旅行攻略图片 OCR 和地点抽取器。只从图片中提取真实出现的景点、餐厅、酒店、商圈、车站等地点名，不要编造。",
+            "你是旅行攻略图片多模态理解和地点抽取器。请直接理解图片内容，只提取真实出现的景点、餐厅、酒店、商圈、车站等地点名，不要编造。",
             "请返回 JSON：{\"places\":[\"地点1\",\"地点2\"]}。只返回 JSON，不要解释。",
             [],
             image_parts=image_parts,

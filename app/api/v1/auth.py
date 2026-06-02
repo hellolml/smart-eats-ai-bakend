@@ -20,6 +20,7 @@ from app.common.security import (
     hash_password,
     verify_password,
 )
+from app.domain.preferences.markdown_profile import ensure_user_preference_file
 from app.infra.models.user import User
 
 router = APIRouter()
@@ -89,6 +90,7 @@ async def register(payload: RegisterRequest, request: Request, db: db_dep, redis
         password_hash=hash_password(payload.password),
     )
     db.add(user)
+    await ensure_user_preference_file(user_id)
     await db.commit()
 
     tokens = await _issue_tokens(user_id, redis)

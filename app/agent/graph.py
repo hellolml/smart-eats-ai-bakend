@@ -76,7 +76,40 @@ def _is_fallback_payload(final_json: dict[str, Any]) -> bool:
     return False
 
 
+def _with_agent_metadata(final_json: dict[str, Any], state: Any) -> dict[str, Any]:
+    if not isinstance(final_json, dict):
+        return final_json
+    if isinstance(state, dict):
+        agent_id = state.get("agent_id")
+        plan_type = state.get("plan_type")
+        scene = state.get("scene")
+        context_overrides = state.get("context_overrides")
+    else:
+        agent_id = getattr(state, "agent_id", None)
+        plan_type = getattr(state, "plan_type", None)
+        scene = getattr(state, "scene", None)
+        context_overrides = getattr(state, "context_overrides", None)
+    if isinstance(context_overrides, dict):
+        agent_id = agent_id or context_overrides.get("agent_id")
+        plan_type = plan_type or context_overrides.get("plan_type")
+    if scene == "travel_planner":
+        agent_id = agent_id or "travel_plan"
+        plan_type = plan_type or "travel"
+    if not agent_id and not plan_type:
+        return final_json
+    enriched = dict(final_json)
+    if agent_id:
+        enriched.setdefault("agent_id", agent_id)
+    if plan_type:
+        enriched.setdefault("plan_type", plan_type)
+    return enriched
+
+
 def _render_final_text(final_json: dict[str, Any]) -> str:
+    raw_text = final_json.get("raw_text")
+    if isinstance(raw_text, str) and raw_text.strip():
+        return raw_text.strip()
+
     recommendations = final_json.get("recommendations")
     followups = final_json.get("followups")
     warnings = final_json.get("warnings")
@@ -285,6 +318,11 @@ async def run_chat_stream(
                 latest_state.final_json = final_json
             else:
                 latest_state["final_json"] = final_json
+        final_json = _with_agent_metadata(final_json, latest_state)
+        if hasattr(latest_state, "final_json"):
+            latest_state.final_json = final_json
+        else:
+            latest_state["final_json"] = final_json
 
         session_id = getattr(latest_state, "session_id", None) or state.session_id
         if _is_fallback_payload(final_json):

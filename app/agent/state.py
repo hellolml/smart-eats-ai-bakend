@@ -11,6 +11,8 @@ class ChatState:
     message: str | None = None
     trace_id: str | None = None
     scene: str = "chat"
+    agent_id: str | None = None
+    plan_type: str | None = None
     context_overrides: dict[str, Any] | None = None
     snapshot: dict[str, Any] | None = None
     context: dict[str, Any] | None = None

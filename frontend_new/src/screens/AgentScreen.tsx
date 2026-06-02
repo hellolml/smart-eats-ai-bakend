@@ -94,7 +94,7 @@ function ChatMessage({ message, plan, draftPlan, confirmDraftPlan, openDetail, o
     <div className="flex items-start gap-2">
       <div className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gray-100"><BotIcon /></div>
       <div className="max-w-[82%] rounded-2xl bg-gray-50 px-4 py-3 text-sm leading-relaxed">
-        {!hasTravelStructuredResult(message.finalJson) && <MarkdownMessage content={message.content} />}
+        {message.content && <MarkdownMessage content={message.content} />}
         <TravelResultPanel finalJson={message.finalJson} />
         {message.kind === 'travel-draft' && draftPlan && (
           <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
@@ -170,22 +170,11 @@ function TravelResultPanel({ finalJson }: { finalJson?: Record<string, unknown> 
     ...asRecordArray(candidateGroups.failed),
     ...asRecordArray(candidateGroups.excluded),
   ].filter((item, index, arr) => arr.findIndex((candidate) => String(candidate.source_name || candidate.name) === String(item.source_name || item.name)) === index);
-  const itinerary = finalJson.itinerary && typeof finalJson.itinerary === 'object' && !Array.isArray(finalJson.itinerary)
-    ? finalJson.itinerary as Record<string, unknown>
-    : {};
-  const days = Array.isArray(itinerary.days)
-    ? itinerary.days.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    : [];
   const map = finalJson.map && typeof finalJson.map === 'object' && !Array.isArray(finalJson.map)
     ? finalJson.map as Record<string, unknown>
     : {};
-  const routes = Array.isArray(finalJson.routes)
-    ? finalJson.routes.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    : Array.isArray(map.route_preview)
-      ? map.route_preview.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-      : [];
   const hasCandidateContent = attractions.length || restaurants.length || hotels.length || transportHubs.length || others.length || foodItems.length || failedPlaces.length;
-  if (!hasCandidateContent && !days.length && !routes.length && state !== 'map_generated') return null;
+  if (!hasCandidateContent && state !== 'map_generated') return null;
   if (state === 'candidates_ready') {
     return (
       <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
@@ -196,6 +185,7 @@ function TravelResultPanel({ finalJson }: { finalJson?: Record<string, unknown> 
       </div>
     );
   }
+  if (state !== 'map_generated') return null;
   return (
     <div className="mt-3 space-y-3 rounded-2xl border border-gray-100 bg-white p-3">
       <TravelCandidateSection title="景点类" tone="emerald" items={attractions} />
@@ -219,35 +209,9 @@ function TravelResultPanel({ finalJson }: { finalJson?: Record<string, unknown> 
           </div>
         </div>
       )}
-      {days.length > 0 && (
-        <div>
-          <p className="text-[11px] font-black text-gray-400">路线规划</p>
-          <div className="mt-2 space-y-1.5">
-            {days.slice(0, 4).map((day, index) => (
-              <p key={`${day.day_number || index}`} className="truncate rounded-xl bg-gray-50 px-3 py-2 text-[11px] text-gray-600">
-                <span className="font-black text-gray-900">Day {String(day.day_number || index + 1)}：</span>
-                {summarizeDay(day)}
-              </p>
-            ))}
-          </div>
-        </div>
-      )}
-      {routes.length > 0 && (
-        <div>
-          <p className="text-[11px] font-black text-gray-400">地图路线预览</p>
-          <div className="mt-2 space-y-1.5">
-            {routes.slice(0, 4).map((route, index) => (
-              <p key={`${route.title || index}`} className="truncate rounded-xl bg-blue-50 px-3 py-2 text-[11px] text-blue-700">
-                <span className="font-black">{String(route.title || `路线 ${index + 1}`)}：</span>
-                {summarizeRoute(route)}
-              </p>
-            ))}
-          </div>
-        </div>
-      )}
       {state === 'map_generated' && (
-        <p className="rounded-xl bg-green-50 px-3 py-2 text-[11px] font-bold text-green-700">
-          {map.schema_url ? '高德地图已生成，可在详情页查看二维码。' : '地图二维码暂不可用，请检查候选点位后重试。'}
+        <p className={`rounded-xl px-3 py-2 text-[11px] font-bold ${map.schema_url || map.qr_code_url ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+          {map.schema_url || map.qr_code_url ? '高德地图已生成，可在详情页查看二维码。' : String(map.message || map.error || '地图二维码暂不可用，请检查候选点位后重试。')}
         </p>
       )}
     </div>

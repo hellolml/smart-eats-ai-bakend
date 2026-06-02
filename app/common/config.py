@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     AMAP_API_KEY: str | None = None
     AMAP_SEARCH_CACHE_TTL_SECONDS: int = 180
     TRAVEL_POI_CACHE_TTL_SECONDS: int = 604800
+    USER_PREFERENCE_MD_DIR: str = ".user_preferences"
     RESTAURANT_DETAIL_CACHE_TTL_SECONDS: int = 300
     MCP_SERVERS_CONFIG_PATH: str | None = "mcp_servers.json"
     APP_FALLBACK_ENABLED: bool = True

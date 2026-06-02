@@ -339,6 +339,10 @@ class WheelSpinRequest(BaseModel):
 class ChatSessionStreamRequest(BaseModel):
     message: str | None = None
     scene: str | None = None
+    agent_id: str | None = None
+    plan_type: str | None = None
+    action: str | None = None
+    payload: dict[str, Any] | None = None
     attachments: list[dict[str, Any]] | None = None
     travel_action: str | None = None
     travel_payload: dict[str, Any] | None = None

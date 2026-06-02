@@ -473,6 +473,10 @@ export const appApi = {
     },
     async stream(sessionId: string, message: string, options: {
       scene?: string;
+      agentId?: string;
+      planType?: string;
+      action?: string;
+      payload?: Record<string, unknown>;
       attachments?: ChatAttachment[];
       travelAction?: string;
       travelPayload?: Record<string, unknown>;
@@ -500,6 +504,10 @@ export const appApi = {
         body: JSON.stringify({
           message,
           scene: options.scene,
+          agent_id: options.agentId,
+          plan_type: options.planType,
+          action: options.action,
+          payload: options.payload,
           attachments: options.attachments,
           travel_action: options.travelAction,
           travel_payload: options.travelPayload,

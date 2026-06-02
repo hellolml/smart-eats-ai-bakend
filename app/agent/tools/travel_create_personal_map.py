@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
+
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
@@ -69,12 +71,27 @@ async def _travel_create_personal_map(
             "message": reason or "地图点位不完整",
         }
 
-    payload = await create_personal_map(
-        title,
-        [item for item in line_list if isinstance(item, dict)],
-        scene_type=_normalize_scene_type(scene_type),
-        servers_path=ctx.get("servers_path"),
-    )
+    try:
+        payload = await create_personal_map(
+            title,
+            [item for item in line_list if isinstance(item, dict)],
+            scene_type=_normalize_scene_type(scene_type),
+            servers_path=ctx.get("servers_path"),
+        )
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        return {
+            "title": title,
+            "line_list": line_list,
+            "error": "personal_map_timeout",
+            "message": f"高德地图生成超时：{exc}",
+        }
+    except Exception as exc:
+        return {
+            "title": title,
+            "line_list": line_list,
+            "error": "personal_map_failed",
+            "message": f"高德地图生成失败：{exc}",
+        }
     if not payload:
         return {
             "title": title,
