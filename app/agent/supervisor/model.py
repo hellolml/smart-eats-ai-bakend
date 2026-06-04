@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import BaseTool
 from pydantic import Field, PrivateAttr
@@ -78,4 +78,4 @@ class PlannerChatModel(BaseChatModel):
             asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self._agenerate(messages, stop=stop, run_manager=None, **kwargs))
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="好的。"))])
+        raise NotImplementedError("PlannerChatModel does not support synchronous generation inside an event loop")

@@ -3,7 +3,14 @@ from __future__ import annotations
 import inspect
 
 from app.agent.runtime import graph as runtime_module
-from app.agent.runtime.graph import AgentRuntimeState, build_agent_runtime_graph, get_agent_runtime_config
+from app.agent.runtime import builder as builder_module
+from app.agent.runtime.graph import (
+    AgentRuntimeState,
+    build_agent_runtime_graph,
+    build_cached_agent_runtime_graph,
+    get_agent_runtime_config,
+    runtime_graph_configurable,
+)
 
 
 def test_build_agent_runtime_graph_returns_graph(override_redis):
@@ -16,10 +23,27 @@ def test_build_agent_runtime_graph_returns_graph(override_redis):
     assert "tools" in graph.nodes
 
 
+def test_build_cached_agent_runtime_graph_reuses_state_graph():
+    graph_a = build_cached_agent_runtime_graph(provider="openai", resolved_model_config={"model": "m1"})
+    graph_b = build_cached_agent_runtime_graph(provider="openai", resolved_model_config={"model": "m1"})
+    graph_c = build_cached_agent_runtime_graph(provider="openai", resolved_model_config={"model": "m2"})
+
+    assert graph_a is graph_b
+    assert graph_a is not graph_c
+
+
+def test_runtime_graph_configurable_carries_request_scoped_dependencies():
+    payload = runtime_graph_configurable(db="db", redis_client="redis")
+
+    assert payload["agent_runtime_db"] == "db"
+    assert payload["agent_runtime_redis_client"] == "redis"
+
+
 def test_agent_runtime_graph_uses_typed_state_and_message_accumulator():
     assert runtime_module.AgentRuntimeGraphState.__annotations__["messages"] is not None
-    source = inspect.getsource(runtime_module.AgentRuntimeGraphState)
-    assert "add_messages" in source
+    assert "add_messages" in str(runtime_module.AgentRuntimeGraphState.__annotations__["messages"])
+    for field_name in runtime_module.AgentRuntimeState.model_fields:
+        assert field_name in runtime_module.AgentRuntimeGraphState.__annotations__
 
 
 def test_initialize_graph_state_preserves_existing_human_message():
@@ -65,7 +89,7 @@ def test_runtime_config_contains_only_core_tools():
 
 
 def test_runtime_graph_has_no_business_specific_runtime_code():
-    source = inspect.getsource(runtime_module)
+    source = inspect.getsource(builder_module)
 
     assert "app.agent.agents.base" not in source
     assert "load_cached_location" not in source
@@ -75,8 +99,8 @@ def test_runtime_graph_has_no_business_specific_runtime_code():
 
 
 def test_build_agent_runtime_graph_source_uses_toolnode_postprocess_boundary():
-    source = inspect.getsource(build_agent_runtime_graph)
+    module_source = inspect.getsource(builder_module)
 
-    assert "ToolNode" in source
-    assert "_invoke_tool_node_with_runtime" in source
-    assert "_apply_official_tool_postprocess" in source
+    assert "ToolNode" in module_source
+    assert "_invoke_tool_node_with_runtime" in module_source
+    assert "_apply_official_tool_postprocess" in module_source

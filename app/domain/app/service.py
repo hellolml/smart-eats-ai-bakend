@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.state import ChatState
 from app.agent import conversation
 from app.agent.llm_adapters import ProviderRegistry
-from app.agent.multi_agent import AgentRouter
 from app.common.config import settings
 from app.common.errors import (
     AUTH_ACCOUNT_EXISTS,
@@ -54,6 +53,7 @@ from app.domain.app.mappers import (
     map_preferences,
     map_restaurant,
 )
+from app.domain.app import agent_prep
 from app.domain.llm_config.repository import list_user_configs
 from app.domain.llm_config.resolver import resolve_model_config
 from app.domain.game.blindbox_map import map_blindbox_result
@@ -2679,45 +2679,8 @@ class AppBffService:
             limit=30,
             window_seconds=60,
         )
-        context_overrides = payload.get("client_context_overrides")
-        context_overrides = dict(context_overrides) if isinstance(context_overrides, dict) else None
-        attachments = payload.get("attachments")
-        if isinstance(attachments, list):
-            clean_attachments = [item for item in attachments if isinstance(item, dict)]
-            if clean_attachments:
-                context_overrides = context_overrides or {}
-                context_overrides["attachments"] = clean_attachments
         scene = payload.get("scene") or "chat"
-        inferred_intent = None if scene == "travel_planner" else AppBffService._infer_chat_intent(payload.get("message"))
-        if inferred_intent:
-            context_overrides = context_overrides or {}
-            context_overrides.setdefault("intent", inferred_intent)
-            forced_skill_ids = AppBffService._forced_skill_ids_for_intent(inferred_intent)
-            if forced_skill_ids:
-                existing_forced = context_overrides.get("forced_skill_ids")
-                merged_forced = []
-                if isinstance(existing_forced, list):
-                    merged_forced.extend(item for item in existing_forced if isinstance(item, str))
-                merged_forced.extend(item for item in forced_skill_ids if item not in merged_forced)
-                context_overrides["forced_skill_ids"] = merged_forced
-        if payload.get("travel_action"):
-            context_overrides = context_overrides or {}
-            context_overrides["travel_action"] = payload.get("travel_action")
-        if isinstance(payload.get("travel_payload"), dict):
-            context_overrides = context_overrides or {}
-            context_overrides["travel_payload"] = payload.get("travel_payload")
-        if payload.get("agent_id"):
-            context_overrides = context_overrides or {}
-            context_overrides["agent_id"] = payload.get("agent_id")
-        if payload.get("plan_type"):
-            context_overrides = context_overrides or {}
-            context_overrides["plan_type"] = payload.get("plan_type")
-        if payload.get("action"):
-            context_overrides = context_overrides or {}
-            context_overrides["action"] = payload.get("action")
-        if isinstance(payload.get("payload"), dict):
-            context_overrides = context_overrides or {}
-            context_overrides["payload"] = payload.get("payload")
+        context_overrides = agent_prep.build_chat_context_overrides(payload)
 
         return ChatState(
             session_id=session_id,
@@ -2737,7 +2700,7 @@ class AppBffService:
 
     @staticmethod
     async def _latest_travel_final_json(db: AsyncSession, session_id: str) -> dict[str, Any] | None:
-        return await AppBffService._latest_plan_final_json(db, session_id, plan_type="travel")
+        return await agent_prep.latest_travel_final_json(db, session_id)
 
     @staticmethod
     async def _latest_plan_final_json(
@@ -2746,42 +2709,7 @@ class AppBffService:
         *,
         plan_type: str | None = None,
     ) -> dict[str, Any] | None:
-        result = await db.execute(
-            select(ChatMessage)
-            .where(ChatMessage.session_id == session_id, ChatMessage.role == "assistant")
-            .order_by(desc(ChatMessage.created_at))
-            .limit(10)
-        )
-        for row in result.scalars().all():
-            payload = row.tool_payload_json if isinstance(row.tool_payload_json, dict) else {}
-            answer = payload.get("answer")
-            if not isinstance(answer, dict) or not answer.get("state"):
-                continue
-            if plan_type and answer.get("plan_type") not in {None, plan_type}:
-                continue
-            return answer
-        return None
-
-    @staticmethod
-    async def _prepare_multi_agent_payload(
-        db: AsyncSession,
-        session_id: str,
-        user_id: str | None,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        resolved_plan_type = payload.get("plan_type") or ("travel" if payload.get("scene") == "travel_planner" else None)
-        latest = await AppBffService._latest_plan_final_json(
-            db,
-            session_id,
-            plan_type=str(resolved_plan_type) if resolved_plan_type else None,
-        )
-        prepared = await AgentRouter().prepare_turn(
-            session_id=session_id,
-            user_id=user_id,
-            payload=payload,
-            latest_final_json=latest,
-        )
-        return prepared.payload
+        return await agent_prep.latest_plan_final_json(db, session_id, plan_type=plan_type)
 
     @staticmethod
     async def _prepare_supervisor_payload(
@@ -2790,24 +2718,7 @@ class AppBffService:
         user_id: str | None,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        next_payload = dict(payload)
-        context_overrides = next_payload.get("client_context_overrides")
-        context_overrides = dict(context_overrides) if isinstance(context_overrides, dict) else {}
-        latest_travel = await AppBffService._latest_travel_final_json(db, session_id)
-        if latest_travel:
-            context_overrides["latest_travel_final_json"] = latest_travel
-        if user_id:
-            from app.domain.preferences.markdown_profile import build_preference_context, ensure_user_preference_file
-
-            profile = await ensure_user_preference_file(user_id)
-            preference_context = build_preference_context(profile)
-            context_overrides["user_preference_md"] = preference_context
-            context_overrides["food_profile"] = preference_context.get("profile") or {}
-            context_overrides["travel_food_preferences"] = preference_context.get("profile") or {}
-            context_overrides["travel_food_preference_summary"] = preference_context.get("summary")
-        if context_overrides:
-            next_payload["client_context_overrides"] = context_overrides
-        return next_payload
+        return await agent_prep.prepare_supervisor_payload(db, session_id, user_id, payload)
 
     @staticmethod
     async def _merge_current_session_travel_context(
@@ -2815,89 +2726,15 @@ class AppBffService:
         session_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        scene = payload.get("scene") or "chat"
-        if scene != "travel_planner":
-            return payload
-        latest = await AppBffService._latest_travel_final_json(db, session_id)
-        if not latest:
-            return payload
-        current = payload.get("travel_payload")
-        current = current if isinstance(current, dict) else {}
-        base = {
-            "previous_final_json": latest,
-            "state": latest.get("state"),
-            "trip_meta": latest.get("trip_meta"),
-            "sources": latest.get("sources"),
-            "places": latest.get("places"),
-            "candidates": latest.get("candidates"),
-            "failed_places": latest.get("failed_places"),
-            "itinerary": latest.get("itinerary"),
-            "map": latest.get("map"),
-            "raw_text": latest.get("raw_text"),
-        }
-        merged = {key: value for key, value in base.items() if value not in (None, [], {})}
-        merged.update(current)
-        next_payload = dict(payload)
-        next_payload["travel_payload"] = merged
-        return next_payload
+        return await agent_prep.merge_current_session_travel_context(db, session_id, payload)
 
     @staticmethod
     def _infer_chat_intent(message: Any) -> str | None:
-        text = str(message or "")
-        if not text:
-            return None
-        if any(token in text for token in ("路线", "导航", "怎么走", "怎么去")):
-            return "route"
-        if any(
-            token in text
-            for token in (
-                "吃点啥",
-                "吃什么",
-                "吃的",
-                "吃啥",
-                "今天吃",
-                "晚饭",
-                "午饭",
-                "早餐",
-                "夜宵",
-                "外卖",
-                "餐厅",
-                "饭店",
-                "美食",
-                "好吃",
-                "周边吃",
-                "附近吃",
-                "附近美食",
-                "推荐吃",
-                "出去吃",
-                "外面吃",
-                "去哪吃",
-                "换一家",
-                "下一家",
-                "第二家",
-                "第三家",
-                "近一点",
-                "不辣",
-                "做饭",
-                "在家做",
-                "家里做",
-                "菜谱",
-                "食谱",
-                "冰箱",
-                "食材",
-                "自己做",
-            )
-        ):
-            return "food"
-        return None
+        return agent_prep.infer_chat_intent(message)
 
     @staticmethod
     def _forced_skill_ids_for_intent(intent: str) -> list[str]:
-        if intent == "food":
-            return ["food_decision", "restaurant_finder"]
-        if intent == "route":
-            return ["route_planner"]
-        return []
+        return agent_prep.forced_skill_ids_for_intent(intent)
 
     @staticmethod
     async def prepare_chat_stream_state(
@@ -2919,20 +2756,12 @@ class AppBffService:
             session_id,
             dict(payload or {}),
         )
-        if str(getattr(settings, "AGENT_RUNTIME_MODE", "generic") or "generic").strip().lower() == "supervisor":
-            payload = await AppBffService._prepare_supervisor_payload(
-                db,
-                session_id,
-                user_id,
-                payload,
-            )
-        else:
-            payload = await AppBffService._prepare_multi_agent_payload(
-                db,
-                session_id,
-                user_id,
-                payload,
-            )
+        payload = await AppBffService._prepare_supervisor_payload(
+            db,
+            session_id,
+            user_id,
+            payload,
+        )
         state = await AppBffService.build_chat_state(
             session_id=session_id,
             user_id=user_id,

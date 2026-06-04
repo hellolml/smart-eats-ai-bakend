@@ -43,3 +43,11 @@ async def test_planner_chat_model_binds_tools_and_normalizes_tool_calls():
 
     assert message.tool_calls[0]["name"] == "sample_tool"
     assert planner.calls[0]["tools"][0].name == "sample_tool"
+
+
+@pytest.mark.asyncio
+async def test_planner_chat_model_sync_generation_raises_inside_event_loop():
+    model = PlannerChatModel(planner=_FakePlanner()).bind_tools([sample_tool])
+
+    with pytest.raises(NotImplementedError):
+        model._generate([HumanMessage(content="call the tool")])

@@ -59,7 +59,7 @@ async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monke
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_agent_runtime_graph",
+        "app.agent.supervisor.build_supervisor_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-values", "message": "你好", "final_json": final_json}]),
     )
 
@@ -170,27 +170,25 @@ async def test_app_chat_stream_accepts_client_location_overrides(client, monkeyp
     assert resp.status_code == 200
     session_id = resp.json()["data"]["session_id"]
 
-    async def _fake_plan_tool_calls(self, system, user, available_tools):
-        return {
-            "content": "",
-            "tool_calls": [
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.supervisor.build_supervisor_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder(
+            [
                 {
-                    "name": "submit_final_answer",
-                    "args": {
+                    "session_id": session_id,
+                    "message": "附近吃什么",
+                    "final_json": {
                         "recommendations": [
                             {"type": "note", "title": "已收到定位信息", "reason": "location_override_test"}
                         ],
                         "followups": [],
                         "warnings": [],
                     },
-                    "id": "call_test_final",
-                    "type": "tool_call",
                 }
-            ],
-        }
-
-    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _fake_plan_tool_calls)
-    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+            ]
+        ),
+    )
 
     got_final = False
     current_event = None

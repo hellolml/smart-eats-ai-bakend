@@ -22,9 +22,8 @@ from app.agent.langgraph_store import langgraph_store_context
 from app.agent.runtime.graph import (
     _initialize_graph_state,
     _state_from_dict,
-    build_agent_runtime_graph,
 )
-from app.agent.runtime.finalization import fallback_final, final_json_from_text
+from app.agent.runtime.finalization import fallback_final
 from app.agent.metrics import record_agent_metric
 from app.agent.state import ChatState
 from app.common.config import settings
@@ -178,31 +177,6 @@ def _build_graph_config(state: ChatState) -> dict[str, Any]:
     return config
 
 
-def _runtime_mode() -> str:
-    mode = str(getattr(settings, "AGENT_RUNTIME_MODE", "generic") or "generic").strip().lower()
-    return "supervisor" if mode == "supervisor" else "generic"
-
-
-def _extract_final_json_from_messages(messages: Any) -> dict[str, Any] | None:
-    if not isinstance(messages, list):
-        return None
-    for message in reversed(messages):
-        kwargs = getattr(message, "additional_kwargs", None)
-        if isinstance(kwargs, dict) and isinstance(kwargs.get("final_json"), dict):
-            return kwargs["final_json"]
-    return None
-
-
-def _extract_text_from_messages(messages: Any) -> str | None:
-    if not isinstance(messages, list):
-        return None
-    for message in reversed(messages):
-        content = getattr(message, "content", None)
-        if isinstance(content, str) and content.strip():
-            return content.strip()
-    return None
-
-
 async def _load_graph_snapshot(graph: Any, config: dict[str, Any], checkpointer: Any) -> Any:
     if not checkpointer:
         return None
@@ -253,47 +227,37 @@ async def run_chat_stream(
             if inspect.isawaitable(result):
                 await result
         async with checkpointer_context() as checkpointer, langgraph_store_context() as store:
-            runtime_mode = _runtime_mode()
             logger.info(
                 "agent_runtime_dispatch session_id=%s trace_id=%s runtime_path=%s",
                 state.session_id,
                 trace_id,
-                "supervisor_runtime" if runtime_mode == "supervisor" else "generic_skill_runtime",
+                "supervisor_runtime",
             )
-            if runtime_mode == "supervisor":
-                from app.agent.supervisor import build_supervisor_runtime_graph
+            from app.agent.supervisor import build_supervisor_runtime_graph
 
-                if (
-                    state.persist_user_message
-                    and state.message
-                    and db is not None
-                    and hasattr(db, "execute")
-                    and not state.user_message_logged
-                ):
-                    await conversation.save_user_message(
-                        db,
-                        redis_client,
-                        state.session_id,
-                        state.message,
-                    )
-                    state.user_message_logged = True
-                    state.last_user_message = state.message
-                graph_builder = build_supervisor_runtime_graph(
-                    db=db,
-                    redis_client=redis_client,
-                    provider=provider,
-                    resolved_model_config=state.resolved_model_config,
+            if (
+                state.persist_user_message
+                and state.message
+                and db is not None
+                and hasattr(db, "execute")
+                and not state.user_message_logged
+            ):
+                await conversation.save_user_message(
+                    db,
+                    redis_client,
+                    state.session_id,
+                    state.message,
                 )
-            else:
-                graph_builder = build_agent_runtime_graph(
-                    db=db,
-                    redis_client=redis_client,
-                    provider=provider,
-                    resolved_model_config=state.resolved_model_config,
-                )
+                state.user_message_logged = True
+                state.last_user_message = state.message
+            graph_builder = build_supervisor_runtime_graph(
+                db=db,
+                redis_client=redis_client,
+                provider=provider,
+                resolved_model_config=state.resolved_model_config,
+            )
             graph = graph_builder.compile(checkpointer=checkpointer, store=store)
             latest_state = state
-            last_final_json: dict[str, Any] | None = None
             config = _build_graph_config(state)
             snapshot = await _load_graph_snapshot(graph, config, checkpointer)
             has_pending = bool(snapshot and getattr(snapshot, "next", None))
@@ -309,7 +273,7 @@ async def run_chat_stream(
             if input_payload is None:
                 if not snapshot or not getattr(snapshot, "values", None):
                     input_payload = state.__dict__
-            if runtime_mode == "supervisor" and isinstance(input_payload, dict):
+            if isinstance(input_payload, dict):
                 input_payload = _initialize_graph_state(input_payload)
 
             async def _stream_graph() -> AsyncGenerator[Any, None]:
@@ -346,16 +310,6 @@ async def run_chat_stream(
                     yield {"event": "final", "data": {"stopped": True}}
                     return
                 latest_state = updated
-                if isinstance(updated, ChatState):
-                    if updated.final_json:
-                        last_final_json = updated.final_json
-                elif isinstance(updated, dict):
-                    if updated.get("final_json"):
-                        last_final_json = updated.get("final_json")
-                    else:
-                        message_final = _extract_final_json_from_messages(updated.get("messages"))
-                        if message_final:
-                            last_final_json = message_final
                 events = updated.events if hasattr(updated, "events") else updated.get("events", [])
                 for item in events:
                     yield item
@@ -369,14 +323,6 @@ async def run_chat_stream(
             if hasattr(latest_state, "final_json")
             else latest_state.get("final_json")
         )
-        if not final_json:
-            final_json = last_final_json
-        if not final_json and isinstance(latest_state, dict):
-            final_json = _extract_final_json_from_messages(latest_state.get("messages"))
-        if not final_json and isinstance(latest_state, dict):
-            text_final = _extract_text_from_messages(latest_state.get("messages"))
-            if text_final:
-                final_json = final_json_from_text(text_final)
         if not final_json:
             final_json = fallback_final()
             if hasattr(latest_state, "final_json"):

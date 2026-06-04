@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
+from app.agent.supervisor import workers as worker_module
 from app.agent.supervisor.workers import WORKER_SPECS, _prepare_worker_payload
 
 
@@ -47,3 +50,11 @@ async def test_route_worker_forces_route_skill():
     assert payload["scene"] == "route"
     assert overrides["intent"] == "route"
     assert overrides["forced_skill_ids"] == ["route_planner"]
+
+
+def test_worker_agent_uses_cached_runtime_graph_without_message_final_json_channel():
+    source = inspect.getsource(worker_module.build_worker_agent)
+
+    assert "build_cached_agent_runtime_graph" in source
+    assert "runtime_graph_configurable" in source
+    assert 'additional_kwargs={\n                        "final_json"' not in source

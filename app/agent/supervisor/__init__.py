@@ -1,4 +1,3 @@
-from app.agent.supervisor.graph import build_supervisor_runtime_graph
 from app.agent.supervisor.model import PlannerChatModel
 from app.agent.supervisor.workers import (
     WORKER_SPECS,
@@ -13,3 +12,9 @@ __all__ = [
     "build_worker_agent",
     "build_worker_agents",
 ]
+
+
+def build_supervisor_runtime_graph(*args, **kwargs):
+    from app.agent.supervisor.graph import build_supervisor_runtime_graph as _build_supervisor_runtime_graph
+
+    return _build_supervisor_runtime_graph(*args, **kwargs)
