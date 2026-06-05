@@ -85,7 +85,7 @@ def test_runtime_config_contains_only_core_tools():
 
     assert "memory_search" in config.core_tool_names
     assert "source_event_search" in config.core_tool_names
-    assert config.name == "generic_runtime"
+    assert config.name == "skill_runtime"
 
 
 def test_runtime_graph_has_no_business_specific_runtime_code():

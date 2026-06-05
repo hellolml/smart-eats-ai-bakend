@@ -679,7 +679,7 @@ def _hook_manager_from_context(context: dict[str, Any] | None) -> SkillHookManag
     return SkillHookManager.from_skills(skills)
 
 
-def generic_system_prompt(payload: dict[str, Any]) -> str:
+def skill_system_prompt(payload: dict[str, Any]) -> str:
     skill_prompt = payload.get("skill_prompt")
     skill_block = f"\n\n{skill_prompt.strip()}" if isinstance(skill_prompt, str) and skill_prompt.strip() else ""
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
@@ -702,10 +702,10 @@ def generic_system_prompt(payload: dict[str, Any]) -> str:
 
 def _agent_runtime_config() -> AgentRuntimeConfig:
     return AgentRuntimeConfig(
-        name="generic_runtime",
+        name="skill_runtime",
         core_tool_names=list(CORE_TOOL_NAMES),
         max_steps=6,
-        system_prompt_builder=generic_system_prompt,
+        system_prompt_builder=skill_system_prompt,
     )
 
 
@@ -832,5 +832,5 @@ def _build_agent_runtime_graph(
     graph.add_conditional_edges("agent", _next_after_agent)
     graph.add_conditional_edges("tools", _next_after_tools)
     graph.set_entry_point("prepare")
-    logger.info("agent_graph_runtime mode=official agent=generic_runtime")
+    logger.info("agent_graph_runtime mode=official agent=skill_runtime")
     return graph
