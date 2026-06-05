@@ -47,6 +47,7 @@ from app.domain.app.schemas import (
 from app.domain.app.service import AppBffService
 from app.domain.decision.service import DecisionService
 from app.domain.group_decision.service import GroupDecisionService
+from app.domain.preferences.markdown_profile import build_preference_context, read_user_preference_profile
 from app.domain.llm_config.schemas import (
     LlmProviderConfigCreate,
     LlmProviderConfigTestRequest,
@@ -823,6 +824,7 @@ async def app_blindbox_decision(
 ):
     forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
     client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else None)
+    preference_context = build_preference_context(await read_user_preference_profile(user_id))
     data = await DecisionService.blindbox(
         db,
         redis,
@@ -834,6 +836,7 @@ async def app_blindbox_decision(
         budget_level=payload.budget_level,
         scene=payload.scene,
         client_ip=client_ip,
+        preference_profile=preference_context.get("profile"),
     )
     return envelope(data, getattr(request.state, "trace_id", ""))
 

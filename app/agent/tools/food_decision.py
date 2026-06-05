@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field
 
 from app.agent.tools.native import RuntimeContext
 from app.domain.decision.service import DecisionService
+from app.domain.preferences.markdown_profile import (
+    build_preference_context,
+    read_user_preference_profile,
+    update_user_preference_profile,
+)
 from app.infra.external.amap import amap
 
 
@@ -36,6 +41,10 @@ async def _food_decision(
         return {"error": "missing_runtime_context"}
 
     prompt_context = ctx.get("context") if isinstance(ctx.get("context"), dict) else {}
+    preference_context = prompt_context.get("user_preference_md") if isinstance(prompt_context.get("user_preference_md"), dict) else {}
+    if not preference_context:
+        profile = await read_user_preference_profile(ctx.get("user_id"))
+        preference_context = build_preference_context(profile)
     location = _extract_location(prompt_context)
     location_text = _extract_location_text(prompt_context)
     resolved_city = city or prompt_context.get("city")
@@ -50,7 +59,7 @@ async def _food_decision(
         if geocoded:
             resolved_lat = geocoded.get("lat")
             resolved_lng = geocoded.get("lng")
-    return await DecisionService.blindbox(
+    result = await DecisionService.blindbox(
         db,
         redis_client,
         user_id=ctx.get("user_id"),
@@ -61,7 +70,17 @@ async def _food_decision(
         budget_level=budget_level,
         scene=scene or "eat",
         client_ip=ctx.get("client_ip"),
+        preference_profile=preference_context.get("profile") if isinstance(preference_context, dict) else None,
     )
+    await update_user_preference_profile(
+        ctx.get("user_id"),
+        user_text=query or ctx.get("last_user_message") or "",
+        decision_result=result,
+        source="food_decision_tool",
+    )
+    if isinstance(preference_context, dict) and preference_context.get("summary"):
+        result.setdefault("meta", {})["user_preference_summary"] = preference_context["summary"]
+    return result
 
 
 async def food_decision(args: dict[str, Any]) -> dict[str, Any]:

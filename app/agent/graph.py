@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.checkpoint import checkpointer_context
 from app.agent.langgraph_store import langgraph_store_context
 from app.agent.runtime.graph import (
+    _initialize_graph_state,
     _state_from_dict,
-    build_agent_runtime_graph,
 )
 from app.agent.runtime.finalization import fallback_final
 from app.agent.metrics import record_agent_metric
@@ -76,7 +76,40 @@ def _is_fallback_payload(final_json: dict[str, Any]) -> bool:
     return False
 
 
+def _with_agent_metadata(final_json: dict[str, Any], state: Any) -> dict[str, Any]:
+    if not isinstance(final_json, dict):
+        return final_json
+    if isinstance(state, dict):
+        agent_id = state.get("agent_id")
+        plan_type = state.get("plan_type")
+        scene = state.get("scene")
+        context_overrides = state.get("context_overrides")
+    else:
+        agent_id = getattr(state, "agent_id", None)
+        plan_type = getattr(state, "plan_type", None)
+        scene = getattr(state, "scene", None)
+        context_overrides = getattr(state, "context_overrides", None)
+    if isinstance(context_overrides, dict):
+        agent_id = agent_id or context_overrides.get("agent_id")
+        plan_type = plan_type or context_overrides.get("plan_type")
+    if scene == "travel_planner":
+        agent_id = agent_id or "travel_plan"
+        plan_type = plan_type or "travel"
+    if not agent_id and not plan_type:
+        return final_json
+    enriched = dict(final_json)
+    if agent_id:
+        enriched.setdefault("agent_id", agent_id)
+    if plan_type:
+        enriched.setdefault("plan_type", plan_type)
+    return enriched
+
+
 def _render_final_text(final_json: dict[str, Any]) -> str:
+    raw_text = final_json.get("raw_text")
+    if isinstance(raw_text, str) and raw_text.strip():
+        return raw_text.strip()
+
     recommendations = final_json.get("recommendations")
     followups = final_json.get("followups")
     warnings = final_json.get("warnings")
@@ -198,16 +231,33 @@ async def run_chat_stream(
                 "agent_runtime_dispatch session_id=%s trace_id=%s runtime_path=%s",
                 state.session_id,
                 trace_id,
-                "generic_skill_runtime",
+                "supervisor_runtime",
             )
-            graph = build_agent_runtime_graph(
+            from app.agent.supervisor import build_supervisor_runtime_graph
+
+            if (
+                state.persist_user_message
+                and state.message
+                and db is not None
+                and hasattr(db, "execute")
+                and not state.user_message_logged
+            ):
+                await conversation.save_user_message(
+                    db,
+                    redis_client,
+                    state.session_id,
+                    state.message,
+                )
+                state.user_message_logged = True
+                state.last_user_message = state.message
+            graph_builder = build_supervisor_runtime_graph(
                 db=db,
                 redis_client=redis_client,
                 provider=provider,
                 resolved_model_config=state.resolved_model_config,
-            ).compile(checkpointer=checkpointer, store=store)
+            )
+            graph = graph_builder.compile(checkpointer=checkpointer, store=store)
             latest_state = state
-            last_final_json: dict[str, Any] | None = None
             config = _build_graph_config(state)
             snapshot = await _load_graph_snapshot(graph, config, checkpointer)
             has_pending = bool(snapshot and getattr(snapshot, "next", None))
@@ -223,6 +273,8 @@ async def run_chat_stream(
             if input_payload is None:
                 if not snapshot or not getattr(snapshot, "values", None):
                     input_payload = state.__dict__
+            if isinstance(input_payload, dict):
+                input_payload = _initialize_graph_state(input_payload)
 
             async def _stream_graph() -> AsyncGenerator[Any, None]:
                 supports_durability = False
@@ -258,12 +310,6 @@ async def run_chat_stream(
                     yield {"event": "final", "data": {"stopped": True}}
                     return
                 latest_state = updated
-                if isinstance(updated, ChatState):
-                    if updated.final_json:
-                        last_final_json = updated.final_json
-                elif isinstance(updated, dict):
-                    if updated.get("final_json"):
-                        last_final_json = updated.get("final_json")
                 events = updated.events if hasattr(updated, "events") else updated.get("events", [])
                 for item in events:
                     yield item
@@ -278,13 +324,16 @@ async def run_chat_stream(
             else latest_state.get("final_json")
         )
         if not final_json:
-            final_json = last_final_json
-        if not final_json:
             final_json = fallback_final()
             if hasattr(latest_state, "final_json"):
                 latest_state.final_json = final_json
             else:
                 latest_state["final_json"] = final_json
+        final_json = _with_agent_metadata(final_json, latest_state)
+        if hasattr(latest_state, "final_json"):
+            latest_state.final_json = final_json
+        else:
+            latest_state["final_json"] = final_json
 
         session_id = getattr(latest_state, "session_id", None) or state.session_id
         if _is_fallback_payload(final_json):

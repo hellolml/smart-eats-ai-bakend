@@ -84,7 +84,7 @@ def test_chat_intent_forces_unified_food_skill():
     assert AppBffService._infer_chat_intent("出去吃") == "food"
     assert AppBffService._infer_chat_intent("冰箱里有鸡蛋") == "food"
     assert AppBffService._infer_chat_intent("换一家不辣的") == "food"
-    assert AppBffService._forced_skill_ids_for_intent("food") == ["food_assistant"]
+    assert AppBffService._forced_skill_ids_for_intent("food") == ["food_decision", "restaurant_finder"]
 
 
 def test_chat_route_intent_wins_for_navigation_followup():
@@ -229,6 +229,9 @@ async def test_travel_search_poi_uses_cache_for_valid_pois(monkeypatch):
     assert calls["count"] == 1
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
+    assert "travel:poi:id:B001" in redis.values
+    assert any(key.startswith("travel:poi:alias:杭州:") for key in redis.values)
+    assert any(key.startswith("travel:poi:query:") for key in redis.values)
 
 
 @pytest.mark.asyncio
@@ -256,8 +259,11 @@ async def test_travel_search_poi_normalizes_nested_mcp_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_travel_search_poi_does_not_cache_invalid_pois(monkeypatch):
+async def test_travel_search_poi_caches_failed_pois(monkeypatch):
     from app.agent.tools.travel_search_poi import travel_search_poi
+    from app.common.config import settings
+
+    calls = {"count": 0}
 
     class FakeRedis:
         def __init__(self):
@@ -267,17 +273,26 @@ async def test_travel_search_poi_does_not_cache_invalid_pois(monkeypatch):
             return self.values.get(key)
 
         async def setex(self, key, _ttl, value):
+            assert _ttl == settings.TRAVEL_POI_CACHE_TTL_SECONDS
             self.values[key] = value
 
     async def _fake_text_search(*_args, **_kwargs):
+        calls["count"] += 1
         return [{"name": "无坐标地点"}]
 
     redis = FakeRedis()
     monkeypatch.setattr("app.agent.tools.travel_search_poi.amap.text_search", _fake_text_search)
 
-    await travel_search_poi({"keywords": "无坐标", "redis_client": redis})
+    first = await travel_search_poi({"keywords": "无坐标", "city": "杭州", "types": "景点", "redis_client": redis})
+    second = await travel_search_poi({"keywords": "无坐标", "city": "杭州", "types": "景点", "redis_client": redis})
 
-    assert redis.values == {}
+    assert calls["count"] == 1
+    assert first["cache_hit"] is False
+    assert second["cache_hit"] is True
+    assert second["selected_poi"] is None
+    assert second["cache_source"] in {"failed_name", "query_failed"}
+    assert any(key.startswith("travel:poi:failed:杭州:无坐标:景点") for key in redis.values)
+    assert any(key.startswith("travel:poi:query:") for key in redis.values)
 
 
 @pytest.mark.asyncio

@@ -33,7 +33,7 @@ tools:
 safety:
   can_override_global_rules: false
   allow_external_tools: false
-  max_tool_calls_per_turn: 8
+  max_tool_calls_per_turn: 20
 context:
   read:
     - user_message
@@ -64,8 +64,8 @@ instructions:
 ## 必须执行的阶段
 
 1. `created`：识别目的地、日期或天数、人数、偏好、预算、出发点、结束点。
-2. `ingesting_content`：解析输入内容。输入优先级固定为 `raw_texts > images > urls`；图片附件由运行时作为多模态输入提供；URL 可用 `travel_fetch_url_content` 获取正文，失败则跳过并提示改用截图或粘贴原文。
-3. `places_extracted`：只从用户提供内容中提取地点，不凭常识补充攻略中未出现的地点。
+2. `ingesting_content`：解析输入内容。输入优先级固定为 `raw_texts > images > urls`；图片附件由运行时作为多模态输入提供，必须由 LLM 直接理解图片内容和版面，不使用本地 OCR 或文本规则猜测；URL 可用 `travel_fetch_url_content` 获取正文，失败则跳过并提示改用截图或粘贴原文。
+3. `places_extracted`：只从用户提供内容中提取地点，不凭常识补充攻略中未出现的地点；提取结果必须结构化输出 `extracted_places`、`food_items`、`excluded_places`。
 4. `candidates_ready`：调用 `travel_search_poi` 验证候选地点，可用 `travel_search_nearby_poi` 补全附近餐厅、酒店、景点，并按景点、住宿、美食等类别展示给用户确认。
 5. `candidates_confirmed`：只有用户通过 `travel_action=confirm_candidates` 或明确确认候选后，才能生成最终每日行程。
 6. `itinerary_generated`：生成结构化 `itinerary.days`，包含 Day 编号、时间段、地点、交通建议、提醒和餐饮安排；本阶段必须等待用户确认是否生成高德地图。
@@ -82,6 +82,10 @@ instructions:
 - 每天一条高德 line；相邻天通过住宿点或前一天终点衔接；单条 line 最多 16 个点。
 - 旅行规划中的“午餐、晚餐、当地美食、吃什么”属于旅行 POI 和行程时段安排，不要切换到普通吃饭决策 skill。
 - 如果图片无法识别出地点，直接说明无法识别，并请用户补充更清晰截图或粘贴攻略原文。
+- 图片攻略识别必须依赖 LLM 多模态视觉理解，由你自行判断每个识别项属于景点、美食、住宿、交通、排除项或泛化菜品；不要要求后端或本地 OCR 二次识别图片文字。
+- 结构化提取项字段必须包含：`name`、`category`、`source`、`context_snippet`、`recommended_reason`；可选包含 `score`、`business_hours`、`suggested_duration_minutes`、`price_range`、`average_cost_yuan`、`exclude_reason`、`warnings`。
+- `category` 只能使用：`attraction`、`nature`、`temple`、`museum`、`park`、`hotel`、`restaurant`、`cafe`、`nightlife`、`transport_hub`、`excluded`、`food_item`。
+- 泛化菜品/饮品使用 `food_item`，不要调用高德验证；具体餐厅、夜市、美食街、茶社等使用餐饮类 category 并调用 `travel_search_poi`。
 
 ## 阶段与参考文件映射
 
@@ -90,8 +94,8 @@ instructions:
 | 阶段 | 参考文件 | 必须调用的工具 | 必须完成的动作 | 流转条件 |
 |------|---------|--------------|--------------|---------|
 | `created` | `orchestrate-travel-content.md` §1 | 无 | 从用户消息中识别并结构化 `trip_meta`（目的地、天数、偏好等） | `trip_meta.destination` 非空 |
-| `ingesting_content` | `extract-places.md` + `orchestrate-travel-content.md` §2 | `travel_fetch_url_content`（如有 URL） | 按优先级 `raw_texts > images > urls` 解析内容；图片通过多模态识别；URL 获取失败则跳过并提示 | 至少解析出一个地点名称 |
-| `places_extracted` | `extract-places.md` §3-9 | 无 | 从解析内容中提取结构化地点列表（名称、类别、上下文片段），不凭常识补充 | 地点列表非空 |
+| `ingesting_content` | `extract-places.md` + `orchestrate-travel-content.md` §2 | `travel_fetch_url_content`（如有 URL） | 按优先级 `raw_texts > images > urls` 解析内容；图片通过 LLM 多模态视觉理解直接分类；URL 获取失败则跳过并提示 | 至少解析出一个地点名称 |
+| `places_extracted` | `extract-places.md` §3-9 | 无 | 从解析内容中提取结构化地点列表（名称、类别、上下文片段、推荐理由、排除原因等），不凭常识补充 | 地点列表非空 |
 | `candidates_ready` | `curate-candidates.md` | `travel_search_poi`（验证每个地点）+ `travel_search_nearby_poi`（补全附近餐厅酒店） | **必须调用** POI 验证工具；验证成功后按景点/住宿/美食分类展示候选列表；展示验证失败的地点和原因；**必须停下来等用户确认** | 用户通过 `travel_action=confirm_candidates` 或明确确认 |
 | `candidates_confirmed` | `curate-candidates.md` §8 | 无 | 记录用户增删后的最终候选列表 | 候选列表已确认 |
 | `itinerary_generated` | `generate-itinerary.md` | `plan_route`（可选，规划交通） | 生成结构化 `itinerary.days`；**必须停下来询问用户是否生成高德地图**，等待用户确认 | 用户通过 `travel_action=confirm_itinerary` 或 `travel_action=generate_map` 或明确确认 |

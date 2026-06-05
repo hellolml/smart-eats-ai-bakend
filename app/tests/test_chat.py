@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.agent.graph import _render_final_text, run_chat_stream
 from app.agent.runtime.graph import _best_effort_final_from_observations, get_agent_runtime_config
@@ -63,7 +64,7 @@ class _FakeStatefulCheckpointerContext:
 
 
 @pytest.mark.asyncio
-async def test_travel_scene_uses_generic_runtime_and_waits_for_confirmation(monkeypatch):
+async def test_travel_scene_uses_supervisor_runtime_and_waits_for_confirmation(monkeypatch):
     async def _noop_save_assistant_message(*_args, **_kwargs):
         return None
 
@@ -88,7 +89,7 @@ async def test_travel_scene_uses_generic_runtime_and_waits_for_confirmation(monk
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_agent_runtime_graph",
+        "app.agent.supervisor.build_supervisor_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-travel", "message": "目的地：杭州\n西湖\n灵隐寺", "final_json": final_json}]),
     )
 
@@ -110,7 +111,7 @@ async def test_travel_scene_uses_generic_runtime_and_waits_for_confirmation(monk
 
 
 @pytest.mark.asyncio
-async def test_travel_confirmation_generates_itinerary_and_map_in_generic_runtime(monkeypatch):
+async def test_travel_confirmation_generates_itinerary_and_map_in_supervisor_runtime(monkeypatch):
     async def _noop_save_assistant_message(*_args, **_kwargs):
         return None
 
@@ -128,7 +129,7 @@ async def test_travel_confirmation_generates_itinerary_and_map_in_generic_runtim
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_agent_runtime_graph",
+        "app.agent.supervisor.build_supervisor_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-travel", "message": "确认生成", "final_json": final_json}]),
     )
 
@@ -181,7 +182,7 @@ async def test_run_chat_stream_resume_without_pending_checkpoint_uses_state_inpu
     monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeStatefulCheckpointerContext())
-    monkeypatch.setattr("app.agent.graph.build_agent_runtime_graph", lambda **_kwargs: _ResumeGraphBuilder())
+    monkeypatch.setattr("app.agent.supervisor.build_supervisor_runtime_graph", lambda **_kwargs: _ResumeGraphBuilder())
 
     state = ChatState(
         session_id="s-resume",
@@ -215,7 +216,7 @@ async def test_run_chat_stream_preserves_core_event_contract(monkeypatch):
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_agent_runtime_graph",
+        "app.agent.supervisor.build_supervisor_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-contract", "message": "你好", "final_json": final_json}]),
     )
 
@@ -234,6 +235,92 @@ async def test_run_chat_stream_preserves_core_event_contract(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_chat_stream_supervisor_runtime_ignores_message_final_json(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    state_final_json = {
+        "recommendations": [{"type": "note", "title": "state 回答", "reason": "supervisor"}],
+        "followups": [],
+        "warnings": [],
+    }
+    message_final_json = {
+        "recommendations": [{"type": "note", "title": "message 回答", "reason": "legacy_channel"}],
+        "followups": [],
+        "warnings": [],
+    }
+
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.supervisor.build_supervisor_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder(
+            [
+                {
+                    "session_id": "s-supervisor",
+                    "message": "今天吃什么",
+                    "messages": [
+                        AIMessage(
+                            content="主管回答",
+                            additional_kwargs={"final_json": message_final_json},
+                        )
+                    ],
+                    "final_json": state_final_json,
+                    "events": [{"event": "tool_call", "data": {"name": "food_advisor"}}],
+                }
+            ]
+        ),
+    )
+
+    events = []
+    async for item in run_chat_stream(
+        _FakeRequest(),
+        db=None,
+        redis_client=_FakeRedis(),
+        state=ChatState(session_id="s-supervisor", message="今天吃什么"),
+    ):
+        events.append(item)
+
+    assert [item["event"] for item in events] == ["thinking", "tool_call", "thinking", "delta", "final"]
+    assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "state 回答"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_supervisor_runtime_falls_back_without_state_final_json(monkeypatch):
+    async def _noop_save_assistant_message(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr(
+        "app.agent.supervisor.build_supervisor_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder(
+            [
+                {
+                    "session_id": "s-supervisor-direct",
+                    "message": "你好",
+                    "messages": [AIMessage(content="你好，我在。")],
+                }
+            ]
+        ),
+    )
+
+    events = [
+        item
+        async for item in run_chat_stream(
+            _FakeRequest(),
+            db=None,
+            redis_client=_FakeRedis(),
+            state=ChatState(session_id="s-supervisor-direct", message="你好"),
+        )
+    ]
+
+    assert events[-1]["data"]["answer"]["recommendations"][0]["reason"] == "fallback"
+
+
+@pytest.mark.asyncio
 async def test_run_chat_stream_cancellation_emits_single_stopped_final(monkeypatch):
     async def _noop_save_assistant_message(*_args, **_kwargs):
         return None
@@ -246,7 +333,7 @@ async def test_run_chat_stream_cancellation_emits_single_stopped_final(monkeypat
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop_save_assistant_message)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
     monkeypatch.setattr(
-        "app.agent.graph.build_agent_runtime_graph",
+        "app.agent.supervisor.build_supervisor_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([
             {
                 "session_id": "s-cancel",

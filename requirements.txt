@@ -14,10 +14,12 @@ pytest==8.3.2
 pytest-asyncio==0.23.8
 fakeredis==2.24.1
 openai==1.40.0
-langgraph==0.2.76
+langgraph==0.3.34
 langgraph-checkpoint==2.0.22
 langgraph-checkpoint-sqlite==2.0.11
 langgraph-checkpoint-postgres==2.0.22
+langgraph-prebuilt==0.1.8
+langgraph-supervisor==0.0.18
 psycopg[binary,pool]>=3.2.0,<4.0.0
 langchain-core==0.3.83
 langchain-community==0.3.18

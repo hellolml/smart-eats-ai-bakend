@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.llm_adapters import ProviderRegistry
 from app.common.config import settings
+from app.domain.preferences.markdown_profile import build_preference_context, read_user_preference_profile
 from app.domain.recipe.service import RecipeService
 from app.domain.restaurant.service import RestaurantService
 from app.infra.external.amap import amap
@@ -44,12 +45,16 @@ class DecisionService:
         budget_level: int | None,
         scene: str | None,
         client_ip: str | None = None,
+        preference_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if preference_profile is None and user_id:
+            preference_context = build_preference_context(await read_user_preference_profile(user_id))
+            preference_profile = preference_context.get("profile") if isinstance(preference_context, dict) else None
         lat, lng, city = await _resolve_location(lat, lng, city, client_ip=client_ip)
         decision_ctx = await _build_context(city)
         pref = await _get_preference(db, user_id)
         taste_profile = await _get_taste_profile(db, user_id)
-        hard_filter_terms = _hard_filter_terms(pref, taste_profile)
+        hard_filter_terms = _hard_filter_terms(pref, taste_profile, preference_profile)
 
         restaurant_query = _restaurant_search_query(query, scene)
         restaurants = await RestaurantService.search(
@@ -86,7 +91,7 @@ class DecisionService:
                 candidate_id_fn=_restaurant_candidate_id,
             )
             if picked is not None:
-                score = _score_restaurant(picked, pref, budget_level, decision_ctx, lat, lng)
+                score = _score_restaurant(picked, pref, preference_profile, budget_level, decision_ctx, lat, lng)
                 chosen = {
                     "type": "restaurant",
                     "id": f"amap:{picked.get('provider_id') or uuid4()}",
@@ -117,7 +122,7 @@ class DecisionService:
                     candidate_id_fn=_recipe_candidate_id,
                 )
                 if picked_recipe is not None:
-                    score = _score_recipe(picked_recipe, pref, budget_level, decision_ctx, scene)
+                    score = _score_recipe(picked_recipe, pref, preference_profile, budget_level, decision_ctx, scene)
                     chosen = {
                         "type": "recipe",
                         "id": f"recipe:{(picked_recipe.get('title') or str(uuid4()))}",
@@ -183,7 +188,7 @@ class DecisionService:
 
         return {
             "decision": decision_payload,
-            "reasons": _build_reasons(chosen["title"], decision_ctx, scene),
+            "reasons": _build_reasons(chosen["title"], decision_ctx, scene, preference_profile),
             "actions": actions,
             "meta": {
                 "candidates": len(restaurants) if restaurants else 0,
@@ -317,7 +322,11 @@ async def _get_taste_profile(db: AsyncSession, user_id: str | None) -> UserTaste
     return result.scalar_one_or_none()
 
 
-def _hard_filter_terms(pref: UserPreference | None, taste_profile: UserTasteProfile | None) -> set[str]:
+def _hard_filter_terms(
+    pref: UserPreference | None,
+    taste_profile: UserTasteProfile | None,
+    preference_profile: dict[str, Any] | None = None,
+) -> set[str]:
     terms: set[str] = set()
     if pref:
         terms.update({x.strip().lower() for x in (pref.avoid_ingredients or []) if str(x).strip()})
@@ -325,6 +334,9 @@ def _hard_filter_terms(pref: UserPreference | None, taste_profile: UserTasteProf
     if taste_profile:
         terms.update({x.strip().lower() for x in (taste_profile.dislikes or []) if str(x).strip()})
         terms.update({x.strip().lower() for x in (taste_profile.allergens or []) if str(x).strip()})
+    if isinstance(preference_profile, dict):
+        terms.update({x.strip().lower() for x in (preference_profile.get("dislikes") or []) if str(x).strip()})
+        terms.update({x.strip().lower() for x in (preference_profile.get("allergens") or []) if str(x).strip()})
     return terms
 
 
@@ -336,6 +348,7 @@ def _contains_blocked_terms(text: str, terms: set[str]) -> bool:
 def _score_restaurant(
     item: dict[str, Any],
     pref: UserPreference | None,
+    preference_profile: dict[str, Any] | None,
     budget_level: int | None,
     ctx: DecisionContext,
     lat: float | None,
@@ -366,6 +379,8 @@ def _score_restaurant(
         tastes = {x.lower() for x in (pref.taste_tags or [])}
         if any(tag in title for tag in tastes):
             score += 8
+    if isinstance(preference_profile, dict):
+        score += _preference_profile_score_bonus(title, item.get("tags"), preference_profile)
 
     geo = item.get("geo") or {}
     if lat is not None and lng is not None and geo.get("lat") is not None and geo.get("lng") is not None:
@@ -378,6 +393,7 @@ def _score_restaurant(
 def _score_recipe(
     item: dict[str, Any],
     pref: UserPreference | None,
+    preference_profile: dict[str, Any] | None,
     budget_level: int | None,
     ctx: DecisionContext,
     scene: str | None,
@@ -403,6 +419,8 @@ def _score_recipe(
         tastes = {x.lower() for x in (pref.taste_tags or [])}
         if any(tag in title for tag in tastes):
             score += 8
+    if isinstance(preference_profile, dict):
+        score += _preference_profile_score_bonus(title, item.get("tags"), preference_profile)
 
     if budget_level and isinstance(item.get("price_level"), (int, float)):
         score += 6.0 - abs(float(item.get("price_level")) - budget_level) * 1.5
@@ -431,7 +449,32 @@ def _weather_bonus(weather: dict[str, Any] | None, *, prefer_hot: bool) -> float
     return bonus
 
 
-def _build_reasons(title: str, ctx: DecisionContext, scene: str | None) -> list[str]:
+def _preference_profile_score_bonus(title: str, tags: Any, preference_profile: dict[str, Any]) -> float:
+    likes = {str(x).strip().lower() for x in (preference_profile.get("likes") or []) if str(x).strip()}
+    dislikes = {str(x).strip().lower() for x in (preference_profile.get("dislikes") or []) if str(x).strip()}
+    allergens = {str(x).strip().lower() for x in (preference_profile.get("allergens") or []) if str(x).strip()}
+    searchable = title.lower()
+    if isinstance(tags, list):
+        searchable = f"{searchable} {' '.join(str(item).lower() for item in tags)}"
+    elif isinstance(tags, str):
+        searchable = f"{searchable} {tags.lower()}"
+    bonus = 0.0
+    if any(term and term in searchable for term in likes):
+        bonus += 10.0
+    if any(term and term in searchable for term in dislikes.union(allergens)):
+        bonus -= 35.0
+    budget = preference_profile.get("budget_range")
+    if budget == "low":
+        bonus += 1.5
+    return bonus
+
+
+def _build_reasons(
+    title: str,
+    ctx: DecisionContext,
+    scene: str | None,
+    preference_profile: dict[str, Any] | None = None,
+) -> list[str]:
     weather_text = (ctx.weather or {}).get("display") or (ctx.weather or {}).get("weather")
     reasons = []
     if weather_text:
@@ -442,6 +485,10 @@ def _build_reasons(title: str, ctx: DecisionContext, scene: str | None) -> list[
         reasons.append(f"按你当前场景“{scene_label}”做了收敛，减少纠结。")
     else:
         reasons.append("这是综合口味、时间和便利性后最稳的一票。")
+    if isinstance(preference_profile, dict):
+        likes = [str(x).strip() for x in (preference_profile.get("likes") or []) if str(x).strip()]
+        if likes:
+            reasons.append(f"参考了你最近偏好的 {likes[0]}。")
     return reasons[:3]
 
 

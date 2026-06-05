@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agent.runtime.graph import AgentRuntimeState, generic_system_prompt
+from app.agent.runtime.graph import AgentRuntimeState, skill_system_prompt
 
 
 def _write_skill(
@@ -231,8 +231,8 @@ def test_skill_runtime_exposes_strictest_tool_call_limit(tmp_path):
     assert result.context["skill_diagnostics"]["max_tool_calls_per_turn"] == 4
 
 
-def test_generic_system_prompt_includes_skill_addendum():
-    prompt = generic_system_prompt(
+def test_skill_system_prompt_includes_skill_addendum():
+    prompt = skill_system_prompt(
         {
             "context": {"user_message": "冰箱里有什么？"},
             "skill_prompt": "## Active Skills\n\n### Skill: home_chef@1.0.0",

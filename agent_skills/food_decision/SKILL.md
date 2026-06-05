@@ -3,7 +3,7 @@ id: food_decision
 name: Food Decision
 version: 1.0.0
 description: Help users quickly decide what to eat by reusing the app decision engine.
-enabled: false
+enabled: true
 priority: 82
 activation:
   scenes:
