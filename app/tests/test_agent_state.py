@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from app.agent.agent_state import AgentContext, AgentState, AgentStateGraphSchema, agent_context_from_mapping
+from app.agent.agent_state import (
+    AgentContext,
+    AgentState,
+    AgentStateGraphSchema,
+    agent_context_from_mapping,
+    dump_agent_context,
+    merge_agent_context,
+)
 from app.agent.runtime.graph import AgentRuntimeState
 from app.agent.state import ChatState
 
@@ -50,6 +57,20 @@ def test_agent_state_preserves_context_object_and_extra_checkpoint_fields():
 def test_agent_context_from_mapping_returns_none_for_unknown_input():
     assert agent_context_from_mapping({"intent": "route"}).intent == "route"
     assert agent_context_from_mapping(None) is None
+
+
+def test_merge_agent_context_deep_merges_extra_fields_and_dumps_defaults():
+    context = merge_agent_context(
+        {"environment": {"location": {"lat": 30.2}}, "location_text": "恒伟星中心"},
+        {"environment": {"location": {"lng": 120.1}}, "agent_id": "food_decision"},
+    )
+
+    dumped = dump_agent_context(context)
+
+    assert dumped["environment"]["location"] == {"lat": 30.2, "lng": 120.1}
+    assert dumped["location_text"] == "恒伟星中心"
+    assert dumped["agent_id"] == "food_decision"
+    assert "forced_skill_ids" not in dumped
 
 
 def test_chat_and_runtime_state_share_pydantic_agent_state_base():

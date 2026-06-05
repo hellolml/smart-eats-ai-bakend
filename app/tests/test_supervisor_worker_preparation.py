@@ -91,3 +91,25 @@ async def test_food_worker_injects_food_decision_contract():
     assert payload["context_overrides"]["intent"] == "eat_out"
     assert "food_decision" in payload["context_overrides"]["forced_skill_ids"]
     assert "user_preference_md" in payload["context_overrides"]
+
+
+@pytest.mark.asyncio
+async def test_food_worker_infers_home_chef_intent_and_preserves_extra_context():
+    payload = await _prepare_worker_payload(
+        _spec("food_advisor"),
+        {
+            "session_id": "s1",
+            "user_id": "u1",
+            "message": "冰箱里有鸡蛋，自己做点什么",
+            "context_overrides": {
+                "environment": {"location": {"lat": 30.2}},
+                "location_text": "恒伟星中心",
+            },
+        },
+    )
+
+    overrides = payload["context_overrides"]
+    assert overrides["intent"] == "cook_home"
+    assert overrides["forced_skill_ids"] == ["home_chef"]
+    assert overrides["environment"]["location"]["lat"] == 30.2
+    assert overrides["location_text"] == "恒伟星中心"

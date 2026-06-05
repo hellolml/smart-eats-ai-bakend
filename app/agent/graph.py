@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.checkpoint import checkpointer_context
 from app.agent.langgraph_store import langgraph_store_context
 from app.agent.runtime.graph import (
+    AgentRuntimeState,
     _initialize_graph_state,
     _state_from_dict,
 )
@@ -76,19 +77,13 @@ def _is_fallback_payload(final_json: dict[str, Any]) -> bool:
     return False
 
 
-def _with_agent_metadata(final_json: dict[str, Any], state: Any) -> dict[str, Any]:
+def _with_agent_metadata(final_json: dict[str, Any], state: AgentRuntimeState) -> dict[str, Any]:
     if not isinstance(final_json, dict):
         return final_json
-    if isinstance(state, dict):
-        agent_id = state.get("agent_id")
-        plan_type = state.get("plan_type")
-        scene = state.get("scene")
-        context_overrides = state.get("context_overrides")
-    else:
-        agent_id = getattr(state, "agent_id", None)
-        plan_type = getattr(state, "plan_type", None)
-        scene = getattr(state, "scene", None)
-        context_overrides = getattr(state, "context_overrides", None)
+    agent_id = state.agent_id
+    plan_type = state.plan_type
+    scene = state.scene
+    context_overrides = state.context_overrides
     if isinstance(context_overrides, dict):
         agent_id = agent_id or context_overrides.get("agent_id")
         plan_type = plan_type or context_overrides.get("plan_type")
@@ -175,6 +170,17 @@ def _build_graph_config(state: ChatState) -> dict[str, Any]:
     if state.checkpoint_ref:
         config["configurable"]["checkpoint_id"] = state.checkpoint_ref
     return config
+
+
+def _coerce_runtime_state(value: Any, fallback_state: ChatState) -> AgentRuntimeState:
+    if isinstance(value, AgentRuntimeState):
+        return value
+    if isinstance(value, ChatState):
+        return AgentRuntimeState.model_validate(value.model_dump())
+    if isinstance(value, dict):
+        payload = {**fallback_state.model_dump(), **value}
+        return _state_from_dict(payload)
+    return AgentRuntimeState.model_validate(fallback_state.model_dump())
 
 
 async def _load_graph_snapshot(graph: Any, config: dict[str, Any], checkpointer: Any) -> Any:
@@ -318,24 +324,15 @@ async def run_chat_stream(
                 else:
                     updated["events"] = []
 
-        final_json = (
-            latest_state.final_json
-            if hasattr(latest_state, "final_json")
-            else latest_state.get("final_json")
-        )
+        runtime_state = _coerce_runtime_state(latest_state, state)
+        final_json = runtime_state.final_json
         if not final_json:
             final_json = fallback_final()
-            if hasattr(latest_state, "final_json"):
-                latest_state.final_json = final_json
-            else:
-                latest_state["final_json"] = final_json
-        final_json = _with_agent_metadata(final_json, latest_state)
-        if hasattr(latest_state, "final_json"):
-            latest_state.final_json = final_json
-        else:
-            latest_state["final_json"] = final_json
+            runtime_state.final_json = final_json
+        final_json = _with_agent_metadata(final_json, runtime_state)
+        runtime_state.final_json = final_json
 
-        session_id = getattr(latest_state, "session_id", None) or state.session_id
+        session_id = runtime_state.session_id or state.session_id
         if _is_fallback_payload(final_json):
             record_agent_metric(session_id, "fallback_final")
         else:
@@ -353,33 +350,18 @@ async def run_chat_stream(
         yield {"event": "delta", "data": {"token": answer_text}}
         await asyncio.sleep(0)
 
-        if isinstance(latest_state, ChatState):
-            await conversation.save_assistant_message(
-                db,
-                redis_client,
-                latest_state.session_id,
-                answer_text,
-                latest_state.final_json,
-            )
-            await _apply_turn_preference_extraction(
-                db,
-                user_id=latest_state.user_id,
-                user_message=latest_state.message,
-            )
-        else:
-            temp_state = _state_from_dict(latest_state)
-            await conversation.save_assistant_message(
-                db,
-                redis_client,
-                temp_state.session_id,
-                answer_text,
-                temp_state.final_json,
-            )
-            await _apply_turn_preference_extraction(
-                db,
-                user_id=temp_state.user_id,
-                user_message=temp_state.message,
-            )
+        await conversation.save_assistant_message(
+            db,
+            redis_client,
+            runtime_state.session_id,
+            answer_text,
+            runtime_state.final_json,
+        )
+        await _apply_turn_preference_extraction(
+            db,
+            user_id=runtime_state.user_id,
+            user_message=runtime_state.message,
+        )
         yield {"event": "final", "data": {"stopped": False, "answer": final_json}}
     except Exception as exc:
         if GraphInterrupt and isinstance(exc, GraphInterrupt):

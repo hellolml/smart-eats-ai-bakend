@@ -6,6 +6,14 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 
+from app.agent.agent_state import (
+    AgentContext,
+    agent_context_from_mapping,
+    dump_agent_context,
+    empty_agent_context,
+    merge_agent_context,
+)
+from app.agent.intent import infer_food_worker_intent
 from app.agent.runtime.graph import (
     AgentRuntimeGraphState,
     build_cached_agent_runtime_graph,
@@ -43,8 +51,6 @@ WORKER_SPECS: tuple[WorkerSpec, ...] = (
         name="food_advisor",
         scene="eat",
         agent_id="food_decision",
-        intent="eat_out",
-        forced_skill_ids=("food_decision", "restaurant_finder"),
         description="外出吃饭、附近餐厅、今天吃什么。",
     ),
     WorkerSpec(
@@ -154,10 +160,8 @@ def build_worker_agent(
 
 async def _prepare_worker_payload(spec: WorkerSpec, state: dict[str, Any]) -> dict[str, Any]:
     payload = _base_payload_from_state(state)
-    overrides = _context_overrides(payload)
-    overrides = _merge_context(overrides, _worker_overrides(spec, state))
-    payload["client_context_overrides"] = overrides
-    payload["context_overrides"] = overrides
+    context = merge_agent_context(_agent_context_from_payload(payload), _worker_context(spec, state))
+    _sync_context_payload(payload, context)
     payload["scene"] = spec.scene
     if spec.agent_id:
         payload["agent_id"] = spec.agent_id
@@ -165,7 +169,7 @@ async def _prepare_worker_payload(spec: WorkerSpec, state: dict[str, Any]) -> di
         payload["plan_type"] = spec.plan_type
 
     if spec.name == "travel_planner":
-        return await _prepare_travel_worker_payload(payload, overrides)
+        return await _prepare_travel_worker_payload(payload, context)
 
     if spec.name == "food_advisor":
         return await _prepare_food_worker_payload(payload)
@@ -187,24 +191,23 @@ async def _prepare_food_worker_payload(payload: dict[str, Any]) -> dict[str, Any
     profile = await ensure_user_preference_file(user_id)
     preference_context = build_preference_context(profile)
 
-    context_overrides = _context_overrides(next_payload)
-    intent = _food_intent_from_payload(next_payload) or context_overrides.get("intent") or "eat_out"
-    context_overrides["intent"] = intent
-    context_overrides["agent_id"] = "food_decision"
-    context_overrides["user_preference_md"] = preference_context
-    context_overrides["food_profile"] = preference_context.get("profile") or {}
-    context_overrides["forced_skill_ids"] = _merge_forced_skill_ids(
-        context_overrides.get("forced_skill_ids"),
+    context = _agent_context_from_payload(next_payload)
+    intent = infer_food_worker_intent(next_payload.get("message"), explicit_intent=context.intent) or "eat_out"
+    context.intent = intent
+    context.agent_id = "food_decision"
+    context.user_preference_md = preference_context
+    context.food_profile = preference_context.get("profile") or {}
+    context.forced_skill_ids = _merge_forced_skill_ids(
+        context.forced_skill_ids,
         ["home_chef"] if intent == "cook_home" else ["food_decision", "restaurant_finder"],
     )
-    next_payload["client_context_overrides"] = context_overrides
-    next_payload["context_overrides"] = context_overrides
+    _sync_context_payload(next_payload, context)
     return next_payload
 
 
 async def _prepare_travel_worker_payload(
     payload: dict[str, Any],
-    initial_overrides: dict[str, Any],
+    context: AgentContext,
 ) -> dict[str, Any]:
     next_payload = dict(payload)
     next_payload["scene"] = "travel_planner"
@@ -215,7 +218,7 @@ async def _prepare_travel_worker_payload(
     profile = await ensure_user_preference_file(next_payload.get("user_id"))
     preference_context = build_preference_context(profile)
 
-    latest = initial_overrides.get("latest_travel_final_json")
+    latest = context.latest_travel_final_json
     latest_final_json = latest if isinstance(latest, dict) else None
     plan_payload = next_payload.get("payload")
     travel_payload = next_payload.get("travel_payload")
@@ -236,26 +239,25 @@ async def _prepare_travel_worker_payload(
         next_payload["travel_payload"] = merged_payload
         next_payload["payload"] = merged_payload
 
-    context_overrides = _context_overrides(next_payload)
-    context_overrides["agent_id"] = "travel_plan"
-    context_overrides["plan_type"] = "travel"
-    context_overrides["plan_agent"] = {
+    context = _agent_context_from_payload(next_payload)
+    context.agent_id = "travel_plan"
+    context.plan_type = "travel"
+    context.plan_agent = {
         "agent_id": "travel_plan",
         "plan_type": "travel",
         "state": merged_payload.get("state") if merged_payload else None,
     }
-    context_overrides["user_preference_md"] = preference_context
-    context_overrides["travel_food_preferences"] = preference_context.get("profile") or {}
-    context_overrides["travel_food_preference_summary"] = preference_context.get("summary")
+    context.user_preference_md = preference_context
+    context.travel_food_preferences = preference_context.get("profile") or {}
+    context.travel_food_preference_summary = preference_context.get("summary")
     if action:
-        context_overrides["action"] = action
+        context.action = action
     if merged_payload:
-        context_overrides["payload"] = merged_payload
-        context_overrides["travel_payload"] = merged_payload
+        context.payload = merged_payload
+        context.travel_payload = merged_payload
     if action == "refresh_sources":
-        context_overrides["travel_refresh_sources"] = True
-    next_payload["client_context_overrides"] = context_overrides
-    next_payload["context_overrides"] = context_overrides
+        context.travel_refresh_sources = True
+    _sync_context_payload(next_payload, context)
     return next_payload
 
 
@@ -307,21 +309,18 @@ def _latest_human_message(messages: Any) -> str:
     return ""
 
 
-def _context_overrides(payload: dict[str, Any]) -> dict[str, Any]:
-    value = payload.get("client_context_overrides") or payload.get("context_overrides")
-    return dict(value) if isinstance(value, dict) else {}
+def _agent_context_from_payload(payload: dict[str, Any]) -> AgentContext:
+    return (
+        agent_context_from_mapping(payload.get("client_context_overrides"))
+        or agent_context_from_mapping(payload.get("context_overrides"))
+        or empty_agent_context()
+    )
 
 
-def _food_intent_from_payload(payload: dict[str, Any]) -> str | None:
-    overrides = payload.get("client_context_overrides")
-    if isinstance(overrides, dict) and isinstance(overrides.get("intent"), str):
-        return overrides["intent"]
-    text = str(payload.get("message") or "")
-    if any(token in text for token in ("在家做", "自己做", "菜谱", "食材", "冰箱")):
-        return "cook_home"
-    if any(token in text for token in ("吃", "饭", "餐", "美食", "外卖", "餐厅")):
-        return "eat_out"
-    return None
+def _sync_context_payload(payload: dict[str, Any], context: AgentContext) -> None:
+    context_payload = dump_agent_context(context)
+    payload["client_context_overrides"] = context_payload
+    payload["context_overrides"] = context_payload
 
 
 def _merge_forced_skill_ids(existing: Any, required: list[str]) -> list[str]:
@@ -379,7 +378,7 @@ def _mark_refresh_sources(payload: dict[str, Any], latest: dict[str, Any] | None
     payload.pop("map", None)
 
 
-def _worker_overrides(spec: WorkerSpec, state: dict[str, Any]) -> dict[str, Any]:
+def _worker_context(spec: WorkerSpec, state: dict[str, Any]) -> AgentContext:
     overrides: dict[str, Any] = {
         "agent_id": spec.agent_id or spec.name,
         "ui_scene": spec.scene,
@@ -401,17 +400,7 @@ def _worker_overrides(spec: WorkerSpec, state: dict[str, Any]) -> dict[str, Any]
     context_overrides = state.get("context_overrides")
     if isinstance(context_overrides, dict) and isinstance(context_overrides.get("latest_travel_final_json"), dict):
         overrides["latest_travel_final_json"] = context_overrides["latest_travel_final_json"]
-    return overrides
-
-
-def _merge_context(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _merge_context(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
+    return AgentContext.model_validate(overrides)
 
 
 def _final_json_from_update(update: dict[str, Any] | None) -> dict[str, Any]:

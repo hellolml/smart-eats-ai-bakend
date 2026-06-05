@@ -5,7 +5,8 @@ from unittest.mock import MagicMock
 import pytest
 from openai import PermissionDeniedError
 
-from app.agent.graph import _normalize_llm_upstream_error_message, run_chat_stream
+from app.agent.graph import _coerce_runtime_state, _normalize_llm_upstream_error_message, run_chat_stream
+from app.agent.runtime.graph import AgentRuntimeState
 from app.agent.state import ChatState
 
 
@@ -42,6 +43,19 @@ class _FakeGraphBuilder:
 
     def compile(self, **_kwargs):
         return _FakeCompiledGraph(self._updates)
+
+
+def test_coerce_runtime_state_normalizes_dict_values_to_typed_state():
+    final_json = {"recommendations": [{"title": "完成", "reason": "graph_values"}]}
+
+    state = _coerce_runtime_state(
+        {"session_id": "s-values", "message": "你好", "final_json": final_json},
+        ChatState(session_id="fallback", message="fallback"),
+    )
+
+    assert isinstance(state, AgentRuntimeState)
+    assert state.session_id == "s-values"
+    assert state.final_json == final_json
 
 
 @pytest.mark.asyncio

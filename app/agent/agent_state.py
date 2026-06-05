@@ -77,3 +77,31 @@ def agent_context_from_mapping(value: Any) -> AgentContext | None:
     if isinstance(value, dict):
         return AgentContext.model_validate(value)
     return None
+
+
+def empty_agent_context() -> AgentContext:
+    return AgentContext()
+
+
+def dump_agent_context(context: AgentContext) -> dict[str, Any]:
+    return context.model_dump(exclude_none=True, exclude_defaults=True)
+
+
+def merge_agent_context(base: Any, *overrides: Any) -> AgentContext:
+    merged = dump_agent_context(agent_context_from_mapping(base) or empty_agent_context())
+    for override in overrides:
+        context = agent_context_from_mapping(override)
+        if context is None:
+            continue
+        merged = _deep_merge_context(merged, dump_agent_context(context))
+    return AgentContext.model_validate(merged)
+
+
+def _deep_merge_context(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_context(merged[key], value)
+        else:
+            merged[key] = value
+    return merged

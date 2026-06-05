@@ -5,7 +5,8 @@ from typing import Any
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.agent_state import AgentContext, agent_context_from_mapping
+from app.agent.agent_state import AgentContext, agent_context_from_mapping, dump_agent_context
+from app.agent.intent import infer_chat_intent as _infer_chat_intent
 from app.infra.models.chat import ChatMessage
 
 
@@ -56,7 +57,7 @@ async def prepare_supervisor_payload(
         context.food_profile = preference_context.get("profile") or {}
         context.travel_food_preferences = preference_context.get("profile") or {}
         context.travel_food_preference_summary = preference_context.get("summary")
-    context_payload = context.model_dump(exclude_none=True, exclude_defaults=True)
+    context_payload = dump_agent_context(context)
     if context_payload:
         next_payload["client_context_overrides"] = context_payload
     return next_payload
@@ -95,53 +96,7 @@ async def merge_current_session_travel_context(
 
 
 def infer_chat_intent(message: Any) -> str | None:
-    text = str(message or "")
-    if not text:
-        return None
-    if any(token in text for token in ("路线", "导航", "怎么走", "怎么去")):
-        return "route"
-    if any(
-        token in text
-        for token in (
-            "吃点啥",
-            "吃什么",
-            "吃的",
-            "吃啥",
-            "今天吃",
-            "晚饭",
-            "午饭",
-            "早餐",
-            "夜宵",
-            "外卖",
-            "餐厅",
-            "饭店",
-            "美食",
-            "好吃",
-            "周边吃",
-            "附近吃",
-            "附近美食",
-            "推荐吃",
-            "出去吃",
-            "外面吃",
-            "去哪吃",
-            "换一家",
-            "下一家",
-            "第二家",
-            "第三家",
-            "近一点",
-            "不辣",
-            "做饭",
-            "在家做",
-            "家里做",
-            "菜谱",
-            "食谱",
-            "冰箱",
-            "食材",
-            "自己做",
-        )
-    ):
-        return "food"
-    return None
+    return _infer_chat_intent(message)
 
 
 def forced_skill_ids_for_intent(intent: str) -> list[str]:
@@ -155,7 +110,7 @@ def forced_skill_ids_for_intent(intent: str) -> list[str]:
 def build_chat_context_overrides(payload: dict[str, Any]) -> dict[str, Any] | None:
     context = agent_context_from_mapping(payload.get("client_context_overrides"))
     context_overrides = (
-        context.model_dump(exclude_none=True, exclude_defaults=True)
+        dump_agent_context(context)
         if context is not None
         else None
     )
