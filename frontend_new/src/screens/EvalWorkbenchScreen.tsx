@@ -2,10 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Header, ScreenScroll } from '../components/Layout';
 import { appApi, ApiError } from '../services/api';
 
-type Tab = 'overview' | 'history' | 'compare' | 'case' | 'failures';
+type Tab = 'realtime' | 'overview' | 'history' | 'compare' | 'case' | 'failures';
 
 export function EvalWorkbenchScreen({ onBack }: { onBack: () => void }) {
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<Tab>('realtime');
   const [reports, setReports] = useState<any[]>([]);
   const [selectedReport, setSelectedReport] = useState<string>('latest.json');
   const [reportData, setReportData] = useState<any>(null);
@@ -13,6 +13,11 @@ export function EvalWorkbenchScreen({ onBack }: { onBack: () => void }) {
   const [selectedCaseId, setSelectedCaseId] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Realtime eval state
+  const [realtimeRecords, setRealtimeRecords] = useState<any[]>([]);
+  const [realtimeSummary, setRealtimeSummary] = useState<any>(null);
+  const [realtimeHours, setRealtimeHours] = useState(24);
 
   useEffect(() => {
     loadReports();
@@ -61,11 +66,32 @@ export function EvalWorkbenchScreen({ onBack }: { onBack: () => void }) {
   };
 
   const tabs: Array<{ key: Tab; label: string }> = [
+    { key: 'realtime', label: '实时监控' },
     { key: 'overview', label: '总览' },
     { key: 'history', label: '运行历史' },
     { key: 'compare', label: '运行对比' },
     { key: 'failures', label: '失败分析' }
   ];
+
+  // Load realtime data
+  const loadRealtimeData = async () => {
+    try {
+      const [recsRes, sumRes] = await Promise.all([
+        appApi.evaluations.listRealtimeEvals({ limit: 50 }),
+        appApi.evaluations.getRealtimeEvalSummary(realtimeHours),
+      ]);
+      setRealtimeRecords(recsRes.records || []);
+      setRealtimeSummary(sumRes);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (tab === 'realtime') {
+      loadRealtimeData();
+      const timer = setInterval(loadRealtimeData, 30000);
+      return () => clearInterval(timer);
+    }
+  }, [tab, realtimeHours]);
 
   return (
     <>
@@ -93,6 +119,9 @@ export function EvalWorkbenchScreen({ onBack }: { onBack: () => void }) {
         )}
         {error && (
           <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
+        )}
+        {!loading && !error && tab === 'realtime' && (
+          <RealtimeTab records={realtimeRecords} summary={realtimeSummary} hours={realtimeHours} onHoursChange={setRealtimeHours} onRefresh={loadRealtimeData} />
         )}
         {!loading && !error && tab === 'overview' && (
           <OverviewTab report={reportData} onLoadReport={loadReport} reports={reports} />
@@ -328,6 +357,79 @@ function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2.5">
       <span className="text-sm text-gray-500">{label}</span>
       <span className="text-sm font-bold">{value}</span>
+    </div>
+  );
+}
+
+function RealtimeTab({ records, summary, hours, onHoursChange, onRefresh }: {
+  records: any[];
+  summary: any;
+  hours: number;
+  onHoursChange: (h: number) => void;
+  onRefresh: () => void;
+}) {
+  const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  const fmtMs = (v: number) => `${Math.round(v)}ms`;
+  const scoreColor = (v: number) => v >= 0.8 ? 'text-emerald-600' : v >= 0.5 ? 'text-amber-600' : 'text-red-600';
+
+  return (
+    <div className="space-y-4 px-4 pb-8">
+      {/* Time range */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold text-gray-500">时间</span>
+        {[1, 6, 24, 72, 168].map(h => (
+          <button key={h} onClick={() => onHoursChange(h)}
+            className={`px-3 py-1 rounded-full text-xs font-bold ${hours === h ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500'}`}>
+            {h < 24 ? `${h}h` : `${h / 24}d`}
+          </button>
+        ))}
+        <button onClick={onRefresh} className="ml-auto text-xs text-gray-400">↻</button>
+      </div>
+
+      {/* Summary */}
+      {summary && (
+        <div className="grid grid-cols-2 gap-2">
+          <StatCard label="对话总数" value={summary.total_evals} />
+          <StatCard label="平均质量" value={fmtPct(summary.avg_quality)} />
+          <StatCard label="Fallback率" value={fmtPct(summary.fallback_rate)} />
+          <StatCard label="无内容率" value={fmtPct(summary.no_content_rate)} />
+          <StatCard label="泄露风险" value={fmtPct(summary.leak_rate)} />
+          <StatCard label="平均效率" value={fmtPct(summary.avg_efficiency)} />
+          <StatCard label="Schema合规" value={fmtPct(summary.avg_schema_compliance)} />
+          <StatCard label="平均耗时" value={fmtMs(summary.avg_duration_ms)} />
+        </div>
+      )}
+
+      {/* Quality trend (simple bar chart) */}
+      {summary?.quality_trend?.length > 0 && (
+        <div className="rounded-lg bg-white p-3 shadow-sm">
+          <h3 className="mb-2 text-xs font-bold text-gray-500">质量趋势</h3>
+          <div className="flex h-[60px] items-end gap-[1px]">
+            {summary.quality_trend.map((pt: any, i: number) => (
+              <div key={i} className="flex-1 rounded-t"
+                style={{ height: `${Math.max(4, (pt.avg_quality || 0) * 100)}%`, background: pt.avg_quality >= 0.8 ? '#10b981' : pt.avg_quality >= 0.5 ? '#f59e0b' : '#ef4444' }}
+                title={`${pt.hour?.slice(11, 16)}: ${(pt.avg_quality * 100).toFixed(1)}%`} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recent records */}
+      <div className="rounded-lg bg-white shadow-sm overflow-hidden">
+        <h3 className="px-3 pt-3 pb-2 text-xs font-bold text-gray-500">最近对话评分</h3>
+        <div className="divide-y divide-gray-50">
+          {records.slice(0, 30).map((r: any) => (
+            <div key={r.id} className="flex items-center gap-2 px-3 py-2.5 text-xs">
+              <span className="font-mono text-gray-400 w-[72px]">{r.timestamp?.slice(5, 16) || '-'}</span>
+              <span className="text-gray-600 w-[48px]">{r.scene || '-'}</span>
+              <span className={`font-mono font-bold w-[48px] text-right ${scoreColor(r.overall_quality)}`}>{fmtPct(r.overall_quality)}</span>
+              {r.is_fallback && <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-600 text-[10px] font-bold">FB</span>}
+              <span className="text-gray-400 flex-1 text-right">{fmtMs(r.total_duration_ms)}</span>
+            </div>
+          ))}
+          {records.length === 0 && <div className="px-4 py-8 text-center text-gray-400 text-sm">暂无数据</div>}
+        </div>
+      </div>
     </div>
   );
 }

@@ -7,6 +7,8 @@ import type {
     EvalCaseDetailResponse,
     EvalCompareResponse,
     EvalTraceEvent,
+    RealtimeEvalRecord,
+    RealtimeEvalSummaryResponse,
 } from '@/services/app-api';
 import EvaluationAccessGate from '@/components/EvaluationAccessGate';
 
@@ -97,9 +99,10 @@ const label = (kind: string, val?: string | null): string =>
 // Sub-components
 // ---------------------------------------------------------------------------
 
-type View = 'overview' | 'history' | 'compare' | 'detail' | 'analysis';
+type View = 'overview' | 'history' | 'compare' | 'detail' | 'analysis' | 'realtime';
 
 const TAB_ITEMS: { key: View; label: string }[] = [
+    { key: 'realtime', label: '实时监控' },
     { key: 'overview', label: '总览' },
     { key: 'history', label: '运行历史' },
     { key: 'compare', label: '运行对比' },
@@ -195,6 +198,12 @@ const EvaluationWorkbenchInner: React.FC = () => {
 
     // Raw JSON drawer
     const [rawOpen, setRawOpen] = useState(false);
+
+    // Realtime eval
+    const [realtimeRecords, setRealtimeRecords] = useState<RealtimeEvalRecord[]>([]);
+    const [realtimeSummary, setRealtimeSummary] = useState<RealtimeEvalSummaryResponse | null>(null);
+    const [realtimeLoading, setRealtimeLoading] = useState(false);
+    const [realtimeHours, setRealtimeHours] = useState(24);
 
     const loadReportList = useCallback(async () => {
         try {
@@ -702,6 +711,145 @@ const EvaluationWorkbenchInner: React.FC = () => {
         );
     };
 
+    // ── Realtime eval ─────────────────────────────────────────────────────
+
+    const loadRealtimeData = useCallback(async () => {
+        setRealtimeLoading(true);
+        try {
+            const [recsRes, sumRes] = await Promise.all([
+                appApi.evaluations.listRealtimeEvals({ limit: 100 }),
+                appApi.evaluations.getRealtimeEvalSummary(realtimeHours),
+            ]);
+            setRealtimeRecords(recsRes.records || []);
+            setRealtimeSummary(sumRes);
+        } catch {
+            // silently fail
+        } finally {
+            setRealtimeLoading(false);
+        }
+    }, [realtimeHours]);
+
+    useEffect(() => {
+        if (activeView === 'realtime') {
+            loadRealtimeData();
+            const timer = setInterval(loadRealtimeData, 30000); // auto-refresh every 30s
+            return () => clearInterval(timer);
+        }
+    }, [activeView, loadRealtimeData]);
+
+    const renderRealtime = () => {
+        const sum = realtimeSummary;
+        return (
+            <div className="space-y-4">
+                {/* Time range selector */}
+                <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-gray-500">时间范围</span>
+                    {[1, 6, 24, 72, 168].map(h => (
+                        <button
+                            key={h}
+                            onClick={() => setRealtimeHours(h)}
+                            className={`px-3 py-1 rounded text-xs font-bold border transition ${realtimeHours === h ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-500 bg-white'}`}
+                        >
+                            {h < 24 ? `${h}h` : `${h / 24}d`}
+                        </button>
+                    ))}
+                    <button
+                        onClick={loadRealtimeData}
+                        className="ml-auto px-3 py-1 rounded text-xs font-bold border border-gray-200 text-gray-500 bg-white hover:bg-gray-50"
+                    >
+                        ↻ 刷新
+                    </button>
+                </div>
+
+                {realtimeLoading && !sum && <div className="text-center py-8 text-gray-400">加载中...</div>}
+
+                {/* Summary cards */}
+                {sum && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <MetricCard title="对话总数" value={String(sum.total_evals)} hint={`最近 ${sum.hours}h`} />
+                        <MetricCard title="平均质量" value={fmtPct(sum.avg_quality)} hint="overall_quality" />
+                        <MetricCard title="Fallback 率" value={fmtPct(sum.fallback_rate)} hint="降级回答比例" />
+                        <MetricCard title="无内容率" value={fmtPct(sum.no_content_rate)} hint="空推荐比例" />
+                        <MetricCard title="泄露风险" value={fmtPct(sum.leak_rate)} hint="含敏感信息" />
+                        <MetricCard title="平均效率" value={fmtPct(sum.avg_efficiency)} hint="步骤/重复/延迟" />
+                        <MetricCard title="Schema 合规" value={fmtPct(sum.avg_schema_compliance)} hint="结构完整性" />
+                        <MetricCard title="平均耗时" value={fmtMs(sum.avg_duration_ms)} hint="端到端" />
+                    </div>
+                )}
+
+                {/* Quality trend */}
+                {sum && sum.quality_trend && sum.quality_trend.length > 0 && (
+                    <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
+                        <h3 className="text-sm font-bold text-gray-700 mb-3">质量趋势</h3>
+                        <div className="h-[120px] flex items-end gap-[2px]">
+                            {sum.quality_trend.map((pt, i) => {
+                                const h = Math.max(2, (pt.avg_quality || 0) * 100);
+                                return (
+                                    <div key={i} className="flex-1 flex flex-col items-center justify-end" title={`${pt.hour}: quality=${(pt.avg_quality * 100).toFixed(1)}%, n=${pt.count}`}>
+                                        <div className={`w-full rounded-t ${barColor(pt.avg_quality)}`} style={{ height: `${h}%` }} />
+                                        <span className="text-[8px] text-gray-400 mt-1">{pt.hour?.slice(11, 16)}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {/* Scene distribution */}
+                {sum && sum.scene_distribution && Object.keys(sum.scene_distribution).length > 0 && (
+                    <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
+                        <h3 className="text-sm font-bold text-gray-700 mb-3">场景分布</h3>
+                        {Object.entries(sum.scene_distribution).map(([scene, count]) => (
+                            <BarRow key={scene} name={scene} rate={count / (sum.total_evals || 1)} kind="scene" />
+                        ))}
+                    </div>
+                )}
+
+                {/* Recent records table */}
+                <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+                    <h3 className="text-sm font-bold text-gray-700 px-4 pt-3 pb-2">最近对话评分</h3>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-[12px]">
+                            <thead>
+                                <tr className="border-b border-gray-100 text-gray-400 uppercase tracking-wide">
+                                    <th className="px-3 py-2 text-left">时间</th>
+                                    <th className="px-3 py-2 text-left">场景</th>
+                                    <th className="px-3 py-2 text-right">质量</th>
+                                    <th className="px-3 py-2 text-right">效率</th>
+                                    <th className="px-3 py-2 text-right">Schema</th>
+                                    <th className="px-3 py-2 text-center">Fallback</th>
+                                    <th className="px-3 py-2 text-right">耗时</th>
+                                    <th className="px-3 py-2 text-left">工具</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50">
+                                {realtimeRecords.slice(0, 50).map(r => (
+                                    <tr key={r.id} className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 font-mono whitespace-nowrap">{r.timestamp?.replace('T', ' ').slice(5, 16) || '-'}</td>
+                                        <td className="px-3 py-2">{label('scene', r.scene || '-')}</td>
+                                        <td className={`px-3 py-2 text-right font-mono font-bold ${scoreClass(r.overall_quality)}`}>{fmtPct(r.overall_quality)}</td>
+                                        <td className={`px-3 py-2 text-right font-mono ${scoreClass(r.efficiency)}`}>{fmtPct(r.efficiency)}</td>
+                                        <td className={`px-3 py-2 text-right font-mono ${scoreClass(r.schema_compliance)}`}>{fmtPct(r.schema_compliance)}</td>
+                                        <td className="px-3 py-2 text-center">
+                                            {r.is_fallback
+                                                ? <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-red-50 text-red-600 border border-red-200">是</span>
+                                                : <span className="text-gray-300">-</span>}
+                                        </td>
+                                        <td className="px-3 py-2 text-right font-mono">{fmtMs(r.total_duration_ms)}</td>
+                                        <td className="px-3 py-2 text-gray-500 truncate max-w-[200px]">{(r.tool_names || []).join(', ') || '-'}</td>
+                                    </tr>
+                                ))}
+                                {realtimeRecords.length === 0 && (
+                                    <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">暂无实时评测数据</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const renderAnalysis = () => {
         const order = ['by_failure_class', 'by_error_reason', 'by_metric', 'by_tool', 'by_worker', 'by_scene', 'by_category', 'by_case'];
         const groups = Object.entries(failureSummary)
@@ -785,6 +933,7 @@ const EvaluationWorkbenchInner: React.FC = () => {
         compare: renderCompare,
         detail: renderDetail,
         analysis: renderAnalysis,
+        realtime: renderRealtime,
     };
 
     // ---------------------------------------------------------------------------

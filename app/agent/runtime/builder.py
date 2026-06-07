@@ -196,7 +196,11 @@ async def _prepare_langgraph_context(
                     "agent_id": state.agent_id,
                     "plan_type": state.plan_type,
                     "active_skills": state.context.get("active_skills"),
-                    "skill": ",".join(state.context.get("active_skills") or [])
+                    "skill": ",".join(
+                        item.get("id", "")
+                        for item in (state.context.get("active_skills") or [])
+                        if isinstance(item, dict) and item.get("id")
+                    )
                     if isinstance(state.context.get("active_skills"), list)
                     else None,
                     "context_budget": state.context.get("context_budget"),

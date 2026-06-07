@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from typing import Any, AsyncGenerator
 
 import redis.asyncio as redis
@@ -26,6 +27,11 @@ from app.agent.runtime.graph import (
 )
 from app.agent.runtime.finalization import fallback_final
 from app.agent.metrics import record_agent_metric
+from app.agent.realtime_eval import (
+    build_trace_from_events,
+    evaluate_realtime,
+    should_sample,
+)
 from app.agent.state import ChatState
 from app.common.config import settings
 from app.common.errors import LLM_UPSTREAM_ERROR, envelope
@@ -33,6 +39,87 @@ from app.agent import conversation
 from app.domain.preferences.service import apply_extracted_preferences, extract_preferences_from_text
 
 logger = logging.getLogger("agent")
+
+
+# ---------------------------------------------------------------------------
+# 实时评测调度
+# ---------------------------------------------------------------------------
+
+def _schedule_realtime_eval(
+    *,
+    session_id: str,
+    user_message: str | None,
+    events: list[dict[str, Any]],
+    final_json: dict[str, Any] | None,
+) -> None:
+    """在后台异步执行实时评测，不阻塞当前 SSE 流."""
+    if not should_sample():
+        return
+    if not events and not final_json:
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # 没有运行中的事件循环（不太可能在 FastAPI 中发生），放弃评测
+        logger.warning("realtime_eval no_event_loop session_id=%s", session_id)
+        return
+
+    async def _do_eval() -> None:
+        try:
+            from app.agent.realtime_eval import evaluate_realtime
+
+            trace = build_trace_from_events(
+                session_id=session_id,
+                events=events,
+                final_json=final_json,
+                user_message=user_message,
+            )
+            result = evaluate_realtime(trace)
+
+            # 持久化到 DB
+            await _persist_realtime_eval(result)
+
+            logger.info(
+                "realtime_eval_done session_id=%s scene=%s quality=%.2f fallback=%s duration=%.0fms",
+                session_id,
+                result.scene,
+                result.overall_quality,
+                result.is_fallback,
+                result.total_duration_ms,
+            )
+        except Exception:
+            logger.warning("realtime_eval_failed session_id=%s", session_id, exc_info=True)
+
+    loop.create_task(_do_eval())
+
+
+async def _persist_realtime_eval(result: "RealtimeEvalResult") -> None:  # type: ignore[name-defined]
+    """将实时评测结果写入 DB."""
+    try:
+        from app.infra.db import AsyncSessionLocal
+        from app.infra.models.eval import EvalRun
+        from datetime import datetime, timezone
+
+        async with AsyncSessionLocal() as session:
+            eval_run = EvalRun(
+                id=result.id,
+                report_name=f"realtime/{result.session_id}/{result.id}",
+                timestamp=datetime.fromtimestamp(result.created_at, tz=timezone.utc),
+                suite="realtime",
+                runner="auto",
+                model_provider=None,
+                model_name=None,
+                overall_success_rate=result.overall_quality,
+                total_cases=1,
+                total_trials=1,
+                duration_seconds=result.total_duration_ms / 1000.0,
+                raw_report_json=result.to_dict(),
+            )
+            session.add(eval_run)
+            await session.commit()
+    except Exception:
+        logger.warning("realtime_eval_persist_failed id=%s", result.id, exc_info=True)
 
 
 def _normalize_llm_upstream_error_message(exc: Exception) -> str:
@@ -228,6 +315,9 @@ async def run_chat_stream(
     trace_id = state.trace_id or ""
     conversation_cache = conversation.create_conversation_cache()
     conversation.set_current_cache(conversation_cache)
+    # 收集 SSE events 副本用于实时评测（events 会在流式过程中被清空）
+    collected_events: list[dict[str, Any]] = []
+    stream_start_time = time.monotonic()
     try:
         delete_cancel = getattr(redis_client, "delete", None)
         if callable(delete_cancel):
@@ -320,6 +410,7 @@ async def run_chat_stream(
                 latest_state = updated
                 events = updated.events if hasattr(updated, "events") else updated.get("events", [])
                 for item in events:
+                    collected_events.append(item)
                     yield item
                 if hasattr(updated, "events"):
                     updated.events.clear()
@@ -365,6 +456,14 @@ async def run_chat_stream(
             user_message=runtime_state.message,
         )
         yield {"event": "final", "data": {"stopped": False, "answer": final_json}}
+
+        # ── 实时评测：异步评分，不阻塞 SSE 流 ──
+        _schedule_realtime_eval(
+            session_id=runtime_state.session_id or state.session_id,
+            user_message=runtime_state.message or state.message,
+            events=collected_events,
+            final_json=final_json,
+        )
     except Exception as exc:
         if GraphInterrupt and isinstance(exc, GraphInterrupt):
             yield {"event": "paused", "data": {"reason": "manual_pause"}}

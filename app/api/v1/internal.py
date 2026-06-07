@@ -462,3 +462,189 @@ async def compare_eval_reports(
         "category_delta": _breakdown_delta(baseline_data, candidate_data, "category_breakdown"),
         "metric_delta": metric_delta,
     }
+
+
+# ---------------------------------------------------------------------------
+# 实时评测监控 API
+# ---------------------------------------------------------------------------
+
+
+@router.get("/realtime-eval/recent")
+async def list_realtime_evals(
+    limit: int = Query(50, ge=1, le=200, description="Max results to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    scene: str | None = Query(None, description="Filter by scene"),
+    min_quality: float | None = Query(None, ge=0.0, le=1.0, description="Minimum overall_quality"),
+    _admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    """查询实时评测记录（最近 N 条）."""
+    from sqlalchemy import select, func, desc
+    from app.infra.db import AsyncSessionLocal
+    from app.infra.models.eval import EvalRun
+
+    async with AsyncSessionLocal() as session:
+        base_query = select(EvalRun).where(EvalRun.suite == "realtime")
+        count_query = select(func.count()).select_from(EvalRun).where(EvalRun.suite == "realtime")
+
+        if scene:
+            # scene 信息存在 raw_report_json 中
+            base_query = base_query.where(EvalRun.raw_report_json["scene"].astext == scene)
+            count_query = count_query.where(EvalRun.raw_report_json["scene"].astext == scene)
+        if min_quality is not None:
+            base_query = base_query.where(EvalRun.overall_success_rate >= min_quality)
+            count_query = count_query.where(EvalRun.overall_success_rate >= min_quality)
+
+        total_result = await session.execute(count_query)
+        total = total_result.scalar() or 0
+
+        query = base_query.order_by(desc(EvalRun.timestamp)).offset(offset).limit(limit)
+        result = await session.execute(query)
+        rows = result.scalars().all()
+
+    records = []
+    for row in rows:
+        raw = row.raw_report_json or {}
+        records.append({
+            "id": row.id,
+            "session_id": raw.get("session_id", ""),
+            "scene": raw.get("scene"),
+            "agent_id": raw.get("agent_id"),
+            "is_fallback": raw.get("is_fallback", False),
+            "has_content": raw.get("has_content", False),
+            "overall_quality": row.overall_success_rate,
+            "efficiency": raw.get("efficiency", 0.0),
+            "schema_compliance": raw.get("schema_compliance", 0.0),
+            "no_fallback": raw.get("no_fallback", 0.0),
+            "has_content_score": raw.get("has_content_score", 0.0),
+            "no_leak": raw.get("no_leak", 1.0),
+            "tool_call_count": raw.get("tool_call_count", 0),
+            "repeated_action_rate": raw.get("repeated_action_rate", 0.0),
+            "tool_names": raw.get("tool_names", []),
+            "total_duration_ms": raw.get("total_duration_ms", 0.0),
+            "error": raw.get("error"),
+            "error_reason": raw.get("error_reason"),
+            "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+        })
+
+    return {"total": total, "records": records}
+
+
+@router.get("/realtime-eval/summary")
+async def get_realtime_eval_summary(
+    hours: int = Query(24, ge=1, le=720, description="Look-back window in hours"),
+    _admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    """实时评测聚合统计（最近 N 小时）."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import select, func, case
+    from app.infra.db import AsyncSessionLocal
+    from app.infra.models.eval import EvalRun
+
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    async with AsyncSessionLocal() as session:
+        base = select(EvalRun).where(
+            EvalRun.suite == "realtime",
+            EvalRun.timestamp >= since,
+        )
+
+        # 总量统计
+        count_result = await session.execute(
+            select(func.count()).select_from(EvalRun).where(
+                EvalRun.suite == "realtime",
+                EvalRun.timestamp >= since,
+            )
+        )
+        total_evals = count_result.scalar() or 0
+
+        if total_evals == 0:
+            return {
+                "hours": hours,
+                "total_evals": 0,
+                "avg_quality": 0.0,
+                "fallback_rate": 0.0,
+                "no_content_rate": 0.0,
+                "leak_rate": 0.0,
+                "avg_efficiency": 0.0,
+                "avg_schema_compliance": 0.0,
+                "avg_duration_ms": 0.0,
+                "quality_trend": [],
+                "scene_distribution": {},
+            }
+
+        # 聚合统计
+        agg_result = await session.execute(
+            select(
+                func.avg(EvalRun.overall_success_rate).label("avg_quality"),
+                func.avg(EvalRun.duration_seconds).label("avg_duration_s"),
+            ).where(
+                EvalRun.suite == "realtime",
+                EvalRun.timestamp >= since,
+            )
+        )
+        agg = agg_result.one()
+
+        # Fallback / no_content / leak 统计（从 raw_report_json 提取）
+        all_result = await session.execute(
+            select(EvalRun.raw_report_json).where(
+                EvalRun.suite == "realtime",
+                EvalRun.timestamp >= since,
+            ).order_by(EvalRun.timestamp)
+        )
+        raw_rows = all_result.all()
+
+        fallback_count = 0
+        no_content_count = 0
+        leak_count = 0
+        efficiency_sum = 0.0
+        schema_sum = 0.0
+        scene_counts: dict[str, int] = {}
+        # 按小时聚合趋势
+        hourly_buckets: dict[str, list[float]] = {}
+
+        for (raw,) in raw_rows:
+            if not isinstance(raw, dict):
+                continue
+            if raw.get("is_fallback"):
+                fallback_count += 1
+            if not raw.get("has_content"):
+                no_content_count += 1
+            if raw.get("no_leak", 1.0) < 1.0:
+                leak_count += 1
+            efficiency_sum += raw.get("efficiency", 0.0)
+            schema_sum += raw.get("schema_compliance", 0.0)
+            scene = raw.get("scene") or "unknown"
+            scene_counts[scene] = scene_counts.get(scene, 0) + 1
+
+        # 按小时聚合 quality 趋势
+        trend_result = await session.execute(
+            select(
+                func.date_trunc("hour", EvalRun.timestamp).label("hour"),
+                func.avg(EvalRun.overall_success_rate).label("avg_quality"),
+                func.count().label("count"),
+            ).where(
+                EvalRun.suite == "realtime",
+                EvalRun.timestamp >= since,
+            ).group_by("hour").order_by("hour")
+        )
+        quality_trend = []
+        for row in trend_result:
+            quality_trend.append({
+                "hour": row.hour.isoformat() if row.hour else None,
+                "avg_quality": round(float(row.avg_quality or 0), 3),
+                "count": int(row.count or 0),
+            })
+
+    return {
+        "hours": hours,
+        "total_evals": total_evals,
+        "avg_quality": round(float(agg.avg_quality or 0), 3),
+        "fallback_rate": round(fallback_count / total_evals, 3) if total_evals else 0.0,
+        "no_content_rate": round(no_content_count / total_evals, 3) if total_evals else 0.0,
+        "leak_rate": round(leak_count / total_evals, 3) if total_evals else 0.0,
+        "avg_efficiency": round(efficiency_sum / total_evals, 3) if total_evals else 0.0,
+        "avg_schema_compliance": round(schema_sum / total_evals, 3) if total_evals else 0.0,
+        "avg_duration_ms": round(float(agg.avg_duration_s or 0) * 1000, 0),
+        "quality_trend": quality_trend,
+        "scene_distribution": scene_counts,
+    }

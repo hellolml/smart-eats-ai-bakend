@@ -725,6 +725,15 @@ export const appApi = {
       return request<any>(`/eval-report/compare?baseline=${encodeURIComponent(baseline)}&candidate=${encodeURIComponent(candidate)}`, {
         scope: 'internal'
       });
+    },
+    async listRealtimeEvals(params: { limit?: number; offset?: number } = {}) {
+      const qs = new URLSearchParams();
+      if (params.limit) qs.set('limit', String(params.limit));
+      if (params.offset) qs.set('offset', String(params.offset));
+      return request<{ total: number; records: any[] }>(`/realtime-eval/recent?${qs.toString()}`, { scope: 'internal' });
+    },
+    async getRealtimeEvalSummary(hours: number = 24) {
+      return request<any>(`/realtime-eval/summary?hours=${hours}`, { scope: 'internal' });
     }
   }
 };

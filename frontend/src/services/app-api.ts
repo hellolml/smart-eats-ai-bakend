@@ -447,6 +447,49 @@ export interface EvalCompareResponse {
     metric_delta?: Record<string, { baseline: number; candidate: number; delta: number }>;
 }
 
+// ---- Realtime Eval Types ----
+
+export interface RealtimeEvalRecord {
+    id: string;
+    session_id: string;
+    scene?: string;
+    agent_id?: string;
+    is_fallback: boolean;
+    has_content: boolean;
+    overall_quality: number;
+    efficiency: number;
+    schema_compliance: number;
+    no_fallback: number;
+    has_content_score: number;
+    no_leak: number;
+    tool_call_count: number;
+    repeated_action_rate: number;
+    tool_names: string[];
+    total_duration_ms: number;
+    error?: string;
+    error_reason?: string;
+    timestamp?: string;
+}
+
+export interface RealtimeEvalListResponse {
+    total: number;
+    records: RealtimeEvalRecord[];
+}
+
+export interface RealtimeEvalSummaryResponse {
+    hours: number;
+    total_evals: number;
+    avg_quality: number;
+    fallback_rate: number;
+    no_content_rate: number;
+    leak_rate: number;
+    avg_efficiency: number;
+    avg_schema_compliance: number;
+    avg_duration_ms: number;
+    quality_trend: Array<{ hour: string; avg_quality: number; count: number }>;
+    scene_distribution: Record<string, number>;
+}
+
 export class ApiError extends Error {
     status?: number;
     code?: string | number;
@@ -1377,6 +1420,25 @@ export const appApi = {
         async compareReports(baseline: string, candidate: string) {
             return request<EvalCompareResponse>(
                 `/eval-report/compare?baseline=${encodeURIComponent(baseline)}&candidate=${encodeURIComponent(candidate)}`,
+                { scope: 'internal', auth: true }
+            );
+        },
+
+        async listRealtimeEvals(params: { limit?: number; offset?: number; scene?: string; minQuality?: number } = {}) {
+            const qs = new URLSearchParams();
+            if (params.limit) qs.set('limit', String(params.limit));
+            if (params.offset) qs.set('offset', String(params.offset));
+            if (params.scene) qs.set('scene', params.scene);
+            if (params.minQuality !== undefined) qs.set('min_quality', String(params.minQuality));
+            return request<RealtimeEvalListResponse>(
+                `/realtime-eval/recent?${qs.toString()}`,
+                { scope: 'internal', auth: true }
+            );
+        },
+
+        async getRealtimeEvalSummary(hours: number = 24) {
+            return request<RealtimeEvalSummaryResponse>(
+                `/realtime-eval/summary?hours=${hours}`,
                 { scope: 'internal', auth: true }
             );
         }
