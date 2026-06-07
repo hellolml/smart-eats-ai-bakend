@@ -6,6 +6,7 @@ import os
 from evals.adapters.trace import EvalTrace
 from evals.datasets.eval_case import EvalCase
 from evals.evaluators.base import BaseEvaluator
+from evals.rubric import get_rubric_version
 
 
 class DeepEvalJudgeEvaluator(BaseEvaluator):
@@ -17,6 +18,7 @@ class DeepEvalJudgeEvaluator(BaseEvaluator):
 
     def __init__(self, threshold: float = 0.7):
         self.threshold = threshold
+        self.rubric_version = get_rubric_version()
 
     @property
     def name(self) -> str:

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     DEFAULT_LANGUAGE: str = "zh"
 
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/smart_eats"
+    EVAL_DATABASE_URL: str | None = None
     REDIS_URL: str = "redis://localhost:6379/0"
 
     JWT_SECRET: str = "change-me"
@@ -135,6 +136,14 @@ class Settings(BaseSettings):
     APP_AUTH_PASSWORD_RESET_ENABLED: bool = False
     APP_AUTH_PHONE_ENABLED: bool = True
     APP_AUTH_EMAIL_ENABLED: bool = True
+    REALTIME_EVAL_ENABLED: bool = False
+    REALTIME_EVAL_SAMPLE_RATE: float = 0.1
+    REALTIME_EVAL_DEEP_JUDGE_ENABLED: bool = False
+    REALTIME_EVAL_RETENTION_DAYS: int = 30
+    # ── Alert notification ──
+    ALERT_WEBHOOK_URL: str | None = None
+    ALERT_WEBHOOK_TYPE: str = "generic"  # generic | feishu | slack
+    ALERT_WEBHOOK_SECRET: str | None = None  # Optional signing secret
 
 
 settings = Settings()

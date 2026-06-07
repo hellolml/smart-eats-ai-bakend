@@ -24,7 +24,9 @@ from evals.evaluators.schema_evaluator import SchemaEvaluator
 from evals.evaluators.task_evaluator import TaskEvaluator
 from evals.evaluators.tool_evaluator import ToolEvaluator
 from evals.evaluators.travel_state_evaluator import TravelStateEvaluator
+from evals.outcomes import verify_outcomes
 from evals.observability.phoenix import PhoenixTracer
+from evals.rubric import get_rubric_version
 from evals.runners.trial_runner import TrialRunner
 
 logger = logging.getLogger("evals.harness")
@@ -43,6 +45,11 @@ class TrialResult:
     weighted_score: float = 0.0
     threshold_failures: list[dict[str, Any]] = field(default_factory=list)
     missing_metrics: list[str] = field(default_factory=list)
+    outcome_scores: dict[str, float] = field(default_factory=dict)
+    outcome_failures: list[dict[str, Any]] = field(default_factory=list)
+    side_effect_failures: list[dict[str, Any]] = field(default_factory=list)
+    outcome_details: list[dict[str, Any]] = field(default_factory=list)
+    rubric_version: str = ""
 
 
 @dataclass
@@ -104,6 +111,8 @@ class HarnessConfig:
     runner: str = "live"
     fixture_path: str = "./evals/datasets/fixture_traces.json"
     include_llm_judge: bool = False
+    outcome_verify: bool = False
+    dataset_version: str | None = None
     thresholds: dict[str, float] = field(default_factory=lambda: {
         "task_success": 0.80,
         "intent_accuracy": 0.90,
@@ -208,6 +217,31 @@ class EvalHarness:
 
                     # 评分
                     scores = self._evaluate_case(case, trace)
+                    outcome_details: list[dict[str, Any]] = []
+                    outcome_scores: dict[str, float] = {}
+                    outcome_failures: list[dict[str, Any]] = []
+                    side_effect_failures: list[dict[str, Any]] = []
+                    if self.config.outcome_verify:
+                        for outcome in verify_outcomes(case, trace):
+                            outcome_scores[outcome.verifier] = outcome.score
+                            detail = {
+                                "verifier": outcome.verifier,
+                                "score": outcome.score,
+                                "passed": outcome.passed,
+                                "failures": outcome.failures,
+                                "details": outcome.details,
+                            }
+                            outcome_details.append(detail)
+                            if not outcome.passed:
+                                outcome_failures.extend([
+                                    {"verifier": outcome.verifier, **failure}
+                                    for failure in outcome.failures
+                                ])
+                                if outcome.verifier == "side_effect_guard":
+                                    side_effect_failures.extend([
+                                        {"verifier": outcome.verifier, **failure}
+                                        for failure in outcome.failures
+                                    ])
 
                     # 计算加权分数
                     weights = case.get_scoring()
@@ -227,6 +261,8 @@ class EvalHarness:
                             "weighted_score": weighted,
                             "trace_error": trace.error,
                             "trace_error_reason": trace.error_reason,
+                            "outcome_scores": outcome_scores,
+                            "outcome_failures": outcome_failures,
                         },
                     )
                     trace.phoenix_trace_url = self.phoenix.span_reference(span)
@@ -239,6 +275,11 @@ class EvalHarness:
                     weighted_score=weighted,
                     missing_metrics=missing_metrics,
                     threshold_failures=self._trial_threshold_failures(case, scores, weighted),
+                    outcome_scores=outcome_scores,
+                    outcome_failures=outcome_failures,
+                    side_effect_failures=side_effect_failures,
+                    outcome_details=outcome_details,
+                    rubric_version=get_rubric_version() if self.config.include_llm_judge else "",
                 )
                 task_result.trials.append(trial_result)
 

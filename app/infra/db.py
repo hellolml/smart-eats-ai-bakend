@@ -4,7 +4,7 @@ from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool, NullPool
-from sqlalchemy import event
+from sqlalchemy import event, text
 
 from app.common.config import settings
 from app.infra.models.base import Base
@@ -73,16 +73,23 @@ async def init_db() -> None:
             await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
         await conn.run_sync(Base.metadata.create_all)
         if settings.DATABASE_URL.startswith("postgresql"):
-            await conn.exec_driver_sql("ALTER TABLE context_memories ADD COLUMN IF NOT EXISTS embedding vector(384)")
-            await conn.exec_driver_sql(
-                "CREATE INDEX IF NOT EXISTS ix_context_memories_embedding ON context_memories USING ivfflat (embedding vector_cosine_ops)"
-            )
-            await conn.exec_driver_sql("ALTER TABLE context_event_embeddings ADD COLUMN IF NOT EXISTS embedding vector(384)")
-            await conn.exec_driver_sql(
-                "CREATE INDEX IF NOT EXISTS ix_context_event_embeddings_embedding ON context_event_embeddings USING ivfflat (embedding vector_cosine_ops)"
-            )
+            if await _postgres_table_exists(conn, "context_memories"):
+                await conn.exec_driver_sql("ALTER TABLE context_memories ADD COLUMN IF NOT EXISTS embedding vector(384)")
+                await conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_context_memories_embedding ON context_memories USING ivfflat (embedding vector_cosine_ops)"
+                )
+            if await _postgres_table_exists(conn, "context_event_embeddings"):
+                await conn.exec_driver_sql("ALTER TABLE context_event_embeddings ADD COLUMN IF NOT EXISTS embedding vector(384)")
+                await conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_context_event_embeddings_embedding ON context_event_embeddings USING ivfflat (embedding vector_cosine_ops)"
+                )
         if settings.DATABASE_URL.startswith("sqlite+aiosqlite"):
             await _ensure_sqlite_columns(conn)
+
+
+async def _postgres_table_exists(conn, table_name: str) -> bool:
+    result = await conn.execute(text("SELECT to_regclass(:table_name)"), {"table_name": table_name})
+    return result.scalar_one_or_none() is not None
 
 
 async def _ensure_sqlite_columns(conn) -> None:

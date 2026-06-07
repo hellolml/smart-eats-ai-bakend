@@ -46,6 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scenes", default=None, help="Comma-separated scenes to filter")
     parser.add_argument("--no-html", action="store_true", help="Skip HTML report generation")
     parser.add_argument("--include-llm-judge", action="store_true", help="Run optional DeepEval LLM judge metrics")
+    parser.add_argument("--outcome-verify", action="store_true", help="Verify real outcome/state/tool-result contracts when declared by cases")
+    parser.add_argument("--dataset-version", default=None, help="Dataset version label for manual/scheduled runs")
     parser.add_argument("--persist-db", dest="persist_db", action="store_true", default=True, help="Persist report to eval database when configured")
     parser.add_argument("--no-persist-db", dest="persist_db", action="store_false", help="Skip eval database persistence")
     parser.add_argument("--eval-database-url", default=None, help="Evaluation PostgreSQL database URL")
@@ -66,6 +68,8 @@ def main() -> None:
         suite=args.suite,
         fixture_path=args.fixture_path,
         include_llm_judge=args.include_llm_judge,
+        outcome_verify=args.outcome_verify,
+        dataset_version=args.dataset_version,
     )
 
     harness = EvalHarness(config)
@@ -91,6 +95,8 @@ def main() -> None:
             "runner": args.runner,
             "base_url": args.base_url if args.runner == "live" else None,
             "include_llm_judge": args.include_llm_judge,
+            "outcome_verify": args.outcome_verify,
+            "dataset_version": args.dataset_version,
         },
     )
     json_path = json_reporter.report(report)

@@ -3,6 +3,7 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.messages import AIMessage
 from openai import PermissionDeniedError
 
 from app.agent.graph import _coerce_runtime_state, _normalize_llm_upstream_error_message, run_chat_stream
@@ -72,6 +73,7 @@ async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monke
     monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop)
     monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr("app.agent.graph._schedule_realtime_eval", lambda **_kwargs: None)
     monkeypatch.setattr(
         "app.agent.supervisor.build_supervisor_runtime_graph",
         lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-values", "message": "你好", "final_json": final_json}]),
@@ -83,6 +85,76 @@ async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monke
 
     assert events[-1]["event"] == "final"
     assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "typed state final"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_uses_supervisor_direct_ai_text_when_no_final_json(monkeypatch):
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr("app.agent.graph._schedule_realtime_eval", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "app.agent.supervisor.build_supervisor_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder(
+            [
+                {
+                    "session_id": "s-direct",
+                    "message": "你好",
+                    "messages": [AIMessage(content="你好呀！有什么可以帮你的吗？")],
+                }
+            ]
+        ),
+    )
+
+    events = []
+    async for item in run_chat_stream(
+        _FakeRequest(),
+        db=None,
+        redis_client=_FakeRedis(),
+        state=ChatState(session_id="s-direct", message="你好"),
+    ):
+        events.append(item)
+
+    answer = events[-1]["data"]["answer"]
+    assert answer["recommendations"][0]["title"] == "你好呀！有什么可以帮你的吗？"
+    assert answer["recommendations"][0].get("reason") != "fallback"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_schedules_realtime_eval_before_final_is_consumed(monkeypatch):
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    scheduled = []
+    final_json = {
+        "recommendations": [{"type": "note", "title": "done", "reason": "test"}],
+        "followups": [],
+        "warnings": [],
+    }
+
+    def _record_schedule(**kwargs):
+        scheduled.append(kwargs)
+
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr("app.agent.graph._schedule_realtime_eval", _record_schedule)
+    monkeypatch.setattr(
+        "app.agent.supervisor.build_supervisor_runtime_graph",
+        lambda **_kwargs: _FakeGraphBuilder([{"session_id": "s-realtime", "message": "你好", "final_json": final_json}]),
+    )
+
+    async for item in run_chat_stream(_FakeRequest(), db=None, redis_client=_FakeRedis(), state=ChatState(session_id="s-realtime", message="你好")):
+        if item["event"] == "final":
+            break
+
+    assert scheduled
+    assert scheduled[0]["session_id"] == "s-realtime"
+    assert scheduled[0]["final_json"]["recommendations"][0]["title"] == "done"
+    assert scheduled[0]["events"][-1]["event"] == "final"
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 import redis.asyncio as redis
@@ -25,7 +26,7 @@ from app.agent.runtime.graph import (
     _initialize_graph_state,
     _state_from_dict,
 )
-from app.agent.runtime.finalization import fallback_final
+from app.agent.runtime.finalization import fallback_final, final_json_from_text
 from app.agent.metrics import record_agent_metric
 from app.agent.realtime_eval import (
     build_trace_from_events,
@@ -48,11 +49,20 @@ logger = logging.getLogger("agent")
 def _schedule_realtime_eval(
     *,
     session_id: str,
+    user_id: str | None,
+    trace_id: str | None,
     user_message: str | None,
     events: list[dict[str, Any]],
     final_json: dict[str, Any] | None,
+    model_provider: str | None,
+    model_name: str | None,
+    started_at: datetime | None,
+    ended_at: datetime | None,
+    total_duration_ms: float,
 ) -> None:
     """在后台异步执行实时评测，不阻塞当前 SSE 流."""
+    if not settings.REALTIME_EVAL_ENABLED:
+        return
     if not should_sample():
         return
     if not events and not final_json:
@@ -74,11 +84,22 @@ def _schedule_realtime_eval(
                 events=events,
                 final_json=final_json,
                 user_message=user_message,
+                total_duration_ms=total_duration_ms,
             )
             result = evaluate_realtime(trace)
 
             # 持久化到 DB
-            await _persist_realtime_eval(result)
+            await _persist_realtime_eval(
+                result,
+                events=events,
+                final_json=final_json,
+                user_id=user_id,
+                trace_id=trace_id,
+                model_provider=model_provider,
+                model_name=model_name,
+                started_at=started_at,
+                ended_at=ended_at,
+            )
 
             logger.info(
                 "realtime_eval_done session_id=%s scene=%s quality=%.2f fallback=%s duration=%.0fms",
@@ -94,29 +115,38 @@ def _schedule_realtime_eval(
     loop.create_task(_do_eval())
 
 
-async def _persist_realtime_eval(result: "RealtimeEvalResult") -> None:  # type: ignore[name-defined]
+async def _persist_realtime_eval(
+    result: "RealtimeEvalResult",  # type: ignore[name-defined]
+    *,
+    events: list[dict[str, Any]],
+    final_json: dict[str, Any] | None,
+    user_id: str | None,
+    trace_id: str | None,
+    model_provider: str | None,
+    model_name: str | None,
+    started_at: datetime | None,
+    ended_at: datetime | None,
+) -> None:
     """将实时评测结果写入 DB."""
     try:
-        from app.infra.db import AsyncSessionLocal
-        from app.infra.models.eval import EvalRun
-        from datetime import datetime, timezone
+        from app.infra.eval_db import eval_session
+        from app.infra.eval_db import init_eval_db
+        from app.agent.monitoring import persist_realtime_conversation
 
-        async with AsyncSessionLocal() as session:
-            eval_run = EvalRun(
-                id=result.id,
-                report_name=f"realtime/{result.session_id}/{result.id}",
-                timestamp=datetime.fromtimestamp(result.created_at, tz=timezone.utc),
-                suite="realtime",
-                runner="auto",
-                model_provider=None,
-                model_name=None,
-                overall_success_rate=result.overall_quality,
-                total_cases=1,
-                total_trials=1,
-                duration_seconds=result.total_duration_ms / 1000.0,
-                raw_report_json=result.to_dict(),
+        await init_eval_db()
+        async with eval_session() as session:
+            await persist_realtime_conversation(
+                session,
+                result=result,
+                events=events,
+                final_json=final_json,
+                user_id=user_id,
+                trace_id=trace_id,
+                model_provider=model_provider,
+                model_name=model_name,
+                started_at=started_at,
+                ended_at=ended_at,
             )
-            session.add(eval_run)
             await session.commit()
     except Exception:
         logger.warning("realtime_eval_persist_failed id=%s", result.id, exc_info=True)
@@ -272,6 +302,23 @@ def _coerce_runtime_state(value: Any, fallback_state: ChatState) -> AgentRuntime
     return AgentRuntimeState.model_validate(fallback_state.model_dump())
 
 
+def _final_json_from_latest_ai_message(value: Any) -> dict[str, Any] | None:
+    messages = getattr(value, "messages", None)
+    if messages is None and isinstance(value, dict):
+        messages = value.get("messages")
+    if not isinstance(messages, list):
+        return None
+
+    for message in reversed(messages):
+        content = getattr(message, "content", None)
+        message_type = getattr(message, "type", None)
+        if message_type not in (None, "ai", "assistant"):
+            continue
+        if isinstance(content, str) and content.strip():
+            return final_json_from_text(content)
+    return None
+
+
 async def _load_graph_snapshot(graph: Any, config: dict[str, Any], checkpointer: Any) -> Any:
     if not checkpointer:
         return None
@@ -318,6 +365,7 @@ async def run_chat_stream(
     # 收集 SSE events 副本用于实时评测（events 会在流式过程中被清空）
     collected_events: list[dict[str, Any]] = []
     stream_start_time = time.monotonic()
+    started_at = datetime.now(timezone.utc)
     try:
         delete_cancel = getattr(redis_client, "delete", None)
         if callable(delete_cancel):
@@ -420,7 +468,7 @@ async def run_chat_stream(
         runtime_state = _coerce_runtime_state(latest_state, state)
         final_json = runtime_state.final_json
         if not final_json:
-            final_json = fallback_final()
+            final_json = _final_json_from_latest_ai_message(latest_state) or fallback_final()
             runtime_state.final_json = final_json
         final_json = _with_agent_metadata(final_json, runtime_state)
         runtime_state.final_json = final_json
@@ -455,15 +503,27 @@ async def run_chat_stream(
             user_id=runtime_state.user_id,
             user_message=runtime_state.message,
         )
-        yield {"event": "final", "data": {"stopped": False, "answer": final_json}}
 
         # ── 实时评测：异步评分，不阻塞 SSE 流 ──
+        ended_at = datetime.now(timezone.utc)
+        resolved_model_name = None
+        if isinstance(runtime_state.resolved_model_config, dict):
+            resolved_model_name = runtime_state.resolved_model_config.get("model_planner")
+        final_event = {"event": "final", "data": {"stopped": False, "answer": final_json}}
         _schedule_realtime_eval(
             session_id=runtime_state.session_id or state.session_id,
+            user_id=runtime_state.user_id,
+            trace_id=trace_id,
             user_message=runtime_state.message or state.message,
-            events=collected_events,
+            events=[*collected_events, final_event],
             final_json=final_json,
+            model_provider=provider,
+            model_name=resolved_model_name,
+            started_at=started_at,
+            ended_at=ended_at,
+            total_duration_ms=(time.monotonic() - stream_start_time) * 1000,
         )
+        yield final_event
     except Exception as exc:
         if GraphInterrupt and isinstance(exc, GraphInterrupt):
             yield {"event": "paused", "data": {"reason": "manual_pause"}}
@@ -475,6 +535,29 @@ async def run_chat_stream(
             str(exc),
         )
         message = _normalize_llm_upstream_error_message(exc)
+        error_event = {
+            "event": "error",
+            "data": {
+                "message": message,
+                "code": LLM_UPSTREAM_ERROR,
+            },
+        }
+        resolved_model_name = None
+        if isinstance(state.resolved_model_config, dict):
+            resolved_model_name = state.resolved_model_config.get("model_planner")
+        _schedule_realtime_eval(
+            session_id=state.session_id,
+            user_id=state.user_id,
+            trace_id=trace_id,
+            user_message=state.message,
+            events=[*collected_events, error_event],
+            final_json=None,
+            model_provider=provider,
+            model_name=resolved_model_name,
+            started_at=started_at,
+            ended_at=datetime.now(timezone.utc),
+            total_duration_ms=(time.monotonic() - stream_start_time) * 1000,
+        )
         yield {
             "event": "error",
             "data": envelope(None, trace_id, code=LLM_UPSTREAM_ERROR, message=message),

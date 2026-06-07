@@ -8,16 +8,27 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool, StaticPool
 
 from app.infra.models.base import Base
-from app.infra.models.eval import EvalCase, EvalRun, EvalScore, EvalTraceEvent, EvalTrial
+from app.infra.models.eval import EvalCase, EvalJudgeResult, EvalOutcomeResult, EvalRun, EvalScore, EvalTraceEvent, EvalTrial
 
 
 def resolve_eval_database_url(cli_url: str | None = None) -> str | None:
-    return cli_url or os.getenv("EVAL_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if cli_url:
+        return cli_url
+    if os.getenv("EVAL_DATABASE_URL"):
+        return os.getenv("EVAL_DATABASE_URL")
+    try:
+        from app.common.config import settings
+
+        if settings.EVAL_DATABASE_URL:
+            return settings.EVAL_DATABASE_URL
+    except Exception:
+        pass
+    return os.getenv("DATABASE_URL")
 
 
 def is_supported_eval_database_url(url: str | None) -> bool:
@@ -90,6 +101,8 @@ class EvalPersistenceStore:
         if existing:
             run_id = existing.id
             await db.execute(delete(EvalTraceEvent).where(EvalTraceEvent.run_id == run_id))
+            await db.execute(delete(EvalJudgeResult).where(EvalJudgeResult.run_id == run_id))
+            await db.execute(delete(EvalOutcomeResult).where(EvalOutcomeResult.run_id == run_id))
             await db.execute(delete(EvalScore).where(EvalScore.run_id == run_id))
             await db.execute(delete(EvalTrial).where(EvalTrial.run_id == run_id))
             await db.execute(delete(EvalCase).where(EvalCase.run_id == run_id))
@@ -166,6 +179,44 @@ class EvalPersistenceStore:
                             metric=str(metric),
                             score=float(value),
                         ))
+                for detail in trial_data.get("outcome_details", []) if isinstance(trial_data.get("outcome_details"), list) else []:
+                    if not isinstance(detail, dict):
+                        continue
+                    db.add(EvalOutcomeResult(
+                        id=str(uuid4()),
+                        run_id=run_id,
+                        case_id=case_row.case_id,
+                        trial_number=trial.trial_number,
+                        verifier=str(detail.get("verifier") or "unknown"),
+                        score=float(detail.get("score") or 0.0),
+                        passed=bool(detail.get("passed")),
+                        failures_json=detail.get("failures") if isinstance(detail.get("failures"), list) else [],
+                        details_json=detail.get("details") if isinstance(detail.get("details"), dict) else {},
+                    ))
+                judge_scores = trial_data.get("judge_scores") if isinstance(trial_data.get("judge_scores"), dict) else {}
+                judge_reasons = trial_data.get("judge_reasons") if isinstance(trial_data.get("judge_reasons"), dict) else {}
+                if not judge_scores and trial_data.get("llm_judge_skipped_reason"):
+                    db.add(EvalJudgeResult(
+                        id=str(uuid4()),
+                        run_id=run_id,
+                        case_id=case_row.case_id,
+                        trial_number=trial.trial_number,
+                        metric="llm_judge",
+                        skipped_reason=str(trial_data.get("llm_judge_skipped_reason")),
+                        rubric_version="v1",
+                    ))
+                for metric, value in judge_scores.items():
+                    db.add(EvalJudgeResult(
+                        id=str(uuid4()),
+                        run_id=run_id,
+                        case_id=case_row.case_id,
+                        trial_number=trial.trial_number,
+                        metric=str(metric),
+                        score=float(value) if isinstance(value, (int, float)) else None,
+                        reason=judge_reasons.get(metric) if isinstance(judge_reasons, dict) else None,
+                        rubric_version="v1",
+                        raw_json={"scores": judge_scores, "reasons": judge_reasons},
+                    ))
                 timeline = trial_data.get("trace_timeline", []) if isinstance(trial_data.get("trace_timeline"), list) else []
                 for index, event in enumerate(timeline):
                     if not isinstance(event, dict):
@@ -188,7 +239,11 @@ class EvalPersistenceStore:
     async def list_reports(self) -> list[dict[str, Any]]:
         await self.init_schema()
         async with self.session_factory() as db:
-            rows = (await db.execute(select(EvalRun).order_by(EvalRun.timestamp.desc().nullslast(), EvalRun.created_at.desc()))).scalars().all()
+            rows = (await db.execute(
+                select(EvalRun)
+                .where(or_(EvalRun.suite.is_(None), EvalRun.suite != "realtime"))
+                .order_by(EvalRun.timestamp.desc().nullslast(), EvalRun.created_at.desc())
+            )).scalars().all()
             return [self._run_summary(row) for row in rows]
 
     async def load_report(self, report_name: str) -> dict[str, Any] | None:
@@ -224,7 +279,12 @@ class EvalPersistenceStore:
         if run:
             return run
         if report_name == "latest.json":
-            return await db.scalar(select(EvalRun).order_by(EvalRun.timestamp.desc().nullslast(), EvalRun.created_at.desc()).limit(1))
+            return await db.scalar(
+                select(EvalRun)
+                .where(or_(EvalRun.suite.is_(None), EvalRun.suite != "realtime"))
+                .order_by(EvalRun.timestamp.desc().nullslast(), EvalRun.created_at.desc())
+                .limit(1)
+            )
         return None
 
     def _run_summary(self, run: EvalRun) -> dict[str, Any]:

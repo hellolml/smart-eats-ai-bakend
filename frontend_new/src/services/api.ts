@@ -726,6 +726,72 @@ export const appApi = {
         scope: 'internal'
       });
     },
+    async createEvalJob(payload: {
+      runner: 'fixture' | 'live';
+      suite: 'quick' | 'full' | 'live-smoke';
+      num_trials: number;
+      base_url?: string;
+      include_llm_judge?: boolean;
+      outcome_verify?: boolean;
+      persist_db?: boolean;
+      require_db_persist?: boolean;
+    }) {
+      return request<any>('/eval-jobs', { scope: 'internal', method: 'POST', body: payload });
+    },
+    async listEvalJobs(params: { status?: string; limit?: number; offset?: number } = {}) {
+      const qs = new URLSearchParams();
+      if (params.status) qs.set('status', params.status);
+      if (params.limit) qs.set('limit', String(params.limit));
+      if (params.offset) qs.set('offset', String(params.offset));
+      return request<any>(`/eval-jobs?${qs.toString()}`, { scope: 'internal' });
+    },
+    async getEvalJob(jobId: string) {
+      return request<any>(`/eval-jobs/${encodeURIComponent(jobId)}`, { scope: 'internal' });
+    },
+    async cancelEvalJob(jobId: string) {
+      return request<any>(`/eval-jobs/${encodeURIComponent(jobId)}/cancel`, { scope: 'internal', method: 'POST' });
+    },
+    async listDatasets() {
+      return request<any>('/eval-datasets', { scope: 'internal' });
+    },
+    async listDatasetCases(dataset: string) {
+      return request<any>(`/eval-datasets/${encodeURIComponent(dataset)}/cases`, { scope: 'internal' });
+    },
+    async getMonitoringOverview(window: string = '1h') {
+      return request<any>(`/monitoring/overview?window=${encodeURIComponent(window)}`, { scope: 'internal' });
+    },
+    async listMonitoringTraces(params: { limit?: number; offset?: number; scene?: string; worker?: string; tool?: string; status?: string } = {}) {
+      const qs = new URLSearchParams();
+      if (params.limit) qs.set('limit', String(params.limit));
+      if (params.offset) qs.set('offset', String(params.offset));
+      if (params.scene) qs.set('scene', params.scene);
+      if (params.worker) qs.set('worker', params.worker);
+      if (params.tool) qs.set('tool', params.tool);
+      if (params.status) qs.set('status', params.status);
+      return request<any>(`/monitoring/traces?${qs.toString()}`, { scope: 'internal' });
+    },
+    async getMonitoringTrace(runId: string) {
+      return request<any>(`/monitoring/traces/${encodeURIComponent(runId)}`, { scope: 'internal' });
+    },
+    async getMonitoringFailures(window: string = '24h') {
+      return request<any>(`/monitoring/failures?window=${encodeURIComponent(window)}`, { scope: 'internal' });
+    },
+    async getMonitoringCostLatency(window: string = '24h') {
+      return request<any>(`/monitoring/cost-latency?window=${encodeURIComponent(window)}`, { scope: 'internal' });
+    },
+    async getMonitoringSafety(window: string = '24h') {
+      return request<any>(`/monitoring/safety?window=${encodeURIComponent(window)}`, { scope: 'internal' });
+    },
+    async listMonitoringReviews(params: { decision?: string; limit?: number; offset?: number } = {}) {
+      const qs = new URLSearchParams();
+      if (params.decision) qs.set('decision', params.decision);
+      if (params.limit) qs.set('limit', String(params.limit));
+      if (params.offset) qs.set('offset', String(params.offset));
+      return request<any>(`/monitoring/reviews?${qs.toString()}`, { scope: 'internal' });
+    },
+    async submitMonitoringReview(runId: string, payload: { decision: string; reason?: string; notes?: string }) {
+      return request<any>(`/monitoring/reviews/${encodeURIComponent(runId)}`, { scope: 'internal', method: 'POST', body: payload });
+    },
     async listRealtimeEvals(params: { limit?: number; offset?: number } = {}) {
       const qs = new URLSearchParams();
       if (params.limit) qs.set('limit', String(params.limit));
@@ -734,6 +800,49 @@ export const appApi = {
     },
     async getRealtimeEvalSummary(hours: number = 24) {
       return request<any>(`/realtime-eval/summary?hours=${hours}`, { scope: 'internal' });
+    },
+    // ── Outcome / Judge / Alert / Dataset Versions ──
+    async getEvalRunOutcomes(runId: string) {
+      return request<any>(`/eval-runs/${encodeURIComponent(runId)}/outcomes`, { scope: 'internal' });
+    },
+    async getEvalRunJudgeResults(runId: string) {
+      return request<any>(`/eval-runs/${encodeURIComponent(runId)}/judge-results`, { scope: 'internal' });
+    },
+    async getJudgeHumanAgreement(runId?: string, window: string = '30d') {
+      const qs = new URLSearchParams();
+      qs.set('window', window);
+      const path = runId
+        ? `/eval-runs/${encodeURIComponent(runId)}/judge-agreement?${qs.toString()}`
+        : `/eval-runs/judge-agreement?${qs.toString()}`;
+      return request<any>(path, { scope: 'internal' });
+    },
+    async getRubricConfig() {
+      return request<any>('/rubric', { scope: 'internal' });
+    },
+    async listEvalAlerts(params: { status?: string; limit?: number; offset?: number } = {}) {
+      const qs = new URLSearchParams();
+      if (params.status) qs.set('status', params.status);
+      if (params.limit) qs.set('limit', String(params.limit));
+      if (params.offset) qs.set('offset', String(params.offset));
+      return request<any>(`/eval-alerts?${qs.toString()}`, { scope: 'internal' });
+    },
+    async acknowledgeEvalAlert(alertId: string) {
+      return request<any>(`/eval-alerts/${encodeURIComponent(alertId)}/ack`, { scope: 'internal', method: 'POST' });
+    },
+    async resolveEvalAlert(alertId: string) {
+      return request<any>(`/eval-alerts/${encodeURIComponent(alertId)}/resolve`, { scope: 'internal', method: 'POST' });
+    },
+    async listDatasetVersions(dataset: string) {
+      return request<any>(`/eval-datasets/${encodeURIComponent(dataset)}/versions`, { scope: 'internal' });
+    },
+    async createDatasetVersion(dataset: string, payload: { version: string; status?: string; created_by?: string }) {
+      return request<any>(`/eval-datasets/${encodeURIComponent(dataset)}/versions`, { scope: 'internal', method: 'POST', body: payload });
+    },
+    async createDatasetCaseFromTrace(dataset: string, payload: { run_id: string; version?: string; priority?: string; category?: string; owner?: string }) {
+      return request<any>(`/eval-datasets/${encodeURIComponent(dataset)}/cases/from-trace`, { scope: 'internal', method: 'POST', body: payload });
+    },
+    async updateEvalRunExperiment(runId: string, payload: Record<string, any>) {
+      return request<any>(`/eval-runs/${encodeURIComponent(runId)}/experiment`, { scope: 'internal', method: 'PATCH', body: payload });
     }
   }
 };

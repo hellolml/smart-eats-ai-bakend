@@ -89,7 +89,13 @@ class FoodAssistantHooks(BaseSkillHooks):
 
         if tool_name in {"get_ip_location", "geocode_location", "search_restaurants"}:
             _set_food_mode(state, "eat_out")
-            return self.restaurant_finder.handle_tool_result(state, tool_name, result)
+            handled = self.restaurant_finder.handle_tool_result(state, tool_name, result)
+            if handled:
+                return handled
+            if tool_name == "search_restaurants" and isinstance(result, list) and result:
+                _ensure_context(state)["last_restaurants"] = result
+                return _restaurant_final(result)
+            return None
 
         if tool_name == "food_decision":
             return self._handle_food_decision(state, result)
@@ -132,6 +138,13 @@ class FoodAssistantHooks(BaseSkillHooks):
             }
         ]
 
+    def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
+        if _current_food_mode(state) != "eat_out":
+            return None
+        if "search_restaurants" not in allowed_tools:
+            return None
+        return [tool for tool in allowed_tools if tool != "food_decision"]
+
     def _handle_food_decision(self, state: Any, result: Any) -> dict[str, Any] | None:
         if not isinstance(result, dict) or result.get("error"):
             return None
@@ -140,12 +153,11 @@ class FoodAssistantHooks(BaseSkillHooks):
         decision_type = str(decision.get("type") or "").strip()
         if mode == "eat_out" and decision_type != "restaurant":
             context = _ensure_context(state)
+            restaurants = context.get("last_restaurants")
+            if isinstance(restaurants, list) and restaurants:
+                return _restaurant_final(restaurants)
             context["last_search_error"] = context.get("last_search_error") or "food_decision_non_restaurant"
-            return _note_final(
-                "我会按“出去吃”继续找附近餐厅，还需要你的城市、商圈或当前位置。",
-                "外出吃饭不能用菜名兜底",
-                ["发我一个城市或地标，比如“长沙五一广场附近”。", "也可以打开定位后再试一次。"],
-            )
+            return None
         return self.food_decision.handle_tool_result(state, "food_decision", result)
 
 
@@ -194,5 +206,43 @@ def _note_final(title: str, reason: str, followups: list[str]) -> dict[str, Any]
     return {
         "recommendations": [{"type": "note", "title": title, "reason": reason}],
         "followups": followups,
+        "warnings": [],
+    }
+
+
+def _restaurant_final(restaurants: list[Any]) -> dict[str, Any]:
+    rows = [item for item in restaurants if isinstance(item, dict)]
+    recommendations = []
+    for item in rows[:3]:
+        name = str(item.get("name") or "附近餐厅").strip()
+        address = str(item.get("address") or item.get("distance_text") or "").strip()
+        rating = item.get("rating")
+        price = item.get("price")
+        details = []
+        if address:
+            details.append(address)
+        if rating:
+            details.append(f"评分 {rating}")
+        if price:
+            details.append(f"人均 {price}")
+        recommendations.append(
+            {
+                "type": "restaurant",
+                "title": name,
+                "reason": "；".join(details) or "基于当前位置和关键词搜索到的附近餐厅",
+                "raw": item,
+            }
+        )
+    if not recommendations:
+        return _note_final(
+            "我暂时没有拿到可用餐厅结果。",
+            "餐厅搜索结果为空",
+            ["换一个商圈或地标再试一次。", "也可以告诉我预算和口味，我再缩小范围。"],
+        )
+    return {
+        "scene": "eat",
+        "agent_id": "food_assistant",
+        "recommendations": recommendations,
+        "followups": ["要不要我按距离、评分或口味再帮你筛一轮？", "选定一家后我可以继续帮你规划路线。"],
         "warnings": [],
     }

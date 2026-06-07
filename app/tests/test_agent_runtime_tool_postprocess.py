@@ -74,7 +74,7 @@ async def test_apply_official_tool_postprocess_records_tool_observation_without_
     )
 
     assert chat_state.final_json is None
-    assert chat_state.tool_calls == [{"name": "geocode_location", "args": {"query": "长沙市政府"}, "latency_ms": 0}]
+    assert chat_state.tool_calls == [{"name": "geocode_location", "args": {"query": "长沙市政府"}, "latency_ms": None}]
     assert chat_state.observations == [
         {
             "tool": "geocode_location",

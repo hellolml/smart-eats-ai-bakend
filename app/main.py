@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import router as v1_router
@@ -76,6 +76,28 @@ async def http_error_handler(request: Request, exc: HTTPException):
 
 
 app.include_router(v1_router)
+
+
+@app.get("/evals.html", response_class=HTMLResponse, response_model=None)
+async def evals_debug_page() -> Response:
+    """Serve the legacy static eval page only for local/dev/test debugging."""
+    if (settings.ENV or "").lower() in {"production", "prod"}:
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="zh-CN">
+              <head><meta charset="utf-8"><title>评测与监控平台</title></head>
+              <body style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;margin:40px;line-height:1.7">
+                <h1>评测与监控平台</h1>
+                <p><code>/evals.html</code> 是 local/dev 调试入口，生产环境请使用前端受保护入口：</p>
+                <p><a href="/admin/evaluations">/admin/evaluations</a></p>
+              </body>
+            </html>
+            """,
+            status_code=200,
+        )
+    return FileResponse("app/static/evals.html")
+
 
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
 

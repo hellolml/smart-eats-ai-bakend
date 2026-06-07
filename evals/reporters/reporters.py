@@ -122,6 +122,10 @@ class JsonReporter:
                     "error_reason": t.trace.error_reason,
                     "missing_metrics": t.missing_metrics,
                     "threshold_failures": t.threshold_failures,
+                    "outcome_scores": t.outcome_scores,
+                    "outcome_failures": t.outcome_failures,
+                    "side_effect_failures": t.side_effect_failures,
+                    "outcome_details": t.outcome_details,
                     "phoenix_trace_url": t.trace.phoenix_trace_url,
                     "judge_scores": t.trace.judge_scores,
                     "judge_reasons": t.trace.judge_reasons,
@@ -166,7 +170,9 @@ class JsonReporter:
             "model_provider": self.metadata.get("model_provider") or os.getenv("LLM_PROVIDER"),
             "model_name": self.metadata.get("model_name") or os.getenv("OPENAI_MODEL_PLANNER") or os.getenv("QWEN_MODEL_PLANNER"),
             "include_llm_judge": bool(self.metadata.get("include_llm_judge", False)),
-            "report_schema_version": "1.1",
+            "outcome_verify": bool(self.metadata.get("outcome_verify", False)),
+            "dataset_version": self.metadata.get("dataset_version"),
+            "report_schema_version": "1.2",
         }
         return data
 

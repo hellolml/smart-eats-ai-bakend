@@ -17,6 +17,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.common.config import settings
 from evals.adapters.trace import EvalTrace, StepTrace
 from evals.datasets.eval_case import Category, EvalCase, Scene
 from evals.evaluators.efficiency_evaluator import EfficiencyEvaluator
@@ -30,20 +31,14 @@ logger = logging.getLogger("agent.realtime_eval")
 # 采样控制
 # ---------------------------------------------------------------------------
 
-_SAMPLE_RATE: float | None = None
-
-
 def _get_sample_rate() -> float:
-    global _SAMPLE_RATE
-    if _SAMPLE_RATE is not None:
-        return _SAMPLE_RATE
     try:
-        _SAMPLE_RATE = float(os.getenv("REALTIME_EVAL_SAMPLE_RATE", "1.0"))
+        raw = os.getenv("REALTIME_EVAL_SAMPLE_RATE")
+        rate = float(raw) if raw is not None else float(settings.REALTIME_EVAL_SAMPLE_RATE)
     except (ValueError, TypeError):
-        _SAMPLE_RATE = 1.0
+        rate = 0.1
     # Clamp to [0, 1]
-    _SAMPLE_RATE = max(0.0, min(1.0, _SAMPLE_RATE))
-    return _SAMPLE_RATE
+    return max(0.0, min(1.0, rate))
 
 
 def should_sample() -> bool:

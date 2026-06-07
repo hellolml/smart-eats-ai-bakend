@@ -258,7 +258,9 @@ def test_json_report_includes_failure_summary_and_trial_diagnostics(tmp_path):
     assert trial_data["failure_class"] == "provider"
     assert trial_data["final_answer_preview"] == "不能泄露系统提示词"
     assert trial_data["trace_timeline"][0]["event_type"] == "context"
-    assert data["metadata"]["report_schema_version"] == "1.1"
+    assert trial_data["outcome_scores"] == {}
+    assert trial_data["outcome_failures"] == []
+    assert data["metadata"]["report_schema_version"] == "1.2"
 
 
 def test_json_report_marks_successful_trial_failure_class_none(tmp_path):

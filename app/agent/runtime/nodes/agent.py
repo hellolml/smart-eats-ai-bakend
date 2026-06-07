@@ -8,6 +8,26 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.common.config import settings
 
 
+def _emit_model_usage(chat_state: Any, ai_message: Any, planner: Any) -> None:
+    """将 LLM 调用的 token usage 作为 model_usage 事件 emit 到 events 列表."""
+    usage = None
+    additional_kwargs = getattr(ai_message, "additional_kwargs", None)
+    if isinstance(additional_kwargs, dict):
+        usage = additional_kwargs.get("usage")
+    if not isinstance(usage, dict) or not usage:
+        return
+    provider = usage.get("provider") or getattr(getattr(planner, "config", None), "name", None)
+    model_name = usage.get("model_name") or getattr(getattr(planner, "config", None), "model_planner", None)
+    chat_state.events.append({
+        "event": "model_usage",
+        "data": {
+            "provider": provider,
+            "model": model_name,
+            "usage": usage,
+        },
+    })
+
+
 def make_agent_node(*, agent_config: Any, planner: Any, registered_tools: list[str]):
     async def agent_node(state: dict[str, Any]) -> dict[str, Any]:
         from app.agent.llm_adapters import OpenAIPlanner
@@ -115,6 +135,7 @@ def make_agent_node(*, agent_config: Any, planner: Any, registered_tools: list[s
                 current_langchain_tools,
                 image_parts=image_parts or None,
             )
+            _emit_model_usage(chat_state, ai_message, active_planner)
         except Exception as exc:
             msg = str(exc)
             if image_parts and ("image input" in msg.lower() or "image" in msg.lower() or "vision" in msg.lower()):
@@ -138,6 +159,7 @@ def make_agent_node(*, agent_config: Any, planner: Any, registered_tools: list[s
                     current_langchain_tools,
                     image_parts=None,
                 )
+                _emit_model_usage(chat_state, ai_message, active_planner)
             else:
                 raise
         raw_content = ai_message.content
@@ -199,6 +221,11 @@ def make_agent_node(*, agent_config: Any, planner: Any, registered_tools: list[s
             if tool_calls:
                 max_tool_calls = runtime_builder._skill_max_tool_calls_per_turn(chat_state.context)
                 limited_tool_calls = runtime_builder._limit_skill_tool_calls(tool_calls, max_tool_calls=max_tool_calls)
+                limited_tool_calls = runtime_builder._enforce_tool_execution_policy(
+                    chat_state,
+                    limited_tool_calls,
+                    agent_config=agent_config,
+                )
                 if len(limited_tool_calls) < len(tool_calls):
                     runtime_builder.logger.info(
                         "skill_tool_calls_limited session_id=%s max=%s original=%s kept=%s",
@@ -207,10 +234,13 @@ def make_agent_node(*, agent_config: Any, planner: Any, registered_tools: list[s
                         len(tool_calls),
                         len(limited_tool_calls),
                     )
-                ai_message.tool_calls = limited_tool_calls
-                output = runtime_builder._state_update(chat_state)
-                output["messages"] = [ai_message]
-                return output
+                if limited_tool_calls:
+                    ai_message.tool_calls = limited_tool_calls
+                    output = runtime_builder._state_update(chat_state)
+                    output["messages"] = [ai_message]
+                    return output
+                if chat_state.final_json:
+                    return runtime_builder._state_update(chat_state)
 
         chat_state.final_json = runtime_builder.final_json_from_text(content)
         return runtime_builder._state_update(chat_state)

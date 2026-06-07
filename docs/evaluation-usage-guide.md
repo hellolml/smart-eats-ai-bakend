@@ -405,6 +405,21 @@ http://127.0.0.1:8000/evals.html
 
 当前页面是**只读评测工作台**，不会从 Web 页面触发评测任务，也不会执行 shell 命令。执行评测仍使用 `run_eval.py`，页面只负责读取、对比和展示已有报告。
 
+长期主入口已经迁移到两套前端：
+
+| 入口 | 用途 | 路由 |
+| --- | --- | --- |
+| `frontend` | 桌面/主 Web 工作台 | `/admin/evaluations` |
+| `frontend_new` | 移动/新版体验入口 | 设置页中的“评测工作台”，screen 为 `eval-workbench` |
+| `app/static/evals.html` | local/dev 调试入口 | `/evals.html` |
+
+两套长期入口都展示“评测与监控平台”，并分成两个域：
+
+- **离线评测**：Runs、Compare、Datasets、Case Detail、运行历史、失败分析。
+- **在线监控**：实时指标、Trace Search、Failure Analysis、Cost & Latency、Safety & Governance、Human Review。
+
+前端只负责展示和入口权限提示；真正的权限控制在后端，所有 `/api/v1/internal/*` 评测/监控 API 都经过 `require_eval_admin`。v1 白名单使用 `EVAL_ADMIN_PHONES`，未配置白名单时本地/dev 环境允许已登录用户访问。
+
 新版 JSON report 会额外包含：
 
 - `metadata`：suite、runner、base_url、commit、branch、model、schema version。
@@ -532,6 +547,51 @@ PostgreSQL 会保存规范化表和原始 JSON：
 - `eval_trace_events`：trial 的 trace timeline。
 
 `latest.json` 不会作为独立 run 重复写入；如果有对应的 timestamp report，会持久化实际 `eval_report_*.json`。
+
+### 9.5 在线监控持久化
+
+生产/真实用户对话的在线监控数据写入 conversation 表：
+
+- `conversation_runs`：一次用户对话运行，包含 session、user、trace、scene、worker、模型、状态、耗时和 final state。
+- `conversation_trace_events`：对话事件流，包含 context、tool_call、tool_result、final、error 等。
+- `conversation_tool_calls`：工具调用明细，包含工具名、参数、成功/失败、错误原因、耗时和成本。
+- `conversation_metrics`：单次 run 的在线指标，例如 `task_success_proxy`、`tool_error_rate`、`recovery_rate`、`no_leak`。
+- `conversation_eval_jobs`：异步评测任务记录。
+- `conversation_human_reviews`：人工审核记录。
+- `conversation_costs`：token、tool 和总成本。
+
+在线评测默认关闭：
+
+```bash
+export REALTIME_EVAL_ENABLED=false
+export REALTIME_EVAL_SAMPLE_RATE=0.1
+export REALTIME_EVAL_DEEP_JUDGE_ENABLED=false
+export REALTIME_EVAL_RETENTION_DAYS=30
+```
+
+打开后，`run_chat_stream` 会在对话结束后异步调度轻量评测，不阻塞 SSE 用户响应。DB 写入失败只记录 warning。
+
+新增在线监控 API：
+
+```text
+GET /api/v1/internal/monitoring/overview?window=5m|1h|24h|7d
+GET /api/v1/internal/monitoring/traces
+GET /api/v1/internal/monitoring/traces/{run_id}
+GET /api/v1/internal/monitoring/failures?window=24h
+GET /api/v1/internal/monitoring/cost-latency?window=24h
+GET /api/v1/internal/monitoring/safety?window=24h
+GET /api/v1/internal/monitoring/reviews
+POST /api/v1/internal/monitoring/reviews/{run_id}
+```
+
+旧接口仍保留兼容：
+
+```text
+GET /api/v1/internal/realtime-eval/recent
+GET /api/v1/internal/realtime-eval/summary
+```
+
+旧接口现在优先读取 `conversation_*` 表；没有新表数据时 fallback 到旧 `EvalRun(suite="realtime")`。
 
 ## 10. 阈值策略
 

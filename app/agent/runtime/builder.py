@@ -43,6 +43,8 @@ _RUNTIME_CONFIG_DB_KEY = "agent_runtime_db"
 _RUNTIME_CONFIG_REDIS_KEY = "agent_runtime_redis_client"
 
 SUBMIT_FINAL_TOOL_NAME = "submit_final_answer"
+MAX_TOTAL_EXTERNAL_TOOL_CALLS_PER_RUN = 10
+MAX_REPEATED_EXTERNAL_TOOL_CALLS_PER_RUN = 2
 CORE_TOOL_NAMES: tuple[str, ...] = (
     "memory_search",
     "memory_write",
@@ -324,6 +326,103 @@ def _limit_skill_tool_calls(
     return limited
 
 
+def _canonical_tool_args(args: Any) -> str:
+    if not isinstance(args, dict):
+        return "{}"
+    try:
+        return json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
+    except TypeError:
+        return str(sorted(args.items()))
+
+
+def _tool_signature(tool_name: Any, args: Any) -> str:
+    return f"{tool_name}:{_canonical_tool_args(args)}"
+
+
+def _external_tool_calls(state: AgentRuntimeState) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in (state.tool_calls or [])
+        if isinstance(item, dict) and item.get("name") != SUBMIT_FINAL_TOOL_NAME
+    ]
+
+
+def _emit_execution_guard_event(state: AgentRuntimeState, *, reason: str, blocked: list[dict[str, Any]]) -> None:
+    state.events.append(
+        {
+            "event": "recovery",
+            "data": {
+                "path": "agent_execution_guard",
+                "trigger": reason,
+                "message": "Agent tool loop detected; returning best-effort final from existing observations.",
+                "blocked_tools": [
+                    {
+                        "name": item.get("name"),
+                        "args": item.get("args") if isinstance(item.get("args"), dict) else {},
+                    }
+                    for item in blocked
+                ],
+            },
+        }
+    )
+
+
+def _enforce_tool_execution_policy(
+    state: AgentRuntimeState,
+    tool_calls: list[dict[str, Any]],
+    *,
+    agent_config: AgentRuntimeConfig | None = None,
+) -> list[dict[str, Any]]:
+    """Apply run-level loop guards before handing tool calls to LangGraph.
+
+    Skill-level limits cap a single model turn. This policy caps the whole run,
+    which prevents a model from repeatedly asking for the same tool in later
+    turns while never producing a useful final answer.
+    """
+    external_history = _external_tool_calls(state)
+    total_external = len(external_history)
+    seen: dict[str, int] = {}
+    for item in external_history:
+        signature = _tool_signature(item.get("name"), item.get("args"))
+        seen[signature] = seen.get(signature, 0) + 1
+
+    allowed: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    blocked_reason: str | None = None
+    next_total = total_external
+    for call in tool_calls:
+        if call.get("name") == SUBMIT_FINAL_TOOL_NAME:
+            allowed.append(call)
+            continue
+        if next_total >= MAX_TOTAL_EXTERNAL_TOOL_CALLS_PER_RUN:
+            blocked.append(call)
+            blocked_reason = "max_total_tool_calls"
+            continue
+        signature = _tool_signature(call.get("name"), call.get("args"))
+        if seen.get(signature, 0) >= MAX_REPEATED_EXTERNAL_TOOL_CALLS_PER_RUN:
+            blocked.append(call)
+            blocked_reason = "repeated_tool_call"
+            continue
+        allowed.append(call)
+        seen[signature] = seen.get(signature, 0) + 1
+        next_total += 1
+
+    if blocked and not allowed:
+        state.final_json = _best_effort_final_from_observations(state, agent_config)
+        final = dict(state.final_json or {})
+        warnings = final.get("warnings")
+        if not isinstance(warnings, list):
+            warnings = []
+        warnings.append("agent_execution_loop")
+        final["warnings"] = warnings
+        final["failure_class"] = "agent_execution_loop"
+        state.final_json = final
+        _emit_execution_guard_event(state, reason=blocked_reason or "tool_execution_guard", blocked=blocked)
+    elif blocked:
+        _emit_execution_guard_event(state, reason=blocked_reason or "tool_execution_guard", blocked=blocked)
+    return allowed
+
+
 def _build_tool_runtime_payload(
     chat_state: AgentRuntimeState,
     *,
@@ -419,7 +518,7 @@ async def _apply_official_tool_postprocess(
             continue
 
         result_preview = _build_result_preview(chat_state, tool_name, result)
-        chat_state.tool_calls.append({"name": tool_name, "args": args, "latency_ms": 0})
+        chat_state.tool_calls.append({"name": tool_name, "args": args, "latency_ms": None})
         chat_state.observations.append({"tool": tool_name, "result": result})
 
         handled = _hook_manager_from_context(chat_state.context).handle_tool_result(chat_state, tool_name, result)
@@ -434,7 +533,7 @@ async def _apply_official_tool_postprocess(
                 tool_name,
                 {
                     "args": args,
-                    "latency_ms": 0,
+                    "latency_ms": None,
                     "result": result,
                     "result_preview": result_preview,
                 },
@@ -462,7 +561,6 @@ async def _apply_official_tool_postprocess(
                 "data": {
                     "name": tool_name,
                     "args": args,
-                    "latency_ms": 0,
                     "result_preview": result_preview,
                 },
             }

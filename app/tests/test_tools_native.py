@@ -51,6 +51,37 @@ def test_planner_tool_schema_extraction_hides_injected_state():
     assert "runtime_context" not in str(schemas[0]["input_schema"])
 
 
+def test_planner_tool_schema_extraction_accepts_openai_function_dicts():
+    planner = OpenAIPlanner(provider="openai")
+
+    schemas = planner._langchain_tools_to_available_schemas(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "transfer_to_food_advisor",
+                    "description": "Handoff to food advisor.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"task": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+    )
+
+    assert schemas == [
+        {
+            "name": "transfer_to_food_advisor",
+            "description": "Handoff to food advisor.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"task": {"type": "string"}},
+            },
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_toolnode_injects_runtime_context_into_native_tool():
     class DemoArgs(BaseModel):

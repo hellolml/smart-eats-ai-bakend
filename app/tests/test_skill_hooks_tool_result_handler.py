@@ -9,6 +9,7 @@ from agent_skills.restaurant_finder.hooks import RestaurantFinderHooks
 from agent_skills.route_planner.hooks import RoutePlannerHooks
 from agent_skills.travel_plan_new.hooks import TravelPlanNewHooks
 from app.agent.runtime.graph import AgentRuntimeState
+from app.agent.runtime import builder as runtime_builder
 
 
 def test_home_chef_hook_records_empty_fridge_context():
@@ -83,9 +84,58 @@ def test_food_assistant_blocks_eat_out_food_decision_fallback():
 
     handled = FoodAssistantHooks().handle_tool_result(state, "food_decision", result)
 
+    assert handled is None
+    assert state.context["last_search_error"] == "food_decision_non_restaurant"
+
+
+def test_food_assistant_finalizes_when_restaurants_found():
+    state = AgentRuntimeState(session_id="s1", message="出去吃粉面")
+
+    handled = FoodAssistantHooks().handle_tool_result(
+        state,
+        "search_restaurants",
+        [
+            {"name": "一食坊粉面", "address": "丰顺路惟盛园", "rating": "4.6"},
+            {"name": "国欢粉面馆", "address": "西二环辅路"},
+        ],
+    )
+
     assert handled is not None
-    assert "黄焖鸡米饭" not in handled["recommendations"][0]["title"]
-    assert "餐厅" in handled["recommendations"][0]["title"]
+    assert handled["recommendations"][0]["type"] == "restaurant"
+    assert handled["recommendations"][0]["title"] == "一食坊粉面"
+    assert state.context["last_restaurants"][0]["name"] == "一食坊粉面"
+
+
+def test_food_assistant_filters_food_decision_for_eat_out_mode():
+    state = AgentRuntimeState(session_id="s1", message="出去吃粉面")
+    state.context = {"food_mode": "eat_out"}
+
+    allowed = FoodAssistantHooks().filter_allowed_tools(
+        state,
+        ["food_decision", "search_restaurants", "geocode_location"],
+    )
+
+    assert allowed == ["search_restaurants", "geocode_location"]
+
+
+def test_runtime_blocks_repeated_tool_call_loop():
+    state = AgentRuntimeState(
+        session_id="s1",
+        tool_calls=[
+            {"name": "search_restaurants", "args": {"query": "粉面"}},
+            {"name": "search_restaurants", "args": {"query": "粉面"}},
+        ],
+    )
+
+    allowed = runtime_builder._enforce_tool_execution_policy(
+        state,
+        [{"name": "search_restaurants", "args": {"query": "粉面"}, "id": "call_1"}],
+    )
+
+    assert allowed == []
+    assert state.final_json is not None
+    assert state.final_json["failure_class"] == "agent_execution_loop"
+    assert state.events[-1]["event"] == "recovery"
 
 
 def test_food_assistant_allows_decide_food_result():

@@ -1,0 +1,20 @@
+default:
+  per_call: 0
+
+search_restaurants:
+  per_call: 0
+
+travel_search_poi:
+  per_call: 0
+
+geocode_location:
+  per_call: 0
+
+plan_route:
+  per_call: 0
+
+amap_route:
+  per_call: 0
+
+amap_search:
+  per_call: 0

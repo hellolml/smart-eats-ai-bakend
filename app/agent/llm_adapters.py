@@ -209,9 +209,14 @@ class OpenAIPlanner:
             )
         content = decision.get("content") if isinstance(decision, dict) else ""
         tool_calls = decision.get("tool_calls") if isinstance(decision, dict) else []
+        usage = decision.get("usage") if isinstance(decision, dict) else None
+        additional_kwargs: dict[str, Any] = {}
+        if usage:
+            additional_kwargs["usage"] = usage
         return AIMessage(
             content=content if isinstance(content, str) else "",
             tool_calls=tool_calls if isinstance(tool_calls, list) else [],
+            additional_kwargs=additional_kwargs,
         )
 
     def _messages_to_system_user(self, messages: list[Any]) -> tuple[str, str]:
@@ -254,6 +259,29 @@ class OpenAIPlanner:
     def _langchain_tools_to_available_schemas(self, tools: list[Any]) -> list[dict[str, Any]]:
         available: list[dict[str, Any]] = []
         for tool in tools:
+            if isinstance(tool, dict):
+                function = tool.get("function") if isinstance(tool.get("function"), dict) else None
+                if function is not None:
+                    name = function.get("name")
+                    description = function.get("description")
+                    input_schema = function.get("parameters")
+                else:
+                    name = tool.get("name")
+                    description = tool.get("description")
+                    input_schema = tool.get("parameters") or tool.get("input_schema")
+                if not isinstance(name, str) or not name or name == "submit_final_answer":
+                    continue
+                if not isinstance(input_schema, dict):
+                    input_schema = {"type": "object", "properties": {}}
+                available.append(
+                    {
+                        "name": name,
+                        "description": str(description or ""),
+                        "input_schema": input_schema,
+                    }
+                )
+                continue
+
             name = getattr(tool, "name", None)
             if not isinstance(name, str) or not name or name == "submit_final_answer":
                 continue
@@ -398,9 +426,31 @@ class OpenAIPlanner:
                 }
             )
 
+        usage = self._extract_usage_from_response(response, model)
+
         return {
             "content": content,
             "tool_calls": normalized_calls,
+            "usage": usage,
+        }
+
+    def _extract_usage_from_response(self, response: Any, model: str | None = None) -> dict[str, Any]:
+        """从 OpenAI-compatible 响应中提取 token usage 信息."""
+        usage_obj = getattr(response, "usage", None)
+        if not usage_obj:
+            return {}
+        return {
+            "input_tokens": getattr(usage_obj, "prompt_tokens", None) or 0,
+            "output_tokens": getattr(usage_obj, "completion_tokens", None) or 0,
+            "total_tokens": getattr(usage_obj, "total_tokens", None) or 0,
+            "cached_tokens": getattr(usage_obj, "prompt_tokens_details", None)
+                and getattr(getattr(usage_obj, "prompt_tokens_details", None), "cached_tokens", None)
+                or 0,
+            "reasoning_tokens": getattr(usage_obj, "completion_tokens_details", None)
+                and getattr(getattr(usage_obj, "completion_tokens_details", None), "reasoning_tokens", None)
+                or 0,
+            "provider": self.config.name,
+            "model_name": model or self.config.model_planner,
         }
 
     async def plan_native_messages_with_tools(
@@ -458,7 +508,8 @@ class OpenAIPlanner:
             for index, item in enumerate(raw_tool_calls)
             if getattr(item, "function", None) is not None
         ]
-        return {"content": content, "tool_calls": normalized_calls}
+        usage = self._extract_usage_from_response(response, model)
+        return {"content": content, "tool_calls": normalized_calls, "usage": usage}
 
     def _messages_to_openai_payload(
         self,
@@ -659,9 +710,14 @@ class AnthropicPlanner(OpenAIPlanner):
         )
         content = decision.get("content") if isinstance(decision, dict) else ""
         tool_calls = decision.get("tool_calls") if isinstance(decision, dict) else []
+        usage = decision.get("usage") if isinstance(decision, dict) else None
+        additional_kwargs: dict[str, Any] = {}
+        if usage:
+            additional_kwargs["usage"] = usage
         return AIMessage(
             content=content if isinstance(content, str) else "",
             tool_calls=tool_calls if isinstance(tool_calls, list) else [],
+            additional_kwargs=additional_kwargs,
         )
 
     async def plan_tool_calls(
@@ -753,6 +809,8 @@ class AnthropicPlanner(OpenAIPlanner):
                 }
             )
 
+        usage = self._extract_anthropic_usage(data, model)
+
         content = "\n".join(part for part in text_parts if part).strip()
         logger.info(
             "planner response provider=%s model=%s session_id=%s turn=%s step=%s tool_calls=%s content=%s",
@@ -764,7 +822,21 @@ class AnthropicPlanner(OpenAIPlanner):
             [item.get("name") for item in normalized_calls],
             content,
         )
-        return {"content": content, "tool_calls": normalized_calls}
+        return {"content": content, "tool_calls": normalized_calls, "usage": usage}
+
+    def _extract_anthropic_usage(self, data: dict[str, Any], model: str | None = None) -> dict[str, Any]:
+        """从 Anthropic 响应中提取 token usage 信息."""
+        usage_obj = data.get("usage") if isinstance(data, dict) else None
+        if not isinstance(usage_obj, dict):
+            return {}
+        return {
+            "input_tokens": usage_obj.get("input_tokens", 0) or 0,
+            "output_tokens": usage_obj.get("output_tokens", 0) or 0,
+            "cache_read_input_tokens": usage_obj.get("cache_read_input_tokens", 0) or 0,
+            "cache_creation_input_tokens": usage_obj.get("cache_creation_input_tokens", 0) or 0,
+            "provider": self.config.name,
+            "model_name": model or self.config.model_planner,
+        }
 
     def _build_anthropic_tools(self, available_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []

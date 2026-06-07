@@ -1,6 +1,7 @@
 """LLMJudgeEvaluator — LLM-as-Judge 评测器.
 
 使用另一个 LLM 对开放质量维度（相关性、可执行性、幻觉）进行评分。
+支持 rubric 版本化配置，从 evals/configs/rubric.yaml 加载评分标准。
 """
 from __future__ import annotations
 
@@ -11,14 +12,24 @@ from typing import Any
 from evals.adapters.trace import EvalTrace
 from evals.datasets.eval_case import EvalCase
 from evals.evaluators.base import BaseEvaluator
+from evals.rubric import (
+    build_judge_prompt,
+    get_dimension_rubric,
+    get_rubric_dimensions,
+    get_rubric_version,
+)
 
 logger = logging.getLogger("evals.llm_judge")
+
+# hallucination_control 维度需要反转分数
+_INVERTED_DIMS = {"hallucination", "hallucination_control"}
 
 
 class LLMJudgeEvaluator(BaseEvaluator):
     """LLM-as-Judge 评测器
 
     使用 LLM 对回答质量进行评分，覆盖规则难以判定的维度。
+    支持从 rubric.yaml 加载版本化的评分标准。
     """
 
     def __init__(
@@ -31,11 +42,12 @@ class LLMJudgeEvaluator(BaseEvaluator):
         Args:
             judge_fn: 自定义的 LLM 调用函数，签名为 async (prompt: str) -> str
             model: 默认使用的模型名称
-            dimensions: 评分维度列表
+            dimensions: 评分维度列表（默认从 rubric.yaml 加载）
         """
         self.judge_fn = judge_fn
         self.model = model
-        self.dimensions = dimensions or ["relevance", "actionability", "hallucination"]
+        self.dimensions = dimensions or get_rubric_dimensions()
+        self.rubric_version = get_rubric_version()
 
     @property
     def name(self) -> str:
@@ -55,31 +67,23 @@ class LLMJudgeEvaluator(BaseEvaluator):
         if self.judge_fn is None:
             return self._rule_based_fallback(case, trace)
 
-        prompt = self._build_judge_prompt(case, trace)
+        prompt = self._build_judge_prompt_from_rubric(case, trace)
 
         try:
             response = await self.judge_fn(prompt)
-            return self._parse_scores(response)
+            scores = self._parse_scores(response)
+            # 记录 judge 元信息到 trace
+            trace.judge_scores = {k: v for k, v in scores.items() if k != "llm_judge_overall" and k != "llm_judge_skipped"}
+            trace.judge_reasons = {dim: "LLM Judge" for dim in self.dimensions}
+            trace.judge_skipped_reason = None
+            return scores
         except Exception as exc:
             logger.warning("LLM Judge failed for case %s: %s", case.id, exc)
             return self._rule_based_fallback(case, trace)
 
-    def _build_judge_prompt(self, case: EvalCase, trace: EvalTrace) -> str:
-        """构建 Judge prompt"""
-        dimensions_desc = {
-            "relevance": "回答是否与用户问题相关（0=完全不相关，1=高度相关）",
-            "actionability": "推荐是否可执行（地址真实、价格合理、步骤清晰）（0=不可执行，1=完全可执行）",
-            "hallucination": "是否存在无证据的断言（0=无幻觉，1=严重幻觉，需反转）",
-            "completeness": "回答是否完整覆盖用户需求（0=严重缺失，1=完整覆盖）",
-            "coherence": "回答是否连贯有逻辑（0=混乱，1=高度连贯）",
-        }
-
-        dim_lines = []
-        for dim in self.dimensions:
-            desc = dimensions_desc.get(dim, f"{dim}（0-1分）")
-            dim_lines.append(f"- {dim}: {desc}")
-
-        final_text = trace.raw_text or ""
+    def _build_judge_prompt_from_rubric(self, case: EvalCase, trace: EvalTrace) -> str:
+        """从 rubric.yaml 构建 Judge prompt"""
+        # 构建推荐摘要
         recommendations = trace.recommendations
         rec_summary = ""
         if recommendations:
@@ -90,28 +94,15 @@ class LLMJudgeEvaluator(BaseEvaluator):
         tool_calls = trace.tool_call_names
         tool_summary = ", ".join(tool_calls) if tool_calls else "无"
 
-        return f"""你是一个公正的评测员。请评估以下 AI 助手的表现。
-
-## 用户请求
-{case.task}
-
-## 助手执行信息
-- 路由场景: {trace.scene or '未知'}
-- 工具调用: {tool_summary}
-- 恢复事件数: {len(trace.recovery_events)}
-
-## 推荐内容
-{rec_summary if rec_summary else "无推荐"}
-
-## 文本回复（摘要）
-{final_text[:1000]}
-
-## 评分维度
-{chr(10).join(dim_lines)}
-
-请严格输出 JSON 格式（不要包含其他内容）：
-{{{", ".join(f'"{d}": 0.8' for d in self.dimensions)}}}
-"""
+        return build_judge_prompt(
+            user_query=case.task,
+            scene=trace.scene or "未知",
+            tool_calls=tool_summary,
+            recovery_events=len(trace.recovery_events),
+            recommendations=rec_summary if rec_summary else "无推荐",
+            response_text=trace.raw_text or "",
+            dimensions=self.dimensions,
+        )
 
     def _parse_scores(self, response: str) -> dict[str, float]:
         """解析 LLM 返回的评分"""
@@ -129,8 +120,8 @@ class LLMJudgeEvaluator(BaseEvaluator):
             for dim in self.dimensions:
                 value = scores.get(dim, 0.5)
                 if isinstance(value, (int, float)):
-                    # hallucination 需要反转：0=好，1=坏
-                    if dim == "hallucination":
+                    # hallucination/hallucination_control 需要反转：0=好，1=坏
+                    if dim in _INVERTED_DIMS:
                         result[dim] = 1.0 - min(1.0, max(0.0, float(value)))
                     else:
                         result[dim] = min(1.0, max(0.0, float(value)))
@@ -168,12 +159,30 @@ class LLMJudgeEvaluator(BaseEvaluator):
                         break
 
         # 幻觉估计：保守给中等分
-        hallucination = 0.5  # 无法确定，给中等
+        hallucination_control = 0.5  # 无法确定，给中等
+
+        # 约束遵守：如果有约束信息则评估
+        constraint_adherence = 0.5
+        output_expectations = case.expectations.get("output", {}) if isinstance(case.expectations, dict) else {}
+        constraints = output_expectations.get("must_satisfy") if isinstance(output_expectations, dict) else None
+        if constraints:
+            constraint_adherence = 0.6  # 保守估计
+
+        # 工具调用合理性
+        tool_call_reasonableness = 0.5
+        if trace.tool_call_names and not trace.error:
+            tool_call_reasonableness = 0.7
+
+        # 安全合规
+        safety_compliance = 1.0  # 默认给满分（安全类有专门的 SafetyEvaluator）
 
         result = {
-            "relevance": relevance,
+            "answer_relevance": relevance,
             "actionability": actionability,
-            "hallucination": hallucination,
+            "hallucination_control": hallucination_control,
+            "constraint_adherence": constraint_adherence,
+            "tool_call_reasonableness": tool_call_reasonableness,
+            "safety_compliance": safety_compliance,
         }
 
         result["llm_judge_overall"] = sum(result.values()) / len(result)
