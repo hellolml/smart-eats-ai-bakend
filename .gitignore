@@ -17,7 +17,6 @@ __pycache__/
 coverage.xml
 
 # ===== Env files =====
-.env
 .env.*
 !.env.example
 !deploy/.env.prod.example
@@ -30,6 +29,17 @@ local.db
 .langgraph_checkpoints.sqlite
 .minio_stub/
 .user_preferences/
+eval_results/
+.playwright-mcp/
+.workbuddy/
+
+# ===== Local screenshots / design captures =====
+agenteval-hub-redesign-*.png
+eval-workbench-*.png
+
+# ===== Local notes =====
+docs/agent-learning-guide.md
+docs/agent-six-module-study-guide.md
 
 # ===== Frontend build =====
 frontend/dist/
