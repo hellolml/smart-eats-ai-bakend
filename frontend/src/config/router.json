@@ -75,5 +75,9 @@
     "GroupDecisionCreate": {
         "title": "发起群组决策",
         "path": "/group-decision/create"
+    },
+    "EvaluationWorkbench": {
+        "title": "评测工作台",
+        "path": "/admin/evaluations"
     }
 }

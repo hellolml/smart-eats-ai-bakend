@@ -65,6 +65,8 @@ class HomeChefHooks(BaseSkillHooks):
         overrides = _ensure_context_overrides(state)
         if not items:
             overrides["fridge_empty"] = True
+            # ── eval: emit recovery SSE event for empty fridge ──
+            _emit_recovery_event(state, "fridge_empty", "get_fridge_items")
         else:
             overrides.pop("fridge_empty", None)
         overrides.pop("system_directive", None)
@@ -108,3 +110,20 @@ def _note_final(title: str, reason: str, followups: list[str]) -> dict[str, Any]
         "followups": followups,
         "warnings": [],
     }
+
+
+def _emit_recovery_event(state: Any, trigger: str, tool_name: str) -> None:
+    """Emit a recovery SSE event for evaluation trace collection."""
+    events = getattr(state, "events", None)
+    if isinstance(events, list):
+        events.append(
+            {
+                "event": "recovery",
+                "data": {
+                    "path": "best_effort_fallback",
+                    "trigger": trigger,
+                    "tool_name": tool_name,
+                    "message": f"Home chef encountered: {trigger}",
+                },
+            }
+        )

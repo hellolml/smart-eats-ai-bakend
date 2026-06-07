@@ -1,0 +1,1940 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Smart Eats 评测控制台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f4f6;
+      --bg-soft: #e8edf3;
+      --surface: #ffffff;
+      --surface-2: #f8fafc;
+      --surface-3: #eef2f6;
+      --ink: #111827;
+      --muted: #64748b;
+      --faint: #94a3b8;
+      --line: #d8dee8;
+      --line-strong: #b9c2d0;
+      --green: #0f766e;
+      --amber: #b45309;
+      --red: #dc2626;
+      --blue: #2563eb;
+      --violet: #6d28d9;
+      --top: #111827;
+      --top-2: #1f2937;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 12px 28px rgba(15, 23, 42, 0.08);
+      --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.05);
+      --radius: 8px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, rgba(17, 24, 39, 0.08), transparent 260px),
+        linear-gradient(90deg, rgba(37, 99, 235, 0.05) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+        var(--bg);
+      background-size: auto, 32px 32px, 32px 32px, auto;
+      color: var(--ink);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 14px 24px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background:
+        linear-gradient(90deg, rgba(37, 99, 235, 0.20), transparent 34%),
+        linear-gradient(180deg, var(--top), var(--top-2));
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+      flex: 1 1 300px;
+    }
+
+    .mark {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: var(--radius);
+      background: #f8fafc;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-weight: 700;
+      font-size: 14px;
+      box-shadow: inset 0 -2px 0 rgba(15, 23, 42, 0.08);
+    }
+
+    h1 {
+      margin: 0;
+      color: #f8fafc;
+      font-size: 17px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .subhead {
+      margin-top: 4px;
+      color: #cbd5e1;
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 58vw;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
+      justify-content: flex-end;
+      min-width: 0;
+    }
+
+    .toolbar select,
+    .toolbar input {
+      background: rgba(248, 250, 252, 0.96);
+      border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    .context-meta {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .context-meta span,
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 999px;
+      background: rgba(248, 250, 252, 0.10);
+      color: #e2e8f0;
+      font: 700 11px var(--mono);
+      white-space: nowrap;
+    }
+
+    .badge {
+      border-color: #d6deea;
+      background: #f8fafc;
+      color: #334155;
+    }
+
+    .badge.pass {
+      border-color: rgba(15, 118, 110, 0.24);
+      background: rgba(15, 118, 110, 0.08);
+      color: var(--green);
+    }
+
+    .badge.warn {
+      border-color: rgba(180, 83, 9, 0.24);
+      background: rgba(180, 83, 9, 0.08);
+      color: var(--amber);
+    }
+
+    .badge.fail {
+      border-color: rgba(220, 38, 38, 0.24);
+      background: rgba(220, 38, 38, 0.08);
+      color: var(--red);
+    }
+
+    #reportSelect {
+      width: min(280px, 28vw);
+    }
+
+    #sceneFilter,
+    #categoryFilter {
+      width: 110px;
+    }
+
+    #searchInput {
+      width: 190px;
+    }
+
+    .app-shell {
+      max-width: 1560px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 184px minmax(0, 1fr);
+      gap: 18px;
+      padding: 18px 24px 42px;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 86px;
+      align-self: start;
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .sidebar-title {
+      padding: 4px 6px 8px;
+      color: var(--muted);
+      font: 800 11px var(--mono);
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tabs {
+      display: grid;
+      gap: 6px;
+    }
+
+    .tab {
+      height: 36px;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: #334155;
+      padding: 0 12px;
+      border-radius: 7px;
+      font: 700 13px var(--sans);
+      cursor: pointer;
+      box-shadow: none;
+      text-align: left;
+      transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+    }
+
+    .tab:hover {
+      transform: translateY(-1px);
+      border-color: var(--line-strong);
+      background: #ffffff;
+    }
+
+    .tab.active {
+      background: #111827;
+      border-color: #111827;
+      color: #fff;
+    }
+
+    select,
+    input {
+      height: 36px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      padding: 0 10px;
+      font: 600 13px var(--sans);
+      border-radius: 7px;
+      outline: none;
+      box-shadow: var(--shadow-soft);
+    }
+
+    select:focus,
+    input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    input {
+      width: 220px;
+    }
+
+    button {
+      height: 36px;
+      border: 1px solid #111827;
+      background: #111827;
+      color: #fff;
+      padding: 0 14px;
+      border-radius: 7px;
+      font: 700 13px var(--sans);
+      cursor: pointer;
+      box-shadow: var(--shadow-soft);
+      transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    }
+
+    #reloadBtn {
+      min-width: 64px;
+    }
+
+    #rawBtn {
+      min-width: 90px;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.16);
+    }
+
+    button.secondary {
+      background: #ffffff;
+      color: var(--ink);
+      border-color: var(--line);
+    }
+
+    .workspace {
+      min-width: 0;
+      display: grid;
+      gap: 16px;
+    }
+
+    .status-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.82);
+      color: #475569;
+      font-family: var(--mono);
+      font-size: 12px;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      min-height: 96px;
+      padding: 12px 12px 10px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .metric::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--blue), var(--green));
+    }
+
+    .metric label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .metric strong {
+      font-family: var(--mono);
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+
+    .metric.time strong {
+      font-size: 18px;
+      line-height: 1.12;
+    }
+
+    .run-trend {
+      padding: 14px 16px 16px;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(100px, 1fr));
+      gap: 10px;
+    }
+
+    .trend-item {
+      min-height: 88px;
+      display: grid;
+      align-content: end;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #ffffff;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .trend-bar {
+      height: 44px;
+      display: flex;
+      align-items: end;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .trend-fill {
+      width: 100%;
+      min-height: 3px;
+      border-radius: 4px 4px 0 0;
+      background: var(--green);
+    }
+
+    .trend-fill.warn {
+      background: var(--amber);
+    }
+
+    .trend-fill.fail {
+      background: var(--red);
+    }
+
+    .trend-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font: 700 11px var(--mono);
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    section {
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff, var(--surface-2));
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: #334155;
+    }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .view {
+      display: none;
+      gap: 16px;
+    }
+
+    .view.active {
+      display: grid;
+    }
+
+    .breakdowns {
+      display: grid;
+      gap: 8px;
+      padding: 14px 16px 16px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 150px minmax(120px, 1fr) 64px;
+      gap: 10px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 13px;
+      color: #334155;
+    }
+
+    .bar-track {
+      height: 10px;
+      background: #e5eaf0;
+      border: 1px solid var(--line);
+      overflow: hidden;
+      border-radius: 999px;
+    }
+
+    .bar-fill {
+      height: 100%;
+      background: var(--green);
+      border-radius: 999px;
+    }
+
+    .bar-fill.warn {
+      background: var(--amber);
+    }
+
+    .bar-fill.fail {
+      background: var(--red);
+    }
+
+    .failure-list {
+      padding: 14px 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .failure-group {
+      display: grid;
+      gap: 8px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .failure-group:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .failure-title {
+      font-weight: 800;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #334155;
+    }
+
+    .chips {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 9px;
+      border: 1px solid #d6deea;
+      background: #f8fafc;
+      color: #334155;
+      border-radius: 999px;
+      font: 600 12px var(--mono);
+    }
+
+    .table-wrap {
+      overflow: auto;
+      background: #ffffff;
+    }
+
+    .compare-controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 72px;
+      z-index: 3;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(10px);
+    }
+
+    .compare-controls select {
+      min-width: 260px;
+    }
+
+    .delta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(140px, 1fr));
+      gap: 10px;
+      padding: 14px 16px;
+    }
+
+    .delta-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 12px;
+      min-height: 84px;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .delta-card label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .delta-card strong {
+      display: block;
+      margin-top: 8px;
+      font: 700 24px var(--mono);
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      gap: 0;
+    }
+
+    .detail-panel {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      border-right: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 8px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .kv label {
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .timeline {
+      padding: 16px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .timeline-item {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--blue);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      background: #fff;
+      display: grid;
+      gap: 6px;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .timeline-item.context {
+      border-left-color: var(--blue);
+    }
+
+    .timeline-item.tool_call {
+      border-left-color: var(--violet);
+    }
+
+    .timeline-item.tool_result,
+    .timeline-item.final {
+      border-left-color: var(--green);
+    }
+
+    .timeline-item.recovery {
+      border-left-color: var(--amber);
+    }
+
+    .timeline-item.error {
+      border-left-color: var(--red);
+    }
+
+    .timeline-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-weight: 800;
+      font-size: 13px;
+      color: #334155;
+    }
+
+    .timeline-item pre {
+      margin: 0;
+      white-space: pre-wrap;
+      color: var(--muted);
+      font: 12px/1.45 var(--mono);
+    }
+
+    .analysis-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .failure-path {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px 16px;
+    }
+
+    .failure-path div {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #ffffff;
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .failure-path strong {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      background: #111827;
+      color: #fff;
+      font: 800 12px var(--mono);
+    }
+
+    .diff-table .change-kind {
+      min-width: 74px;
+    }
+
+    tr.current-run {
+      background: rgba(37, 99, 235, 0.06);
+    }
+
+    .delta-breakdowns {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(220px, 1fr));
+      gap: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1020px;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f1f5f9;
+      color: #475569;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    tbody tr {
+      transition: background 120ms ease;
+    }
+
+    tbody tr:hover {
+      background: #f8fafc;
+    }
+
+    td.mono,
+    .mono {
+      font-family: var(--mono);
+    }
+
+    .case-id {
+      font-family: var(--mono);
+      font-weight: 700;
+      color: var(--blue);
+    }
+
+    .score {
+      font-family: var(--mono);
+      font-weight: 700;
+    }
+
+    .pass {
+      color: var(--green);
+    }
+
+    .warn-text {
+      color: var(--amber);
+    }
+
+    .fail {
+      color: var(--red);
+    }
+
+    .task {
+      max-width: 340px;
+      line-height: 1.45;
+      color: #334155;
+    }
+
+    .trial-details {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .empty {
+      padding: 34px 18px;
+      color: var(--muted);
+      text-align: center;
+      background:
+        linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+
+    .drawer {
+      position: fixed;
+      inset: auto 0 0 0;
+      max-height: 62vh;
+      overflow: auto;
+      background: #101412;
+      color: #edf4ee;
+      border-top: 1px solid #334139;
+      box-shadow: 0 -24px 70px rgba(0, 0, 0, 0.32);
+      transform: translateY(105%);
+      transition: transform 180ms ease;
+      z-index: 10;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .drawer.open {
+      transform: translateY(0);
+      visibility: visible;
+      pointer-events: auto;
+    }
+
+    .drawer-head {
+      position: sticky;
+      top: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #101412;
+      border-bottom: 1px solid #334139;
+    }
+
+    .drawer pre {
+      margin: 0;
+      padding: 16px;
+      white-space: pre-wrap;
+      font: 12px/1.5 var(--mono);
+    }
+
+    @media (max-width: 980px) {
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .toolbar {
+        justify-content: flex-start;
+        width: 100%;
+        flex-wrap: wrap;
+      }
+
+      .brand {
+        flex: 0 1 auto;
+        width: 100%;
+      }
+
+      .context-meta {
+        justify-content: flex-start;
+      }
+
+      .app-shell {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+        padding: 14px;
+      }
+
+      .sidebar {
+        position: static;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .sidebar-title {
+        display: none;
+      }
+
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        padding-left: 14px;
+        padding-right: 14px;
+      }
+
+      .tab {
+        text-align: center;
+        background: rgba(255, 255, 255, 0.76);
+        box-shadow: var(--shadow-soft);
+      }
+
+      input,
+      select {
+        width: 100%;
+        min-width: 0;
+      }
+
+      #reportSelect,
+      #sceneFilter,
+      #categoryFilter,
+      #searchInput {
+        width: 100%;
+      }
+
+      button {
+        flex: 1;
+      }
+
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .grid-two {
+        grid-template-columns: 1fr;
+      }
+
+      .detail-grid,
+      .analysis-grid,
+      .delta-grid,
+      .run-trend,
+      .failure-path {
+        grid-template-columns: 1fr;
+      }
+
+      .detail-panel {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      th {
+        top: 0;
+      }
+    }
+
+    @media (max-width: 620px) {
+      header,
+      .app-shell {
+        padding-left: 14px;
+        padding-right: 14px;
+      }
+
+      .summary {
+        grid-template-columns: 1fr;
+      }
+
+      .metric strong {
+        font-size: 30px;
+      }
+
+      .bar-row {
+        grid-template-columns: 100px minmax(80px, 1fr) 58px;
+      }
+
+      .subhead {
+        max-width: 88vw;
+      }
+
+      table {
+        min-width: 980px;
+      }
+
+      th,
+      td {
+        min-width: 72px;
+      }
+
+      th:first-child,
+      td:first-child {
+        min-width: 132px;
+      }
+
+      th:nth-child(6),
+      td:nth-child(6) {
+        min-width: 220px;
+      }
+
+      th:nth-child(7),
+      td:nth-child(7),
+      th:nth-child(8),
+      td:nth-child(8) {
+        min-width: 260px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="brand">
+      <div class="mark">EV</div>
+      <div>
+        <h1>Smart Eats 评测控制台</h1>
+        <div id="subtitle" class="subhead">正在加载 latest.json</div>
+      </div>
+    </div>
+    <div id="contextMeta" class="context-meta">
+      <span>suite n/a</span>
+      <span>runner n/a</span>
+      <span>schema n/a</span>
+    </div>
+    <div class="toolbar">
+      <select id="reportSelect" aria-label="报告文件"></select>
+      <select id="sceneFilter" aria-label="场景筛选">
+        <option value="">全部场景</option>
+      </select>
+      <select id="categoryFilter" aria-label="类别筛选">
+        <option value="">全部类别</option>
+      </select>
+      <input id="searchInput" type="search" placeholder="用例 ID / 任务 / 错误" />
+      <button id="reloadBtn" type="button">刷新</button>
+      <button id="rawBtn" class="secondary" type="button">原始 JSON</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-title">工作台</div>
+      <nav class="tabs" aria-label="评测工作台视图">
+        <button class="tab active" type="button" data-view="overview">总览</button>
+        <button class="tab" type="button" data-view="history">运行历史</button>
+        <button class="tab" type="button" data-view="compare">运行对比</button>
+        <button class="tab" type="button" data-view="detail">用例详情</button>
+        <button class="tab" type="button" data-view="analysis">失败分析</button>
+      </nav>
+    </aside>
+
+    <main class="workspace">
+      <div class="status-line">
+        <span id="statusText">等待报告数据</span>
+        <span id="resultCount">0 条用例</span>
+      </div>
+
+      <div class="view active" id="view-overview">
+        <div class="summary" id="summary"></div>
+
+        <section>
+          <div class="section-head">
+            <h2>最近运行趋势</h2>
+            <span class="mono" id="trendMeta">最近 0 次</span>
+          </div>
+          <div class="run-trend" id="runTrend">
+            <div class="empty">暂无运行历史</div>
+          </div>
+        </section>
+
+        <div class="grid-two">
+          <section>
+            <div class="section-head">
+              <h2>场景表现</h2>
+              <span class="mono" id="sceneCount">0</span>
+            </div>
+            <div class="breakdowns" id="sceneBreakdown"></div>
+          </section>
+
+          <section>
+            <div class="section-head">
+              <h2>类别表现</h2>
+              <span class="mono" id="categoryCount">0</span>
+            </div>
+            <div class="breakdowns" id="categoryBreakdown"></div>
+          </section>
+        </div>
+
+      <section>
+        <div class="section-head">
+          <h2>失败聚合</h2>
+          <span class="mono" id="failureCount">0 组</span>
+        </div>
+        <div class="failure-list" id="failureSummary"></div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>用例结果</h2>
+          <span class="mono" id="caseTableMeta">显示 0 条</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>用例</th>
+                <th>场景</th>
+                <th>类别</th>
+                <th>优先级</th>
+                <th>成功率</th>
+                <th>任务</th>
+                <th>关键指标</th>
+                <th>试验明细</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="caseRows"></tbody>
+          </table>
+        </div>
+      </section>
+      </div>
+
+      <div class="view" id="view-history">
+      <section>
+        <div class="section-head">
+          <h2>运行历史</h2>
+          <span class="mono" id="historyMeta">0 次运行</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>报告文件</th>
+                <th>时间</th>
+                <th>Suite</th>
+                <th>Runner</th>
+                <th>用例</th>
+                <th>试验</th>
+                <th>成功率</th>
+                <th>失败</th>
+                <th>P0 失败</th>
+                <th>耗时</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="historyRows"></tbody>
+          </table>
+        </div>
+      </section>
+      </div>
+
+      <div class="view" id="view-compare">
+      <section>
+        <div class="section-head">
+          <h2>运行对比</h2>
+          <span class="mono" id="compareMeta">选择 baseline 和 candidate</span>
+        </div>
+        <div class="compare-controls">
+          <select id="baselineSelect" aria-label="baseline 报告"></select>
+          <select id="candidateSelect" aria-label="candidate 报告"></select>
+          <button id="compareBtn" type="button">对比</button>
+        </div>
+        <div class="delta-grid" id="compareSummary"></div>
+      </section>
+      <section>
+        <div class="section-head">
+          <h2>变化明细</h2>
+          <span class="mono" id="compareChangeMeta">0 项</span>
+        </div>
+        <div class="failure-list" id="compareChanges"></div>
+      </section>
+      </div>
+
+      <div class="view" id="view-detail">
+      <section>
+        <div class="section-head">
+          <h2>用例详情</h2>
+          <span class="mono" id="detailMeta">未选择用例</span>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-panel" id="detailSummary">
+            <div class="empty">从总览或失败分析中点击“查看”打开用例详情。</div>
+          </div>
+          <div class="timeline" id="traceTimeline">
+            <div class="empty">暂无轨迹数据</div>
+          </div>
+        </div>
+      </section>
+      </div>
+
+      <div class="view" id="view-analysis">
+        <section>
+          <div class="section-head">
+            <h2>失败定位路径</h2>
+            <span class="mono">failure class -> case -> trace</span>
+          </div>
+          <div class="failure-path">
+            <div><strong>1</strong><span>先按失败类型判断 provider、tool/API、agent 质量或评测框架问题。</span></div>
+            <div><strong>2</strong><span>再按 metric、tool、worker 缩小到具体能力或执行器。</span></div>
+            <div><strong>3</strong><span>最后打开用例详情，沿 trace 时间线定位出错步骤。</span></div>
+          </div>
+        </section>
+        <section>
+          <div class="section-head">
+            <h2>失败分析</h2>
+            <span class="mono" id="analysisMeta">点击聚合项可过滤用例</span>
+          </div>
+          <div class="analysis-grid" id="analysisGrid"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <aside class="drawer" id="drawer">
+    <div class="drawer-head">
+      <strong id="drawerTitle">明细</strong>
+      <button id="closeDrawer" class="secondary" type="button">关闭</button>
+    </div>
+    <pre id="drawerBody"></pre>
+  </aside>
+
+  <script>
+    const state = {
+      payload: null,
+      report: null,
+      reportName: "latest.json",
+      reports: [],
+      activeView: "overview",
+      compare: null,
+      selectedCase: null,
+      analysisFilter: null,
+    };
+
+    const els = {
+      subtitle: document.getElementById("subtitle"),
+      contextMeta: document.getElementById("contextMeta"),
+      reportSelect: document.getElementById("reportSelect"),
+      sceneFilter: document.getElementById("sceneFilter"),
+      categoryFilter: document.getElementById("categoryFilter"),
+      searchInput: document.getElementById("searchInput"),
+      reloadBtn: document.getElementById("reloadBtn"),
+      rawBtn: document.getElementById("rawBtn"),
+      statusText: document.getElementById("statusText"),
+      resultCount: document.getElementById("resultCount"),
+      summary: document.getElementById("summary"),
+      runTrend: document.getElementById("runTrend"),
+      trendMeta: document.getElementById("trendMeta"),
+      sceneBreakdown: document.getElementById("sceneBreakdown"),
+      categoryBreakdown: document.getElementById("categoryBreakdown"),
+      sceneCount: document.getElementById("sceneCount"),
+      categoryCount: document.getElementById("categoryCount"),
+      failureSummary: document.getElementById("failureSummary"),
+      failureCount: document.getElementById("failureCount"),
+      caseRows: document.getElementById("caseRows"),
+      caseTableMeta: document.getElementById("caseTableMeta"),
+      historyRows: document.getElementById("historyRows"),
+      historyMeta: document.getElementById("historyMeta"),
+      baselineSelect: document.getElementById("baselineSelect"),
+      candidateSelect: document.getElementById("candidateSelect"),
+      compareBtn: document.getElementById("compareBtn"),
+      compareMeta: document.getElementById("compareMeta"),
+      compareSummary: document.getElementById("compareSummary"),
+      compareChangeMeta: document.getElementById("compareChangeMeta"),
+      compareChanges: document.getElementById("compareChanges"),
+      detailMeta: document.getElementById("detailMeta"),
+      detailSummary: document.getElementById("detailSummary"),
+      traceTimeline: document.getElementById("traceTimeline"),
+      analysisMeta: document.getElementById("analysisMeta"),
+      analysisGrid: document.getElementById("analysisGrid"),
+      drawer: document.getElementById("drawer"),
+      drawerTitle: document.getElementById("drawerTitle"),
+      drawerBody: document.getElementById("drawerBody"),
+      closeDrawer: document.getElementById("closeDrawer"),
+    };
+
+    const fmtPct = (value) => Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(1)}%` : "n/a";
+    const fmtMs = (value) => Number.isFinite(Number(value)) ? `${Math.round(Number(value))}ms` : "n/a";
+    const fmtShortTime = (value) => value ? String(value).replace("T", " ").slice(0, 16) : "n/a";
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;",
+    }[ch]));
+    const scoreClass = (value) => Number(value) >= 0.8 ? "pass" : Number(value) >= 0.5 ? "warn-text" : "fail";
+    const statusClass = (value) => Number(value) >= 0.8 ? "pass" : Number(value) >= 0.5 ? "warn" : "fail";
+    const badge = (label, value, klass = "") => `<span class="badge ${klass}">${esc(label)} ${esc(value ?? "n/a")}</span>`;
+    const sceneLabels = {
+      eat_out: "外出吃饭",
+      cook_home: "在家做饭",
+      route: "路线导航",
+      travel_planner: "旅行规划",
+      chat: "通用聊天",
+    };
+    const categoryLabels = {
+      normal: "正常请求",
+      boundary: "边界输入",
+      tool_failure: "工具失败",
+      safety: "安全风险",
+      regression: "回归用例",
+    };
+    const priorityLabels = {
+      p0: "P0 必过",
+      p1: "P1 重要",
+      p2: "P2 常规",
+    };
+    const metricLabels = {
+      task_success: "任务成功",
+      intent_accuracy: "意图准确",
+      tool_accuracy: "工具准确",
+      schema_compliance: "结构合规",
+      safety_score: "安全得分",
+      no_leak: "无泄露",
+      recovery_score: "恢复能力",
+      constraint_satisfaction: "约束满足",
+      efficiency: "执行效率",
+    };
+    const failureGroupLabels = {
+      by_error_reason: "按错误原因",
+      by_case: "按用例",
+      by_metric: "按指标",
+      by_scene: "按场景",
+      by_category: "按类别",
+      by_tool: "按工具",
+      by_worker: "按执行器",
+      by_failure_class: "按失败类型",
+    };
+    const failureClassLabels = {
+      none: "无失败",
+      provider: "模型/Provider",
+      tool_api: "工具/API",
+      agent_quality: "Agent 质量",
+      eval_framework: "评测框架",
+    };
+    const labelFor = (kind, value) => {
+      if (kind === "scene") return sceneLabels[value] || value || "n/a";
+      if (kind === "category") return categoryLabels[value] || value || "n/a";
+      if (kind === "priority") return priorityLabels[value] || value || "n/a";
+      if (kind === "metric") return metricLabels[value] || value || "n/a";
+      if (kind === "failureGroup") return failureGroupLabels[value] || value || "n/a";
+      if (kind === "failureClass") return failureClassLabels[value] || value || "n/a";
+      return value || "n/a";
+    };
+
+    function compactScores(scores = {}) {
+      const keys = [
+        "task_success",
+        "intent_accuracy",
+        "tool_accuracy",
+        "schema_compliance",
+        "safety_score",
+        "no_leak",
+        "recovery_score",
+      ];
+      return keys
+        .filter((key) => Object.prototype.hasOwnProperty.call(scores, key))
+        .map((key) => `<span class="chip">${esc(labelFor("metric", key))} ${fmtPct(scores[key])}</span>`)
+        .join("");
+    }
+
+    function latestTrial(result) {
+      const trials = Array.isArray(result.trials) ? result.trials : [];
+      return trials[trials.length - 1] || {};
+    }
+
+    function failureText(result) {
+      const trials = Array.isArray(result.trials) ? result.trials : [];
+      return trials.map((trial) => [
+        trial.error_reason,
+        trial.error,
+        trial.failure_class,
+        trial.actual_worker,
+        ...(trial.tool_calls || []),
+        ...(trial.threshold_failures || []).map((item) => item.metric),
+        ...(trial.missing_metrics || []),
+      ].filter(Boolean).join(" ")).join(" ");
+    }
+
+    function renderContextMeta(report = {}) {
+      const metadata = report.metadata || {};
+      els.contextMeta.innerHTML = [
+        badge("suite", metadata.suite || "n/a"),
+        badge("runner", metadata.runner || "n/a"),
+        badge("schema", metadata.report_schema_version || "n/a"),
+        badge("success", fmtPct(report.overall_success_rate), statusClass(report.overall_success_rate)),
+      ].join("");
+    }
+
+    function renderRunTrend() {
+      const reports = (state.reports || []).slice(0, 5).reverse();
+      els.trendMeta.textContent = `最近 ${reports.length} 次`;
+      if (!reports.length) {
+        els.runTrend.innerHTML = `<div class="empty">暂无运行历史</div>`;
+        return;
+      }
+      els.runTrend.innerHTML = reports.map((item) => {
+        const rate = Number(item.overall_success_rate || 0);
+        const height = Math.max(3, Math.round(rate * 44));
+        const klass = statusClass(rate);
+        return `
+          <div class="trend-item" title="${esc(item.name)}">
+            <div class="trend-bar"><div class="trend-fill ${klass}" style="height:${height}px"></div></div>
+            <div class="trend-meta">
+              <span>${esc(fmtPct(rate))}</span>
+              <span>${esc(item.failed_cases ?? 0)} fail</span>
+            </div>
+            <div class="trend-meta">
+              <span>${esc(item.runner || "n/a")}</span>
+              <span>${esc(fmtShortTime(item.timestamp))}</span>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function loadReport(name = state.reportName) {
+      els.statusText.textContent = "正在加载报告";
+      const response = await fetch(`/api/v1/internal/eval-report?report=${encodeURIComponent(name)}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      state.payload = payload;
+      state.report = payload.report || null;
+      state.reportName = payload.selected || name;
+      render();
+    }
+
+    async function loadReportList() {
+      const response = await fetch("/api/v1/internal/eval-reports");
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      state.reports = payload.reports || [];
+      renderHistory();
+      renderCompareSelectors();
+      renderRunTrend();
+    }
+
+    function renderReportSelector() {
+      const reports = state.reports.length ? state.reports : (state.payload?.reports || []);
+      if (!reports.length) {
+        els.reportSelect.innerHTML = `<option value="latest.json">latest.json</option>`;
+        return;
+      }
+      els.reportSelect.innerHTML = reports.map((item) => {
+        const selected = item.name === state.reportName ? "selected" : "";
+        return `<option value="${esc(item.name)}" ${selected}>${esc(item.name)}</option>`;
+      }).join("");
+    }
+
+    function renderCompareSelectors() {
+      const reports = state.reports.length ? state.reports : (state.payload?.reports || []);
+      const options = reports.map((item) => `<option value="${esc(item.name)}">${esc(item.name)}</option>`).join("");
+      els.baselineSelect.innerHTML = options || `<option value="latest.json">latest.json</option>`;
+      els.candidateSelect.innerHTML = options || `<option value="latest.json">latest.json</option>`;
+      if (reports.length >= 2) {
+        els.baselineSelect.value = reports[1].name;
+        els.candidateSelect.value = reports[0].name;
+      } else if (reports.length === 1) {
+        els.baselineSelect.value = reports[0].name;
+        els.candidateSelect.value = reports[0].name;
+      }
+    }
+
+    function renderFilters(results) {
+      const currentScene = els.sceneFilter.value;
+      const currentCategory = els.categoryFilter.value;
+      const scenes = [...new Set(results.map((item) => item.scene).filter(Boolean))].sort();
+      const categories = [...new Set(results.map((item) => item.category).filter(Boolean))].sort();
+
+      els.sceneFilter.innerHTML = `<option value="">全部场景</option>` + scenes
+        .map((scene) => `<option value="${esc(scene)}">${esc(labelFor("scene", scene))}</option>`)
+        .join("");
+      els.categoryFilter.innerHTML = `<option value="">全部类别</option>` + categories
+        .map((category) => `<option value="${esc(category)}">${esc(labelFor("category", category))}</option>`)
+        .join("");
+      els.sceneFilter.value = scenes.includes(currentScene) ? currentScene : "";
+      els.categoryFilter.value = categories.includes(currentCategory) ? currentCategory : "";
+    }
+
+    function renderSummary(report) {
+      const results = report.results || [];
+      const failedCases = results.filter((item) => Number(item.success_rate || 0) < 1).length;
+      const p0Failed = results.filter((item) => item.priority === "p0" && Number(item.success_rate || 0) < 1).length;
+      const duration = Number(report.duration_seconds || 0).toFixed(1);
+      const metrics = [
+        ["总体成功率", fmtPct(report.overall_success_rate), "overall_success_rate"],
+        ["P0 失败", p0Failed, "必须保持为 0"],
+        ["失败用例", failedCases, `${results.length} 条已加载`],
+        ["用例数", report.total_cases ?? results.length, "total_cases"],
+        ["试验数", report.total_trials ?? 0, "total_trials"],
+        ["耗时", `${duration}s`, fmtShortTime(report.timestamp)],
+      ];
+      els.summary.innerHTML = metrics.map(([label, value, hint]) => `
+        <div class="metric ${label === "报告时间" ? "time" : ""}">
+          <label>${esc(label)}</label>
+          <strong>${esc(value)}</strong>
+          <span>${esc(hint)}</span>
+        </div>
+      `).join("");
+    }
+
+    function renderBreakdown(target, countTarget, breakdown = {}) {
+      const entries = Object.entries(breakdown);
+      countTarget.textContent = String(entries.length);
+      if (!entries.length) {
+        target.innerHTML = `<div class="empty">暂无分组数据</div>`;
+        return;
+      }
+      target.innerHTML = entries.map(([name, data]) => {
+        const success = Number(data.success_rate || 0);
+        const width = Math.max(0, Math.min(100, success * 100));
+        const klass = success >= 0.8 ? "" : success >= 0.5 ? "warn" : "fail";
+        const labelKind = target === els.sceneBreakdown ? "scene" : "category";
+        return `
+          <div class="bar-row">
+            <span>${esc(labelFor(labelKind, name))}</span>
+            <div class="bar-track"><div class="bar-fill ${klass}" style="width:${width}%"></div></div>
+            <span class="score ${scoreClass(success)}">${fmtPct(success)}</span>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderFailures(summary = {}) {
+      const groups = Object.entries(summary).filter(([, value]) => value && Object.keys(value).length);
+      els.failureCount.textContent = `${groups.length} 组`;
+      if (!groups.length) {
+        els.failureSummary.innerHTML = `<div class="empty">当前报告没有失败聚合</div>`;
+        return;
+      }
+      els.failureSummary.innerHTML = groups.map(([group, value]) => {
+        const entries = Object.entries(value || {}).sort((a, b) => Number(b[1]) - Number(a[1]));
+        return `
+          <div class="failure-group">
+            <div class="failure-title">${esc(labelFor("failureGroup", group))}</div>
+            <div class="chips">
+              ${entries.map(([name, count]) => `<span class="chip">${esc(name)} ${esc(count)}</span>`).join("")}
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function filteredResults() {
+      const report = state.report || {};
+      const scene = els.sceneFilter.value;
+      const category = els.categoryFilter.value;
+      const query = els.searchInput.value.trim().toLowerCase();
+      return (report.results || []).filter((item) => {
+        if (scene && item.scene !== scene) return false;
+        if (category && item.category !== category) return false;
+        if (!query) return true;
+        const haystack = [
+          item.case_id,
+          item.scene,
+          item.category,
+          item.task,
+          failureText(item),
+        ].join(" ").toLowerCase();
+        return haystack.includes(query);
+      });
+    }
+
+    function renderCases() {
+      const rows = filteredResults();
+      els.caseTableMeta.textContent = `显示 ${rows.length} 条`;
+      els.resultCount.textContent = `当前显示 ${rows.length} 条用例`;
+      if (!rows.length) {
+        els.caseRows.innerHTML = `<tr><td colspan="9" class="empty">没有符合当前筛选条件的用例</td></tr>`;
+        return;
+      }
+      els.caseRows.innerHTML = rows.map((item) => {
+        const trial = latestTrial(item);
+        const failures = (trial.threshold_failures || []).map((failure) => failure.metric);
+        const missing = trial.missing_metrics || [];
+        const trialSummary = [
+          `实际场景 ${labelFor("scene", trial.actual_scene)}`,
+          trial.actual_worker ? `执行器 ${trial.actual_worker}` : "",
+          trial.error_reason ? `错误 ${trial.error_reason}` : "",
+          failures.length ? `阈值失败 ${failures.map((item) => labelFor("metric", item)).join(", ")}` : "",
+          missing.length ? `缺失指标 ${missing.map((item) => labelFor("metric", item)).join(", ")}` : "",
+        ].filter(Boolean);
+        return `
+          <tr>
+            <td><span class="case-id">${esc(item.case_id)}</span></td>
+            <td>${esc(labelFor("scene", item.scene))}</td>
+            <td>${esc(labelFor("category", item.category))}</td>
+            <td>${esc(labelFor("priority", item.priority))}</td>
+            <td><span class="score ${scoreClass(item.success_rate)}">${fmtPct(item.success_rate)}</span></td>
+            <td class="task">${esc(item.task)}</td>
+            <td><div class="chips">${compactScores(item.avg_scores)}</div></td>
+            <td>
+              <div class="trial-details">
+                <span>${esc(trialSummary.join(" / ") || "暂无试验明细")}</span>
+                <span>工具调用：${esc((trial.tool_calls || []).join(", ") || "无")}</span>
+                <span>耗时：${esc(fmtMs(trial.duration_ms))}</span>
+              </div>
+            </td>
+            <td><button class="secondary" type="button" data-case="${esc(item.case_id)}">查看</button></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function renderHistory() {
+      const reports = state.reports || [];
+      els.historyMeta.textContent = `${reports.length} 次运行`;
+      if (!reports.length) {
+        els.historyRows.innerHTML = `<tr><td colspan="11" class="empty">暂无运行历史</td></tr>`;
+        return;
+      }
+      els.historyRows.innerHTML = reports.map((item) => `
+        <tr class="${item.name === state.reportName ? "current-run" : ""}">
+          <td class="mono">${esc(item.name)}</td>
+          <td class="mono">${esc(item.timestamp || "n/a")}</td>
+          <td class="mono">${esc(item.suite || "n/a")}</td>
+          <td class="mono">${esc(item.runner || "n/a")}</td>
+          <td>${esc(item.total_cases ?? 0)}</td>
+          <td>${esc(item.total_trials ?? 0)}</td>
+          <td><span class="score ${scoreClass(item.overall_success_rate)}">${fmtPct(item.overall_success_rate)}</span></td>
+          <td>${esc(item.failed_cases ?? 0)}</td>
+          <td>${esc(item.p0_failed_cases ?? 0)}</td>
+          <td>${esc(Number(item.duration_seconds || 0).toFixed(1))}s</td>
+          <td><button class="secondary" type="button" data-report="${esc(item.name)}">打开</button></td>
+        </tr>
+      `).join("");
+    }
+
+    async function runCompare() {
+      const baseline = els.baselineSelect.value;
+      const candidate = els.candidateSelect.value;
+      els.compareMeta.textContent = "正在对比";
+      const response = await fetch(`/api/v1/internal/eval-report/compare?baseline=${encodeURIComponent(baseline)}&candidate=${encodeURIComponent(candidate)}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      state.compare = await response.json();
+      renderCompare();
+    }
+
+    function fmtDelta(value, pct = false) {
+      const number = Number(value || 0);
+      const prefix = number > 0 ? "+" : "";
+      return pct ? `${prefix}${(number * 100).toFixed(1)}%` : `${prefix}${number.toFixed(2)}`;
+    }
+
+    function renderCompare() {
+      const data = state.compare;
+      if (!data) {
+        els.compareSummary.innerHTML = `<div class="empty">请选择两份报告进行对比</div>`;
+        els.compareChanges.innerHTML = `<div class="empty">暂无对比结果</div>`;
+        return;
+      }
+      const delta = data.summary_delta || {};
+      els.compareMeta.textContent = `${data.baseline} -> ${data.candidate}`;
+      els.compareSummary.innerHTML = [
+        ["成功率变化", fmtDelta(delta.overall_success_rate, true), delta.overall_success_rate],
+        ["失败用例变化", fmtDelta(delta.failed_cases), -Number(delta.failed_cases || 0)],
+        ["P0 失败变化", fmtDelta(delta.p0_failed_cases), -Number(delta.p0_failed_cases || 0)],
+        ["耗时变化", `${fmtDelta(delta.duration_seconds)}s`, -Number(delta.duration_seconds || 0)],
+      ].map(([label, value, score]) => `
+        <div class="delta-card">
+          <label>${esc(label)}</label>
+          <strong class="${Number(score) >= 0 ? "pass" : "fail"}">${esc(value)}</strong>
+        </div>
+      `).join("") + renderDeltaBreakdowns(data);
+
+      const changes = data.case_changes || {};
+      const groups = [
+        ["新增失败", "regression", changes.regressions || []],
+        ["已修复", "fix", changes.fixes || []],
+        ["分数下降", "drop", changes.score_drops || []],
+        ["分数上升", "gain", changes.score_gains || []],
+      ];
+      const total = groups.reduce((sum, [, , items]) => sum + items.length, 0);
+      els.compareChangeMeta.textContent = `${total} 项`;
+      const rows = groups.flatMap(([title, kind, items]) => items.map((item) => ({ ...item, title, kind })));
+      if (!rows.length) {
+        els.compareChanges.innerHTML = `<div class="empty">没有 case-level 变化</div>`;
+        return;
+      }
+      els.compareChanges.innerHTML = `
+        <div class="table-wrap">
+          <table class="diff-table">
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>用例</th>
+                <th>场景</th>
+                <th>类别</th>
+                <th>指标</th>
+                <th>Baseline</th>
+                <th>Candidate</th>
+                <th>Delta</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((item) => {
+                const deltaValue = item.delta ?? item.score_delta ?? "";
+                const deltaNumber = Number(deltaValue);
+                const deltaClass = Number.isFinite(deltaNumber) ? (deltaNumber >= 0 ? "pass" : "fail") : "";
+                return `
+                  <tr>
+                    <td><span class="badge ${item.kind === "regression" || item.kind === "drop" ? "fail" : "pass"} change-kind">${esc(item.title)}</span></td>
+                    <td class="case-id">${esc(item.case_id || "n/a")}</td>
+                    <td>${esc(labelFor("scene", item.scene))}</td>
+                    <td>${esc(labelFor("category", item.category))}</td>
+                    <td class="mono">${esc(labelFor("metric", item.metric))}</td>
+                    <td class="mono">${esc(item.baseline ?? item.baseline_score ?? "n/a")}</td>
+                    <td class="mono">${esc(item.candidate ?? item.candidate_score ?? "n/a")}</td>
+                    <td class="score ${deltaClass}">${deltaValue === "" ? "n/a" : esc(fmtDelta(deltaValue, false))}</td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderDeltaBreakdowns(data) {
+      const configs = [
+        ["场景变化", "scene_delta", "scene"],
+        ["类别变化", "category_delta", "category"],
+        ["指标变化", "metric_delta", "metric"],
+      ];
+      const groups = configs.map(([title, key, kind]) => {
+        const entries = Object.entries(data[key] || {});
+        if (!entries.length) {
+          return "";
+        }
+        return `
+          <div class="failure-group">
+            <div class="failure-title">${esc(title)}</div>
+            <div class="chips">
+              ${entries.slice(0, 12).map(([name, value]) => {
+                const delta = typeof value === "object" ? value.delta : value;
+                const klass = Number(delta) >= 0 ? "pass" : "fail";
+                return `<span class="badge ${klass}">${esc(labelFor(kind, name))} ${esc(fmtDelta(delta, true))}</span>`;
+              }).join("")}
+            </div>
+          </div>
+        `;
+      }).filter(Boolean);
+      if (!groups.length) {
+        return "";
+      }
+      return `<div class="delta-breakdowns">${groups.join("")}</div>`;
+    }
+
+    async function loadCaseDetail(caseId) {
+      const response = await fetch(`/api/v1/internal/eval-report/case?report=${encodeURIComponent(state.reportName)}&case_id=${encodeURIComponent(caseId)}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      state.selectedCase = await response.json();
+      switchView("detail");
+      renderCaseDetail();
+    }
+
+    function renderCaseDetail() {
+      const data = state.selectedCase;
+      if (!data) {
+        els.detailSummary.innerHTML = `<div class="empty">从总览或失败分析中点击“查看”打开用例详情。</div>`;
+        els.traceTimeline.innerHTML = `<div class="empty">暂无轨迹数据</div>`;
+        return;
+      }
+      const item = data.case || {};
+      const trial = (data.trials || [])[0] || {};
+      els.detailMeta.textContent = `${data.report} / ${item.case_id || ""}`;
+      els.detailSummary.innerHTML = `
+        <div class="kv"><label>用例</label><span class="mono">${esc(item.case_id)}</span></div>
+        <div class="kv"><label>场景</label><span>${esc(labelFor("scene", item.scene))}</span></div>
+        <div class="kv"><label>类别</label><span>${esc(labelFor("category", item.category))}</span></div>
+        <div class="kv"><label>优先级</label><span>${esc(labelFor("priority", item.priority))}</span></div>
+        <div class="kv"><label>任务</label><span>${esc(item.task)}</span></div>
+        <div class="kv"><label>成功率</label><span class="${scoreClass(item.success_rate)}">${fmtPct(item.success_rate)}</span></div>
+        <div class="kv"><label>实际场景</label><span>${esc(labelFor("scene", trial.actual_scene))}</span></div>
+        <div class="kv"><label>执行器</label><span>${esc(trial.actual_worker || "n/a")}</span></div>
+        <div class="kv"><label>失败类型</label><span>${esc(labelFor("failureClass", trial.failure_class))}</span></div>
+        <div class="kv"><label>工具</label><span>${esc((trial.tool_calls || []).join(", ") || "无")}</span></div>
+        <div class="kv"><label>阈值失败</label><span>${esc((trial.threshold_failures || []).map((f) => labelFor("metric", f.metric)).join(", ") || "无")}</span></div>
+        <div class="kv"><label>缺失指标</label><span>${esc((trial.missing_metrics || []).map((m) => labelFor("metric", m)).join(", ") || "无")}</span></div>
+        <div class="kv"><label>回答摘要</label><span>${esc(trial.final_answer_preview || "n/a")}</span></div>
+      `;
+      renderTimeline(trial.trace_timeline || []);
+    }
+
+    function renderTimeline(timeline) {
+      if (!timeline.length) {
+        els.traceTimeline.innerHTML = `<div class="empty">当前报告没有 trace timeline。请用新版 run_eval.py 重新生成报告。</div>`;
+        return;
+      }
+      els.traceTimeline.innerHTML = timeline.map((item) => `
+        <div class="timeline-item ${esc(item.event_type || "")}">
+          <div class="timeline-title">
+            <span>${esc(item.label || item.event_type)}</span>
+            <span class="mono">${esc(item.event_type)} #${esc(item.index)}${item.duration_ms ? ` / ${esc(fmtMs(item.duration_ms))}` : ""}</span>
+          </div>
+          ${item.tool_name ? `<div class="chips"><span class="chip">tool ${esc(item.tool_name)}</span></div>` : ""}
+          <pre>${esc(JSON.stringify(item.data || {}, null, 2))}</pre>
+        </div>
+      `).join("");
+    }
+
+    function renderAnalysis(summary = {}) {
+      const merged = { ...summary };
+      const order = ["by_failure_class", "by_error_reason", "by_metric", "by_tool", "by_worker", "by_scene", "by_category", "by_case"];
+      const groups = Object.entries(merged)
+        .filter(([, value]) => value && Object.keys(value).length)
+        .sort(([a], [b]) => {
+          const ai = order.indexOf(a);
+          const bi = order.indexOf(b);
+          return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        });
+      els.analysisMeta.textContent = `${groups.length} 个聚合维度`;
+      if (!groups.length) {
+        els.analysisGrid.innerHTML = `<div class="empty">当前报告没有失败聚合</div>`;
+        return;
+      }
+      els.analysisGrid.innerHTML = groups.map(([group, value]) => {
+        const entries = Object.entries(value || {}).sort((a, b) => {
+          const av = typeof a[1] === "object" ? Number(a[1].success_rate ?? 0) : Number(a[1] ?? 0);
+          const bv = typeof b[1] === "object" ? Number(b[1].success_rate ?? 0) : Number(b[1] ?? 0);
+          return bv - av;
+        });
+        return `
+          <section>
+            <div class="section-head"><h2>${esc(labelFor("failureGroup", group))}</h2><span class="mono">${entries.length}</span></div>
+            <div class="failure-list">
+              <div class="chips">
+                ${entries.map(([name, value]) => {
+                  const label = group === "by_failure_class" ? labelFor("failureClass", name) : name;
+                  const amount = typeof value === "object" ? fmtPct(value.success_rate) : value;
+                  return `<button class="secondary" type="button" data-analysis-group="${esc(group)}" data-analysis-name="${esc(name)}">${esc(label)} ${esc(amount)}</button>`;
+                }).join("")}
+              </div>
+            </div>
+          </section>
+        `;
+      }).join("");
+    }
+
+    function switchView(view) {
+      state.activeView = view;
+      document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
+      document.querySelectorAll(".view").forEach((section) => section.classList.toggle("active", section.id === `view-${view}`));
+    }
+
+    function render() {
+      renderReportSelector();
+      if (!state.payload?.available) {
+        els.subtitle.textContent = state.payload?.results_dir || "eval_results";
+        els.statusText.textContent = state.payload?.message || "未找到评测报告";
+        els.summary.innerHTML = "";
+        els.sceneBreakdown.innerHTML = `<div class="empty">请先运行评测生成 latest.json</div>`;
+        els.categoryBreakdown.innerHTML = `<div class="empty">请先运行评测生成 latest.json</div>`;
+        els.failureSummary.innerHTML = `<div class="empty">暂无报告数据</div>`;
+        els.caseRows.innerHTML = `<tr><td colspan="9" class="empty">暂无报告数据</td></tr>`;
+        return;
+      }
+
+      const report = state.report;
+      const results = report.results || [];
+      els.subtitle.textContent = `${state.payload.results_dir} / ${state.reportName}`;
+      els.statusText.textContent = `报告时间 ${report.timestamp || "n/a"}`;
+      renderFilters(results);
+      renderContextMeta(report);
+      renderRunTrend();
+      renderSummary(report);
+      renderBreakdown(els.sceneBreakdown, els.sceneCount, report.scene_breakdown);
+      renderBreakdown(els.categoryBreakdown, els.categoryCount, report.category_breakdown);
+      renderFailures(report.failure_summary);
+      renderAnalysis(report.failure_summary);
+      renderCases();
+    }
+
+    function openDrawer(title, data) {
+      els.drawerTitle.textContent = title;
+      els.drawerBody.textContent = JSON.stringify(data, null, 2);
+      els.drawer.classList.add("open");
+    }
+
+    els.caseRows.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-case]");
+      if (!button) return;
+      loadCaseDetail(button.dataset.case).catch(showError);
+    });
+
+    els.reportSelect.addEventListener("change", () => {
+      loadReport(els.reportSelect.value).then(loadReportList).catch(showError);
+    });
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => switchView(tab.dataset.view));
+    });
+    els.historyRows.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-report]");
+      if (!button) return;
+      loadReport(button.dataset.report).then(() => switchView("overview")).catch(showError);
+    });
+    els.compareBtn.addEventListener("click", () => runCompare().catch(showError));
+    els.analysisGrid.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-analysis-group]");
+      if (!button) return;
+      const group = button.dataset.analysisGroup;
+      const name = button.dataset.analysisName;
+      state.analysisFilter = { group, name };
+      if (group === "by_scene") els.sceneFilter.value = name;
+      if (group === "by_category") els.categoryFilter.value = name;
+      if (group === "by_case") els.searchInput.value = name;
+      if (group === "by_metric" || group === "by_error_reason" || group === "by_tool" || group === "by_worker" || group === "by_failure_class") {
+        els.searchInput.value = name;
+      }
+      switchView("overview");
+      renderCases();
+    });
+    els.sceneFilter.addEventListener("change", renderCases);
+    els.categoryFilter.addEventListener("change", renderCases);
+    els.searchInput.addEventListener("input", renderCases);
+    els.reloadBtn.addEventListener("click", () => {
+      Promise.all([loadReport(state.reportName), loadReportList()]).catch(showError);
+    });
+    els.rawBtn.addEventListener("click", () => openDrawer(state.reportName, state.report || state.payload));
+    els.closeDrawer.addEventListener("click", () => els.drawer.classList.remove("open"));
+
+    function showError(error) {
+      els.statusText.textContent = `错误：${error.message}`;
+      els.summary.innerHTML = "";
+      els.caseRows.innerHTML = `<tr><td colspan="9" class="empty">${esc(error.message)}</td></tr>`;
+    }
+
+    loadReport().then(loadReportList).catch(showError);
+  </script>
+</body>
+
+</html>

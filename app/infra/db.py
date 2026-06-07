@@ -55,6 +55,7 @@ async def init_db() -> None:
         auth,
         chat,
         context,
+        eval,
         fridge,
         game,
         grocery,

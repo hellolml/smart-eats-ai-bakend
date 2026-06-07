@@ -1,0 +1,3 @@
+# Optional evaluation dependencies for scheduled/manual runs
+arize-phoenix>=7.0.0
+deepeval>=2.0.0

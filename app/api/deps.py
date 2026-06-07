@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Query, Request
@@ -63,3 +64,49 @@ async def parse_restaurants_query(
             status_code=422,
             detail=f"筛选参数不合法：{first_error}",
         ) from exc
+
+
+def _eval_admin_phones() -> set[str]:
+    """Return whitelisted phone numbers from EVAL_ADMIN_PHONES env var."""
+    return {s.strip() for s in os.getenv("EVAL_ADMIN_PHONES", "").split(",") if s.strip()}
+
+
+async def require_eval_admin(request: Request) -> dict[str, str | None]:
+    """Verify the current user is on the eval admin whitelist (phone-based).
+
+    Returns a dict with ``user_id``, ``email``, ``phone`` on success.
+    Raises 401 if not authenticated, 403 if not on the whitelist.
+    """
+    user_id: str | None = None
+    try:
+        user_id = await get_current_user_id(request)
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="authentication required") from None
+
+    # Look up phone from DB for whitelist matching
+    email: str | None = None
+    phone: str | None = None
+    try:
+        from app.infra.db import AsyncSessionLocal
+        from app.infra.models.user import User
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+            if user:
+                email = user.email
+                phone = user.phone
+    except Exception:
+        pass
+
+    admin_phones = _eval_admin_phones()
+
+    # If no whitelist configured, allow all authenticated users (dev-friendly default)
+    if not admin_phones:
+        return {"user_id": user_id, "email": email, "phone": phone}
+
+    if phone and phone in admin_phones:
+        return {"user_id": user_id, "email": email, "phone": phone}
+
+    raise HTTPException(status_code=403, detail="eval admin access denied")

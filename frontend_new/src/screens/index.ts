@@ -6,3 +6,4 @@ export { ChatHistoryScreen } from './ChatHistoryScreen';
 export { DetailScreen, PlansScreen, QrScreen } from './PlanScreens';
 export { ProfileScreen, SettingsScreen } from './ProfileScreens';
 export { ModelSettingsScreen } from './ModelSettingsScreen';
+export { EvalWorkbenchScreen } from './EvalWorkbenchScreen';

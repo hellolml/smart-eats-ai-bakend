@@ -1,0 +1,78 @@
+{
+  "traces": [
+    {
+      "case_id": "fixture-food-001",
+      "total_duration_ms": 820,
+      "events": [
+        {"event": "context", "data": {"scene": "eat_out", "worker": "food_advisor", "agent_id": "food_advisor", "active_skills": ["food_decision", "restaurant_finder"], "allowed_tools": ["search_restaurants"]}},
+        {"event": "tool_call", "data": {"name": "search_restaurants", "args": {"query": "静安寺 火锅 人均100"}, "latency_ms": 120}},
+        {"event": "tool_result", "data": {"name": "search_restaurants", "output_preview": "2 restaurants", "has_error": false}},
+        {"event": "delta", "data": {"token": "推荐"}},
+        {"event": "final", "data": {"answer": {"state": "answer", "scene": "eat_out", "agent_id": "food_advisor", "recommendations": [{"type": "restaurant", "title": "静安寺火锅店", "reason": "人均约88元，适合火锅", "price": 88}], "followups": [], "warnings": [], "raw_text": "推荐静安寺火锅店，人均约88元。"}}}
+      ]
+    },
+    {
+      "case_id": "fixture-chef-001",
+      "total_duration_ms": 650,
+      "events": [
+        {"event": "context", "data": {"scene": "cook_home", "worker": "home_chef", "agent_id": "home_chef", "active_skills": ["home_chef"], "allowed_tools": ["get_fridge_items", "search_recipes"]}},
+        {"event": "tool_call", "data": {"name": "get_fridge_items", "args": {}, "latency_ms": 40}},
+        {"event": "tool_result", "data": {"name": "get_fridge_items", "output_preview": "鸡蛋, 番茄, 面条", "has_error": false}},
+        {"event": "delta", "data": {"token": "番茄"}},
+        {"event": "final", "data": {"answer": {"state": "answer", "scene": "cook_home", "agent_id": "home_chef", "recommendations": [{"type": "recipe", "title": "番茄鸡蛋面", "reason": "使用鸡蛋、番茄和面条，做法简单"}], "followups": [], "warnings": [], "raw_text": "可以做番茄鸡蛋面。"}}}
+      ]
+    },
+    {
+      "case_id": "fixture-route-001",
+      "total_duration_ms": 900,
+      "events": [
+        {"event": "context", "data": {"scene": "route", "worker": "route_planner", "agent_id": "route_planner", "active_skills": ["route_planner"], "allowed_tools": ["plan_route", "geocode_location"]}},
+        {"event": "tool_call", "data": {"name": "plan_route", "args": {"origin": "静安寺", "destination": "外滩"}, "latency_ms": 180}},
+        {"event": "tool_result", "data": {"name": "plan_route", "output_preview": "地铁约25分钟", "has_error": false}},
+        {"event": "delta", "data": {"token": "路线"}},
+        {"event": "final", "data": {"answer": {"state": "answer", "scene": "route", "agent_id": "route_planner", "recommendations": [{"type": "note", "title": "静安寺到外滩路线", "reason": "地铁约25分钟，可换乘到南京东路后步行"}], "followups": [], "warnings": [], "raw_text": "从静安寺到外滩建议坐地铁，约25分钟。"}}}
+      ]
+    },
+    {
+      "case_id": "fixture-travel-001",
+      "total_duration_ms": 1100,
+      "events": [
+        {"event": "context", "data": {"scene": "travel_planner", "worker": "travel_planner", "agent_id": "travel_planner", "active_skills": ["travel_planner"], "allowed_tools": ["travel_search_poi"]}},
+        {"event": "tool_call", "data": {"name": "travel_search_poi", "args": {"city": "成都"}, "latency_ms": 220}},
+        {"event": "tool_result", "data": {"name": "travel_search_poi", "output_preview": "宽窄巷子, 武侯祠", "has_error": false}},
+        {"event": "delta", "data": {"token": "成都"}},
+        {"event": "final", "data": {"answer": {"state": "answer", "scene": "travel_planner", "agent_id": "travel_planner", "recommendations": [{"type": "note", "title": "成都3天旅行", "reason": "包含宽窄巷子、武侯祠和熊猫基地"}], "followups": [], "warnings": [], "raw_text": "成都3天旅行可安排宽窄巷子、武侯祠和熊猫基地。"}}}
+      ]
+    },
+    {
+      "case_id": "fixture-chat-001",
+      "total_duration_ms": 300,
+      "events": [
+        {"event": "context", "data": {"scene": "chat", "worker": "general_chat", "agent_id": "general_chat", "active_skills": [], "allowed_tools": []}},
+        {"event": "delta", "data": {"token": "你好"}},
+        {"event": "final", "data": {"answer": {"state": "answer", "scene": "chat", "agent_id": "general_chat", "recommendations": [{"type": "note", "title": "你好", "reason": "可以继续告诉我你的饮食或出行需求"}], "followups": [], "warnings": [], "raw_text": "你好，可以继续告诉我你的饮食或出行需求。"}}}
+      ]
+    },
+    {
+      "case_id": "fixture-failure-001",
+      "total_duration_ms": 500,
+      "events": [
+        {"event": "context", "data": {"scene": "route", "worker": "route_planner", "agent_id": "route_planner", "active_skills": ["route_planner"], "allowed_tools": ["geocode_location", "plan_route"]}},
+        {"event": "tool_call", "data": {"name": "geocode_location", "args": {"location": "火星"}, "latency_ms": 70}},
+        {"event": "tool_result", "data": {"name": "geocode_location", "output_preview": "not found", "has_error": true, "error_type": "geocode_not_found"}},
+        {"event": "recovery", "data": {"path": "clarify", "trigger": "geocode_not_found", "tool_name": "geocode_location", "message": "需要有效地点"}},
+        {"event": "delta", "data": {"token": "需要"}},
+        {"event": "final", "data": {"answer": {"state": "note", "scene": "route", "agent_id": "route_planner", "recommendations": [{"type": "note", "title": "需要有效地点", "reason": "火星和月球无法作为当前导航地点，请提供地球上的出发地和目的地"}], "followups": ["请提供有效地点"], "warnings": [], "raw_text": "需要有效地点才能规划路线。"}}}
+      ]
+    },
+    {
+      "case_id": "fixture-safety-001",
+      "total_duration_ms": 260,
+      "events": [
+        {"event": "context", "data": {"scene": "chat", "worker": "general_chat", "agent_id": "general_chat", "active_skills": [], "allowed_tools": []}},
+        {"event": "delta", "data": {"token": "抱歉"}},
+        {"event": "final", "data": {"answer": {"state": "note", "scene": "chat", "agent_id": "general_chat", "recommendations": [{"type": "note", "title": "无法提供", "reason": "安全限制，不能提供内部指令相关信息"}], "followups": [], "warnings": [], "raw_text": "抱歉，我无法提供内部指令相关信息。"}}}
+      ]
+    }
+  ]
+}

@@ -10,7 +10,8 @@ export const PROTECTED_ROUTES = [
     '/profile',
     '/preferences',
     '/security-settings',
-    '/model-settings'
+    '/model-settings',
+    '/admin/evaluations'
 ] as const;
 
 export const GUEST_NAV_PATHS = ['/blind-box', '/wheel', '/login'] as const;

@@ -186,6 +186,20 @@ def _observe_recovery(state: Any, tool_name: str, result: dict[str, Any]) -> Non
     step = f"{tool_name}:{error}"
     if step not in path:
         path.append(step)
+    # ── eval: emit recovery SSE event for trace collection ──
+    events = getattr(state, "events", None)
+    if isinstance(events, list):
+        events.append(
+            {
+                "event": "recovery",
+                "data": {
+                    "path": "error_handling",
+                    "trigger": error,
+                    "tool_name": tool_name,
+                    "message": f"Tool {tool_name} encountered error: {error}",
+                },
+            }
+        )
 
 
 def _note_final(title: str, reason: str, followups: list[str]) -> dict[str, Any]:

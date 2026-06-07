@@ -90,9 +90,11 @@ def _with_agent_metadata(final_json: dict[str, Any], state: AgentRuntimeState) -
     if scene == "travel_planner":
         agent_id = agent_id or "travel_plan"
         plan_type = plan_type or "travel"
-    if not agent_id and not plan_type:
+    if not agent_id and not plan_type and not scene:
         return final_json
     enriched = dict(final_json)
+    if scene:
+        enriched.setdefault("scene", scene)
     if agent_id:
         enriched.setdefault("agent_id", agent_id)
     if plan_type:

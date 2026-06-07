@@ -14,6 +14,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
     const isAuthPage = ['/login', '/register'].includes(location.pathname);
     const isAiChat = location.pathname === '/ai-chat';
+    const isEvalWorkbench = location.pathname === '/admin/evaluations';
     const isSubPage = [
         '/preferences',
         '/security-settings',
@@ -21,12 +22,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         '/settings/skills',
         '/blind-box',
         '/wheel',
-        '/ai-chat'
+        '/ai-chat',
+        '/admin/evaluations'
     ].includes(location.pathname);
     const showBottomNav = !isAuthPage && !isSubPage;
 
     return (
-        <div className="h-[100dvh] w-full bg-[#FFF9F2] flex flex-col md:flex-row overflow-hidden relative">
+        <div className={`h-[100dvh] w-full flex flex-col md:flex-row overflow-hidden relative ${isEvalWorkbench ? 'bg-gray-100' : 'bg-[#FFF9F2]'}`}>
             {/* Desktop Sidebar (Only visible on md and up) */}
             {showBottomNav && (
                 <aside className="hidden md:flex flex-col w-64 bg-[#FFF9F2] border-r border-orange-100 shadow-[4px_0_24px_rgba(126,87,255,0.04)] z-50 flex-shrink-0">
@@ -60,7 +62,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
                 {/* 主体内容区域-自动填充剩余空间 */}
                 <main className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
-                    <div className={`flex-1 flex flex-col h-full ${isAiChat ? 'w-full max-w-none' : 'container mx-auto px-4 md:px-8 max-w-2xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl'}
+                    <div className={`flex-1 flex flex-col h-full ${isAiChat || isEvalWorkbench ? 'w-full max-w-none' : 'container mx-auto px-4 md:px-8 max-w-2xl md:max-w-4xl lg:max-w-6xl xl:max-w-7xl'}
                     ${showBottomNav ? 'pt-2 md:pt-6' : ''}`}>
 
                         {/* 页面自行控制滚动条 */}

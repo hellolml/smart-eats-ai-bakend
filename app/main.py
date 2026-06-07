@@ -20,6 +20,10 @@ logger = init_logging()
 app = FastAPI(title="smart-eats")
 
 
+def _should_warmup_rag(env: str | None) -> bool:
+    return (env or "").lower() != "test"
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     from app.agent.llm_adapters import ProviderRegistry
@@ -35,12 +39,15 @@ async def on_startup() -> None:
     logger.info("tools_registered count=%s names=%s", len(tools), [t["name"] for t in tools])
     await init_db()
     
-    # Preload RAG embedding model to avoid cold start latency
-    try:
-        from app.agent.rag import base as rag
-        rag.warmup()
-    except Exception as e:
-        logger.warning("RAG warmup skipped: %s", e)
+    # Preload RAG embedding model to avoid cold start latency outside test/CI.
+    if _should_warmup_rag(settings.ENV):
+        try:
+            from app.agent.rag import base as rag
+            rag.warmup()
+        except Exception as e:
+            logger.warning("RAG warmup skipped: %s", e)
+    else:
+        logger.info("RAG warmup skipped for ENV=%s", settings.ENV)
 
 
 @app.middleware("http")

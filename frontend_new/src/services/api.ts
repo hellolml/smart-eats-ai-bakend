@@ -154,9 +154,14 @@ function buildQuery(params?: Record<string, string | number | boolean | null | u
   return text ? `?${text}` : '';
 }
 
-function buildUrl(path: string): string {
+function buildUrl(path: string, scope: 'app' | 'internal' = 'app'): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
   const base = getApiBaseUrl();
+  if (scope === 'internal') {
+    if (!base) return `/api/v1/internal${normalized}`;
+    if (base.endsWith('/api/v1')) return `${base}/internal${normalized}`;
+    return `${base}/api/v1/internal${normalized}`;
+  }
   if (!base) return `/api/v1/app${normalized}`;
   if (base.endsWith('/api/v1/app')) return `${base}${normalized}`;
   if (base.endsWith('/api/v1')) return `${base}/app${normalized}`;
@@ -278,8 +283,8 @@ async function tryRefreshAccessToken(): Promise<boolean> {
   return refreshInFlight;
 }
 
-async function request<T>(path: string, options: { method?: string; body?: JsonValue; auth?: boolean; retryOnUnauthorized?: boolean } = {}): Promise<T> {
-  const { method = 'GET', body, auth = true, retryOnUnauthorized = true } = options;
+async function request<T>(path: string, options: { method?: string; body?: JsonValue; auth?: boolean; retryOnUnauthorized?: boolean; scope?: 'app' | 'internal' } = {}): Promise<T> {
+  const { method = 'GET', body, auth = true, retryOnUnauthorized = true, scope = 'app' } = options;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
   };
@@ -292,7 +297,7 @@ async function request<T>(path: string, options: { method?: string; body?: JsonV
     if (csrf) headers['x-csrf-token'] = csrf;
   }
 
-  const response = await fetch(buildUrl(path), {
+  const response = await fetch(buildUrl(path, scope), {
     method,
     headers,
     credentials: 'include',
@@ -692,6 +697,33 @@ export const appApi = {
       return request<import('../types').TestConfigResult>('/chat/model-configs/test', {
         method: 'POST',
         body: payload
+      });
+    }
+  },
+  evaluations: {
+    async checkAccess() {
+      return request<{ allowed: boolean; user_id?: string; email?: string; phone?: string }>('/eval-access', {
+        scope: 'internal'
+      });
+    },
+    async listReports() {
+      return request<{ source: string; results_dir: string; reports: Array<{ name: string; timestamp?: string; total_cases: number; overall_success_rate: number; failed_cases: number; p0_failed_cases: number; duration_seconds: number; suite?: string; runner?: string }> }>('/eval-reports', {
+        scope: 'internal'
+      });
+    },
+    async getReport(report: string = 'latest.json') {
+      return request<any>(`/eval-report?report=${encodeURIComponent(report)}`, {
+        scope: 'internal'
+      });
+    },
+    async getCaseDetail(report: string, caseId: string) {
+      return request<any>(`/eval-report/case?report=${encodeURIComponent(report)}&case_id=${encodeURIComponent(caseId)}`, {
+        scope: 'internal'
+      });
+    },
+    async compareReports(baseline: string, candidate: string) {
+      return request<any>(`/eval-report/compare?baseline=${encodeURIComponent(baseline)}&candidate=${encodeURIComponent(candidate)}`, {
+        scope: 'internal'
       });
     }
   }

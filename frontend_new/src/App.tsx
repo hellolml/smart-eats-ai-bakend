@@ -8,6 +8,7 @@ import {
   ChatHistoryScreen,
   CreateTravelScreen,
   DetailScreen,
+  EvalWorkbenchScreen,
   HomeScreen,
   LoginScreen,
   ModelSettingsScreen,
@@ -948,11 +949,15 @@ export default function App() {
           </Page>
 
           <Page active={screen === 'settings'}>
-            <SettingsScreen onBack={() => go('profile')} logout={handleLogout} openModelSettings={() => go('model-settings')} />
+            <SettingsScreen onBack={() => go('profile')} logout={handleLogout} openModelSettings={() => go('model-settings')} openEvalWorkbench={() => go('eval-workbench')} />
           </Page>
 
           <Page active={screen === 'model-settings'}>
             <ModelSettingsScreen onBack={() => go('settings')} />
+          </Page>
+
+          <Page active={screen === 'eval-workbench'}>
+            <EvalWorkbenchScreen onBack={() => go('settings')} />
           </Page>
         </main>
         <BottomTabs active={screen} visible={showTabs} go={go} />

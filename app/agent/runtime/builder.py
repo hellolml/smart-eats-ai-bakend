@@ -191,6 +191,14 @@ async def _prepare_langgraph_context(
                 "event": "context",
                 "data": {
                     "langgraph_native": True,
+                    "scene": state.scene,
+                    "worker": state.agent_id,
+                    "agent_id": state.agent_id,
+                    "plan_type": state.plan_type,
+                    "active_skills": state.context.get("active_skills"),
+                    "skill": ",".join(state.context.get("active_skills") or [])
+                    if isinstance(state.context.get("active_skills"), list)
+                    else None,
                     "context_budget": state.context.get("context_budget"),
                     "allowed_tools": state.context.get("allowed_tools"),
                     "retrieved_memory_count": len(state.retrieved_memories),
@@ -452,6 +460,18 @@ async def _apply_official_tool_postprocess(
                     "args": args,
                     "latency_ms": 0,
                     "result_preview": result_preview,
+                },
+            }
+        )
+        # ── eval: emit tool_result event for trace collection ──
+        chat_state.events.append(
+            {
+                "event": "tool_result",
+                "data": {
+                    "name": tool_name,
+                    "output_preview": result_preview,
+                    "has_error": isinstance(result, dict) and bool(result.get("error")),
+                    "error_type": result.get("error") if isinstance(result, dict) and result.get("error") else None,
                 },
             }
         )

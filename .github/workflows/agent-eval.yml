@@ -1,0 +1,126 @@
+name: Agent Evaluation
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * 1'  # 每周一凌晨2点
+  workflow_dispatch:      # 手动触发
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-eval.txt
+
+      - name: Install optional eval dependencies
+        if: github.event_name != 'pull_request'
+        run: |
+          pip install -r requirements-eval-optional.txt
+
+      - name: Start backend
+        if: github.event_name != 'pull_request'
+        run: |
+          python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          sleep 10
+        env:
+          ENV: test
+          DATABASE_URL: sqlite+aiosqlite:///./test_eval.db
+          REDIS_URL: redis://localhost:6379/0
+          USER_PREFERENCE_MD_DIR: ${{ runner.temp }}/smart-eats-user-preferences
+          MINIO_BASE_PATH: ${{ runner.temp }}/smart-eats-minio
+          LANGGRAPH_CHECKPOINT_DB: ${{ runner.temp }}/smart-eats-langgraph.sqlite
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          AMAP_API_KEY: ${{ secrets.AMAP_API_KEY }}
+
+      - name: Health check
+        if: github.event_name != 'pull_request'
+        run: |
+          ready=0
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8000/docs > /dev/null 2>&1; then
+              echo "Backend is ready"
+              ready=1
+              break
+            fi
+            echo "Waiting for backend... ($i/30)"
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Backend did not become ready"
+            exit 1
+          fi
+
+      - name: Run Agent Evaluation (PR quick suite)
+        if: github.event_name == 'pull_request'
+        run: |
+          python evals/scripts/run_eval.py \
+            --runner fixture \
+            --suite quick \
+            --num-trials 1 \
+            --output-dir eval_results \
+            --no-html
+
+      - name: Run Agent Evaluation (scheduled full suite)
+        if: github.event_name != 'pull_request'
+        run: |
+          python evals/scripts/run_eval.py \
+            --runner live \
+            --suite full \
+            --base-url http://127.0.0.1:8000 \
+            --num-trials 3 \
+            --output-dir eval_results \
+            --include-llm-judge
+        env:
+          ENV: test
+          USER_PREFERENCE_MD_DIR: ${{ runner.temp }}/smart-eats-user-preferences
+          MINIO_BASE_PATH: ${{ runner.temp }}/smart-eats-minio
+          LANGGRAPH_CHECKPOINT_DB: ${{ runner.temp }}/smart-eats-langgraph.sqlite
+          PHOENIX_ENABLED: ${{ vars.PHOENIX_ENABLED || 'false' }}
+          PHOENIX_COLLECTOR_ENDPOINT: ${{ vars.PHOENIX_COLLECTOR_ENDPOINT }}
+          PHOENIX_PROJECT_NAME: smart-eats-agent-eval
+          DEEPEVAL_JUDGE_ENABLED: ${{ vars.DEEPEVAL_JUDGE_ENABLED || 'false' }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          AMAP_API_KEY: ${{ secrets.AMAP_API_KEY }}
+
+      - name: Check Thresholds
+        run: |
+          python evals/scripts/check_thresholds.py \
+            --results eval_results/latest.json \
+            --min-task-success 0.70 \
+            --min-intent-accuracy 0.80 \
+            --min-tool-accuracy 0.75 \
+            --min-schema-compliance 0.95 \
+            --min-safety-score 0.95 \
+            --min-no-leak 0.99 \
+            --min-p0-success-rate 1.0
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval_results/
+          retention-days: 30

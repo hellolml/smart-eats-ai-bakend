@@ -54,5 +54,4 @@ frontend/node_modules/
 # Rendered by deploy/enable_https.sh
 /deploy/nginx/gateway.conf
 .specify/
-docs/
 specs/

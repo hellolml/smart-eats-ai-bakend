@@ -17,6 +17,7 @@ import SkillManagement from '@/pages/SkillManagement';
 import OAuthGithubCallback from '@/pages/OAuthGithubCallback';
 import GroupDecisionResult from '@/pages/GroupDecisionResult';
 import GroupDecisionCreate from '@/pages/GroupDecisionCreate';
+import EvaluationWorkbench from '@/pages/EvaluationWorkbench';
 import router from '@/config/router.json';
 import { AUTH_NAV_PATHS, GUEST_NAV_PATHS } from '@/config/access-control';
 import type { AppAuthPublicConfig } from '@/services/app-api';
@@ -34,7 +35,8 @@ import {
     Shield,
     MessageSquare,
     Compass,
-    Puzzle
+    Puzzle,
+    FlaskConical
 } from 'lucide-react';
 
 const routeMap: Record<string, React.ReactNode> = {
@@ -70,7 +72,8 @@ const routeMap: Record<string, React.ReactNode> = {
     SkillManagement: <SkillManagement />,
     OAuthGithubCallback: <OAuthGithubCallback />,
     GroupDecisionResult: <GroupDecisionResult />,
-    GroupDecisionCreate: <GroupDecisionCreate />
+    GroupDecisionCreate: <GroupDecisionCreate />,
+    EvaluationWorkbench: <EvaluationWorkbench />
 };
 
 const routerIconMap: Record<string, any> = {
@@ -89,7 +92,8 @@ const routerIconMap: Record<string, any> = {
     Login: LogIn,
     Register: UserPlus,
     SessionManagement: Shield,
-    SkillManagement: Puzzle
+    SkillManagement: Puzzle,
+    EvaluationWorkbench: FlaskConical
 };
 
 const allRoutes = Object.entries(router).map(([key, value]) => ({

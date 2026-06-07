@@ -319,6 +319,134 @@ export interface AppAuthMethods {
     };
 }
 
+// ---- Eval Workbench Types ----
+
+export interface EvalAccessStatus {
+    allowed: boolean;
+    user_id?: string;
+    email?: string;
+    phone?: string;
+}
+
+export interface EvalReportSummary {
+    name: string;
+    timestamp?: string;
+    total_cases: number;
+    total_trials: number;
+    overall_success_rate: number;
+    failed_cases: number;
+    p0_failed_cases: number;
+    duration_seconds: number;
+    suite?: string;
+    runner?: string;
+    size_bytes?: number;
+    modified_at?: number;
+}
+
+export interface EvalReportListResponse {
+    source: 'db' | 'json';
+    results_dir: string;
+    reports: EvalReportSummary[];
+}
+
+export interface EvalTrial {
+    trial_number: number;
+    weighted_score?: number;
+    actual_scene?: string;
+    actual_worker?: string;
+    tool_calls?: string[];
+    failure_class?: string;
+    error_reason?: string;
+    error?: string;
+    final_answer_preview?: string;
+    threshold_failures?: Array<{ metric: string; expected: number; actual: number }>;
+    missing_metrics?: string[];
+    scores?: Record<string, number>;
+    duration_ms?: number;
+    trace_timeline?: EvalTraceEvent[];
+}
+
+export interface EvalTraceEvent {
+    index: number;
+    event_type: string;
+    label?: string;
+    tool_name?: string;
+    duration_ms?: number;
+    timestamp?: string;
+    data?: Record<string, unknown>;
+}
+
+export interface EvalCaseResult {
+    case_id: string;
+    scene?: string;
+    category?: string;
+    priority?: string;
+    task?: string;
+    success_rate: number;
+    avg_scores?: Record<string, number>;
+    trials?: EvalTrial[];
+}
+
+export interface EvalReport {
+    metadata?: {
+        suite?: string;
+        runner?: string;
+        report_schema_version?: string;
+        [key: string]: unknown;
+    };
+    timestamp?: string;
+    total_cases?: number;
+    total_trials?: number;
+    overall_success_rate: number;
+    category_breakdown?: Record<string, { success_rate: number }>;
+    scene_breakdown?: Record<string, { success_rate: number }>;
+    failure_summary?: Record<string, Record<string, number | { success_rate: number }>>;
+    duration_seconds?: number;
+    results?: EvalCaseResult[];
+}
+
+export interface EvalReportResponse {
+    available: boolean;
+    source: 'db' | 'json';
+    results_dir: string;
+    selected: string;
+    reports: EvalReportSummary[];
+    report?: EvalReport;
+    message?: string;
+}
+
+export interface EvalCaseDetailResponse {
+    source: 'db' | 'json';
+    report?: string;
+    case?: EvalCaseResult;
+    trials?: EvalTrial[];
+}
+
+export interface EvalCompareDelta {
+    overall_success_rate: number;
+    failed_cases: number;
+    p0_failed_cases: number;
+    duration_seconds: number;
+}
+
+export interface EvalCompareResponse {
+    source: 'db' | 'json';
+    baseline: string;
+    candidate: string;
+    summary_delta: EvalCompareDelta;
+    baseline_summary: EvalReportSummary;
+    candidate_summary: EvalReportSummary;
+    case_changes: {
+        regressions: Array<{ case_id: string; baseline: EvalCaseResult; candidate: EvalCaseResult }>;
+        fixes: Array<{ case_id: string; baseline: EvalCaseResult; candidate: EvalCaseResult }>;
+        score_drops: Array<{ case_id: string; metric: string; baseline: number; candidate: number; delta: number }>;
+        score_gains: Array<{ case_id: string; metric: string; baseline: number; candidate: number; delta: number }>;
+    };
+    scene_delta?: Record<string, { baseline: number; candidate: number; delta: number }>;
+    category_delta?: Record<string, { baseline: number; candidate: number; delta: number }>;
+    metric_delta?: Record<string, { baseline: number; candidate: number; delta: number }>;
+}
+
 export class ApiError extends Error {
     status?: number;
     code?: string | number;
@@ -339,10 +467,13 @@ function getApiBaseUrl(): string {
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
 }
 
-type ApiScope = 'app' | 'agent';
+type ApiScope = 'app' | 'agent' | 'internal';
 
 function buildUrl(path: string, scope: ApiScope = 'app'): string {
     const normalized = path.startsWith('/') ? path : `/${path}`;
+    if (scope === 'internal') {
+        return `${getApiBaseUrl()}/api/v1/internal${normalized}`;
+    }
     return `${getApiBaseUrl()}/api/v1/${scope}${normalized}`;
 }
 
@@ -1211,6 +1342,43 @@ export const appApi = {
             return request<{ deleted: boolean }>(`/chat/session/${sessionId}`, {
                 method: 'DELETE'
             });
+        }
+    },
+
+    evaluations: {
+        async checkAccess() {
+            return request<EvalAccessStatus>('/eval-access', {
+                scope: 'internal',
+                auth: true,
+            });
+        },
+
+        async listReports() {
+            return request<EvalReportListResponse>('/eval-reports', {
+                scope: 'internal',
+                auth: true,
+            });
+        },
+
+        async getReport(report: string = 'latest.json') {
+            return request<EvalReportResponse>(`/eval-report?report=${encodeURIComponent(report)}`, {
+                scope: 'internal',
+                auth: true,
+            });
+        },
+
+        async getCaseDetail(report: string, caseId: string) {
+            return request<EvalCaseDetailResponse>(
+                `/eval-report/case?report=${encodeURIComponent(report)}&case_id=${encodeURIComponent(caseId)}`,
+                { scope: 'internal', auth: true }
+            );
+        },
+
+        async compareReports(baseline: string, candidate: string) {
+            return request<EvalCompareResponse>(
+                `/eval-report/compare?baseline=${encodeURIComponent(baseline)}&candidate=${encodeURIComponent(candidate)}`,
+                { scope: 'internal', auth: true }
+            );
         }
     }
 };

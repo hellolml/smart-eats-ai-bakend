@@ -103,6 +103,8 @@ class RoutePlannerHooks(BaseSkillHooks):
                     "若存在 steps/segments，优先提炼其中关键信息。"
                 )
             return None
+        # ── eval: emit recovery SSE event ──
+        _emit_recovery_event(state, error, "plan_route")
         if error == "missing_origin":
             return _note_final(
                 "还需要你的出发位置，才能规划路线。",
@@ -153,6 +155,23 @@ def _note_final(title: str, reason: str, followups: list[str]) -> dict[str, Any]
         "followups": followups,
         "warnings": [],
     }
+
+
+def _emit_recovery_event(state: Any, trigger: str, tool_name: str) -> None:
+    """Emit a recovery SSE event for evaluation trace collection."""
+    events = getattr(state, "events", None)
+    if isinstance(events, list):
+        events.append(
+            {
+                "event": "recovery",
+                "data": {
+                    "path": "clarify" if trigger in ("missing_origin", "missing_destination") else "error_handling",
+                    "trigger": trigger,
+                    "tool_name": tool_name,
+                    "message": f"Route planning encountered: {trigger}",
+                },
+            }
+        )
 
 
 CONFIRM_CUES: tuple[str, ...] = (

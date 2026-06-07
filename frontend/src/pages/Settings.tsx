@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, ChevronRight, HelpCircle, Info, Puzzle, Settings2, Shield } from 'lucide-react';
+import { Bot, ChevronRight, FlaskConical, HelpCircle, Info, Puzzle, Settings2, Shield } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { appApi } from '@/services/app-api';
 
 const settingsItems = [
     {
@@ -46,8 +47,35 @@ const settingsItems = [
     }
 ];
 
+const evalWorkbenchItem = {
+    title: '评测工作台',
+    desc: '查看评测报告、用例详情与失败分析',
+    icon: FlaskConical,
+    color: 'text-amber-600',
+    bgColor: 'bg-amber-50',
+    path: '/admin/evaluations'
+};
+
 export default function Settings() {
     const navigate = useNavigate();
+    const [showEvalEntry, setShowEvalEntry] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        appApi.evaluations
+            .checkAccess()
+            .then((data) => {
+                if (!cancelled) setShowEvalEntry(data.allowed === true);
+            })
+            .catch(() => {
+                // Not authorized — just hide the entry
+            });
+        return () => { cancelled = true; };
+    }, []);
+
+    const visibleItems = showEvalEntry
+        ? [evalWorkbenchItem, ...settingsItems]
+        : settingsItems;
 
     return (
         <div className="h-full flex flex-col overflow-hidden pb-20 md:pb-4 animate-in fade-in duration-500 relative">
@@ -76,7 +104,7 @@ export default function Settings() {
                     transition={{ delay: 0.1 }}
                     className="bg-white border-y border-purple-50 shadow-sm overflow-hidden divide-y divide-gray-50"
                 >
-                    {settingsItems.map((item) => (
+                    {visibleItems.map((item) => (
                         <button
                             key={item.title}
                             onClick={() => item.path !== '#' && navigate(item.path)}
