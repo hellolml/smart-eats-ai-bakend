@@ -769,10 +769,21 @@ async def _resolve_runtime_skills(
     if hook_context:
         context = _merge_context(context, hook_context)
     allowed_tools = skill_runtime.allowed_tools if skill_runtime.active_skills else base_tools
-    context["allowed_tools"] = SkillHookManager.from_skills(skill_runtime.active_skill_specs).filter_allowed_tools(
+    filtered_tools = SkillHookManager.from_skills(skill_runtime.active_skill_specs).filter_allowed_tools(
         state,
         allowed_tools,
     )
+    context["allowed_tools"] = filtered_tools
+    context["skill_allowed_tools"] = list(filtered_tools)
+    diagnostics = context.get("skill_diagnostics")
+    if isinstance(diagnostics, dict):
+        tool_sources = diagnostics.get("tool_sources")
+        if isinstance(tool_sources, dict):
+            diagnostics["tool_sources"] = {
+                tool_name: sources
+                for tool_name, sources in tool_sources.items()
+                if tool_name in set(filtered_tools)
+            }
     return context, skill_runtime.system_prompt_addendum
 
 
@@ -891,12 +902,16 @@ def build_agent_runtime_graph(
     redis_client: Any,
     provider: str | None = None,
     resolved_model_config: dict[str, Any] | None = None,
+    planner: Any | None = None,
+    tool_node: Any | None = None,
 ) -> Any:
     return _build_agent_runtime_graph(
         db=db,
         redis_client=redis_client,
         provider=provider,
         resolved_model_config=resolved_model_config,
+        planner=planner,
+        tool_node=tool_node,
     )
 
 
@@ -905,6 +920,8 @@ def _build_agent_runtime_graph(
     redis_client: Any,
     provider: str | None = None,
     resolved_model_config: dict[str, Any] | None = None,
+    planner: Any | None = None,
+    tool_node: Any | None = None,
 ) -> Any:
     from langgraph.graph import StateGraph
     from langgraph.prebuilt import ToolNode
@@ -918,10 +935,10 @@ def _build_agent_runtime_graph(
         if isinstance(resolved_model_config, dict) and resolved_model_config.get("source") == "user_config"
         else None
     )
-    planner = build_planner(provider=provider, config=planner_config)
+    planner = planner or build_planner(provider=provider, config=planner_config)
     registered_tools = _registered_tool_names()
 
-    tool_node = ToolNode(
+    tool_node = tool_node or ToolNode(
         [
             *select_tools(registered_tools),
             _build_submit_final_answer_tool(),

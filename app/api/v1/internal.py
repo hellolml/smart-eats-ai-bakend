@@ -1204,7 +1204,7 @@ async def list_monitoring_traces(
     offset: int = Query(0, ge=0),
     _admin: dict[str, str | None] = Depends(require_eval_admin),
 ) -> dict[str, Any]:
-    from app.agent.monitoring import conversation_run_summary, list_conversation_runs
+    from app.agent.monitoring import conversation_run_summary, list_conversation_runs, load_chat_session_titles
     from app.infra.eval_db import eval_session
 
     async with eval_session() as session:
@@ -1221,7 +1221,13 @@ async def list_monitoring_traces(
             limit=limit,
             offset=offset,
         )
-    return {"total": total, "limit": limit, "offset": offset, "records": [conversation_run_summary(row) for row in rows]}
+        title_map = await load_chat_session_titles([row.session_id for row in rows])
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "records": [conversation_run_summary(row, session_title=title_map.get(row.session_id)) for row in rows],
+    }
 
 
 @router.get("/monitoring/traces/{run_id}")
@@ -1611,13 +1617,14 @@ async def list_realtime_evals(
     _admin: dict[str, str | None] = Depends(require_eval_admin),
 ) -> dict[str, Any]:
     """查询实时评测记录（兼容旧前端；优先读 conversation_* 表）."""
-    from app.agent.monitoring import conversation_run_summary, list_conversation_runs
+    from app.agent.monitoring import conversation_run_summary, list_conversation_runs, load_chat_session_titles
     from app.infra.eval_db import eval_session
     from app.infra.models.eval import EvalRun
 
     async with eval_session() as session:
         total, rows = await list_conversation_runs(session, scene=scene, limit=limit, offset=offset)
-        records = [conversation_run_summary(row) for row in rows]
+        title_map = await load_chat_session_titles([row.session_id for row in rows])
+        records = [conversation_run_summary(row, session_title=title_map.get(row.session_id)) for row in rows]
         if min_quality is not None:
             records = [row for row in records if float(row.get("overall_quality") or 0.0) >= min_quality]
             total = len(records)

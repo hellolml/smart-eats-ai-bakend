@@ -6,7 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from openai import PermissionDeniedError
 
-from app.agent.graph import _coerce_runtime_state, _normalize_llm_upstream_error_message, run_chat_stream
+from app.agent.graph import _classify_llm_upstream_issue, _coerce_runtime_state, _normalize_llm_upstream_error_message, run_chat_stream
 from app.agent.runtime.graph import AgentRuntimeState
 from app.agent.state import ChatState
 
@@ -44,6 +44,25 @@ class _FakeGraphBuilder:
 
     def compile(self, **_kwargs):
         return _FakeCompiledGraph(self._updates)
+
+
+class _SlowFakeCompiledGraph:
+    async def astream(self, *_args, **_kwargs):
+        await asyncio.sleep(0.2)
+        yield {
+            "session_id": "s-slow",
+            "message": "quick dinner",
+            "final_json": {
+                "recommendations": [{"type": "note", "title": "slow final", "reason": "test"}],
+                "followups": [],
+                "warnings": [],
+            },
+        }
+
+
+class _SlowFakeGraphBuilder:
+    def compile(self, **_kwargs):
+        return _SlowFakeCompiledGraph()
 
 
 def test_coerce_runtime_state_normalizes_dict_values_to_typed_state():
@@ -85,6 +104,8 @@ async def test_run_chat_stream_extracts_final_json_from_typed_graph_values(monke
 
     assert events[-1]["event"] == "final"
     assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "typed state final"
+    assert events[-1]["data"]["agent_result"]["status"] == "completed"
+    assert events[-1]["data"]["trace_id"] is not None
 
 
 @pytest.mark.asyncio
@@ -121,6 +142,7 @@ async def test_run_chat_stream_uses_supervisor_direct_ai_text_when_no_final_json
     answer = events[-1]["data"]["answer"]
     assert answer["recommendations"][0]["title"] == "你好呀！有什么可以帮你的吗？"
     assert answer["recommendations"][0].get("reason") != "fallback"
+    assert events[-1]["data"]["agent_result"]["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -197,12 +219,8 @@ async def test_app_chat_stream_stop(client, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["data"]["sessions"]
 
-    async def _slow_plan_tool_calls(self, system, user, available_tools):
-        await asyncio.sleep(0.2)
-        return {"content": "", "tool_calls": []}
-
-    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _slow_plan_tool_calls)
     monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr("app.agent.supervisor.build_supervisor_runtime_graph", lambda **_kwargs: _SlowFakeGraphBuilder())
 
     got_final = False
     stopped_flag = None
@@ -351,6 +369,32 @@ def test_normalize_llm_upstream_error_message_maps_free_tier_quota():
 
     assert "免费额度已用尽" in message
     assert "仅使用免费额度" in message
+
+
+def test_classify_llm_upstream_issue_maps_subscription_expired():
+    response = MagicMock()
+    response.request = MagicMock()
+    response.status_code = 403
+    response.headers = {}
+
+    exc = PermissionDeniedError(
+        "Error code: 403",
+        response=response,
+        body={
+            "error": {
+                "message": "coding_plan_subscription_expired: Coding Plan subscription is expired",
+                "type": "coding_plan_subscription_expired",
+                "code": "coding_plan_subscription_expired",
+            }
+        },
+    )
+
+    issue = _classify_llm_upstream_issue(exc)
+
+    assert issue["category"] == "provider_auth"
+    assert issue["code"] == "subscription_expired"
+    assert issue["action"] == "switch_model_or_refresh_provider_subscription"
+    assert issue["http_status"] == 403
 
 
 def test_normalize_llm_upstream_error_message_maps_invalid_image_payload():

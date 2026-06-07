@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.agent.runtime.graph import AgentRuntimeState, _limit_skill_tool_calls, get_agent_runtime_config
@@ -15,6 +17,8 @@ def test_travel_plan_new_skill_replaces_legacy_travel_planner_and_activates():
 
     assert legacy is None
     assert travel is not None
+    assert "geocode_location" not in travel.tools.allow
+    assert "plan_route" not in travel.tools.allow
     assert "travel_fetch_url_content" in travel.tools.allow
     assert "travel_search_poi" in travel.tools.allow
     assert "travel_search_nearby_poi" in travel.tools.allow
@@ -32,7 +36,7 @@ def test_travel_plan_new_skill_replaces_legacy_travel_planner_and_activates():
     assert any(reason.startswith("scene:travel_planner") for reason in active.activation_reasons["travel_plan_new"])
 
 
-def test_travel_plan_new_loads_complete_adapted_references():
+def test_travel_plan_new_runtime_body_is_compact_and_keeps_references_on_disk():
     skills = load_skills_from_path("agent_skills")
     travel = next(skill for skill in skills if skill.id == "travel_plan_new")
 
@@ -40,8 +44,13 @@ def test_travel_plan_new_loads_complete_adapted_references():
 
     assert "用户补充地点最高优先级" in body
     assert "美食补充必须是具体店名" in body
-    assert "相邻天通过共享端点衔接" in body
     assert "travel_search_nearby_poi" in body
+    assert "Reference: references/" not in body
+    assert len(body) < 12000
+
+    reference_dir = Path("agent_skills/travel_plan_new/references")
+    assert (reference_dir / "orchestrate-travel-content.md").exists()
+    assert (reference_dir / "generate-itinerary.md").exists()
 
 
 def test_travel_scene_food_words_stay_in_travel_skill_without_food_skills():

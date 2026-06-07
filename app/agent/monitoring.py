@@ -185,6 +185,83 @@ def _avg(values: list[float]) -> float:
     return round(sum(values) / len(values), 4) if values else 0.0
 
 
+def _clean_title(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    title = value.strip()
+    return title or None
+
+
+def _extract_runtime_model_config(raw: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = {
+        "source",
+        "provider",
+        "provider_value",
+        "config_id",
+        "display_name",
+        "base_url",
+        "model_planner",
+        "model_writer",
+        "model_vision_planner",
+    }
+    candidates: list[Any] = [raw.get("model_config")]
+    agent_result = raw.get("agent_result")
+    if isinstance(agent_result, dict):
+        diagnostics = agent_result.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            candidates.append(diagnostics.get("model_config"))
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        cleaned = {
+            key: value
+            for key, value in candidate.items()
+            if key in allowed_keys and value not in (None, "")
+        }
+        if cleaned:
+            return cleaned
+    provider = raw.get("model_provider")
+    model = raw.get("model_name")
+    fallback: dict[str, Any] = {}
+    if isinstance(provider, str) and provider:
+        fallback["provider"] = provider
+    if isinstance(model, str) and model:
+        fallback["model_planner"] = model
+    return fallback
+
+
+async def load_chat_session_titles(session_ids: list[str]) -> dict[str, str]:
+    ids = sorted({item for item in session_ids if isinstance(item, str) and item})
+    if not ids:
+        return {}
+    try:
+        from app.infra.db import AsyncSessionLocal
+        from app.infra.models.chat import ChatSession
+
+        async with AsyncSessionLocal() as app_session:
+            rows = (await app_session.execute(
+                select(ChatSession.id, ChatSession.title).where(ChatSession.id.in_(ids))
+            )).all()
+        titles: dict[str, str] = {}
+        for session_id, raw_title in rows:
+            title = _clean_title(raw_title)
+            if title:
+                titles[str(session_id)] = title
+        return titles
+    except Exception:
+        logger.debug("chat_session_title_lookup_failed", exc_info=True)
+        return {}
+
+
+def _conversation_session_title(run: ConversationRun, fallback: str | None = None) -> str | None:
+    raw = run.raw_json if isinstance(run.raw_json, dict) else {}
+    return (
+        _clean_title(fallback)
+        or _clean_title(raw.get("session_title"))
+        or _clean_title(raw.get("title"))
+    )
+
+
 def _metric_rows(run_id: str, metrics: dict[str, float], source: str = "realtime") -> list[ConversationMetric]:
     return [
         ConversationMetric(
@@ -311,6 +388,9 @@ async def persist_realtime_conversation(
     eval dashboard/API.
     """
     run_id = result.id
+    session_title = _clean_title(getattr(result, "session_title", None))
+    if not session_title:
+        session_title = (await load_chat_session_titles([result.session_id])).get(result.session_id)
     await session.execute(delete(ConversationMetric).where(ConversationMetric.run_id == run_id))
     await session.execute(delete(ConversationCost).where(ConversationCost.run_id == run_id))
     await session.execute(delete(ConversationEvalJob).where(ConversationEvalJob.run_id == run_id))
@@ -321,14 +401,29 @@ async def persist_realtime_conversation(
 
     latency_ms = float(result.total_duration_ms or 0.0)
     final_state = final_json.get("state") if isinstance(final_json, dict) else None
+    final_event_payload = next(
+        (
+            _event_data(event)
+            for event in reversed(events)
+            if event.get("event") == "final" and isinstance(_event_data(event), dict)
+        ),
+        {},
+    )
+    agent_result = final_event_payload.get("agent_result") if isinstance(final_event_payload.get("agent_result"), dict) else {}
+    agent_failure_class = agent_result.get("failure_class") or final_event_payload.get("failure_class")
     status = "error" if result.error else "completed"
     raw = result.to_dict()
+    model_config = _extract_runtime_model_config({"agent_result": agent_result, "model_provider": model_provider, "model_name": model_name})
     raw.update({
         "trace_id": trace_id,
         "user_id": user_id,
+        "session_title": session_title,
         "model_provider": model_provider,
         "model_name": model_name,
+        "model_config": model_config,
         "final_state": final_state,
+        "agent_result": agent_result,
+        "failure_class": agent_failure_class,
     })
     run = ConversationRun(
         id=run_id,
@@ -336,7 +431,7 @@ async def persist_realtime_conversation(
         user_id=user_id,
         trace_id=trace_id,
         scene=result.scene,
-        worker=result.agent_id,
+        worker=agent_result.get("worker") or result.agent_id,
         model_provider=model_provider,
         model_name=model_name,
         status=status,
@@ -344,7 +439,7 @@ async def persist_realtime_conversation(
         ended_at=ended_at,
         latency_ms=latency_ms,
         final_state=str(final_state) if final_state is not None else None,
-        is_fallback=bool(result.is_fallback),
+        is_fallback=bool(result.is_fallback or agent_failure_class),
         raw_json=raw,
     )
     session.add(run)
@@ -565,9 +660,10 @@ async def list_reviews(
     rows = (await session.execute(
         query.order_by(desc(ConversationRun.started_at)).offset(offset).limit(limit)
     )).all()
+    title_map = await load_chat_session_titles([run.session_id for run, _review in rows])
     return int(total), [
         {
-            "run": conversation_run_summary(run),
+            "run": conversation_run_summary(run, session_title=title_map.get(run.session_id)),
             "review": human_review_summary(review) if review else {
                 "run_id": run.id,
                 "decision": "pending",
@@ -1037,6 +1133,7 @@ async def load_conversation_trace(session: AsyncSession, run_id: str) -> dict[st
     run = await session.scalar(select(ConversationRun).where(ConversationRun.id == run_id))
     if not run:
         return None
+    title_map = await load_chat_session_titles([run.session_id]) if not _conversation_session_title(run) else {}
     events = (await session.execute(
         select(ConversationTraceEvent).where(ConversationTraceEvent.run_id == run_id).order_by(ConversationTraceEvent.event_index)
     )).scalars().all()
@@ -1049,7 +1146,7 @@ async def load_conversation_trace(session: AsyncSession, run_id: str) -> dict[st
     review = await session.scalar(select(ConversationHumanReview).where(ConversationHumanReview.run_id == run_id))
     cost = await session.scalar(select(ConversationCost).where(ConversationCost.run_id == run_id))
     return {
-        "run": conversation_run_summary(run),
+        "run": conversation_run_summary(run, session_title=title_map.get(run.session_id)),
         "events": [trace_event_summary(item) for item in events],
         "spans": [trace_span_summary(item) for item in await list_trace_spans_for_run(session, run_id)],
         "tool_calls": [tool_call_summary(item) for item in tools],
@@ -1209,16 +1306,20 @@ async def list_eval_hub_live_sessions(
     grouped: dict[str, list[ConversationRun]] = {}
     for run in rows:
         grouped.setdefault(run.session_id, []).append(run)
+    title_map = await load_chat_session_titles(list(grouped.keys()))
     records = []
     for session_id, runs in list(grouped.items())[offset:offset + limit]:
         latest = runs[0]
+        latest_summary = conversation_run_summary(latest, session_title=title_map.get(session_id))
         records.append({
             "session_id": session_id,
+            "session_title": latest_summary.get("session_title"),
+            "title": latest_summary.get("session_title"),
             "user_id": latest.user_id,
             "status": latest.status,
             "scene": latest.scene,
             "worker": latest.worker,
-            "latest_score": conversation_run_summary(latest).get("overall_quality"),
+            "latest_score": latest_summary.get("overall_quality"),
             "risk_level": "high" if latest.status == "error" or latest.is_fallback else "normal",
             "turn_count": len(runs),
             "latency_ms": latest.latency_ms,
@@ -1235,6 +1336,8 @@ async def load_eval_hub_live_session(session: AsyncSession, session_id: str) -> 
     )).scalars().all()
     if not runs:
         return None
+    title_map = await load_chat_session_titles([session_id])
+    session_title = _conversation_session_title(runs[-1], title_map.get(session_id))
     turns = []
     for run in runs:
         detail = await load_conversation_trace(session, run.id)
@@ -1242,9 +1345,11 @@ async def load_eval_hub_live_session(session: AsyncSession, session_id: str) -> 
             turns.append(detail)
     return {
         "session_id": session_id,
+        "session_title": session_title,
+        "title": session_title,
         "user_id": runs[-1].user_id,
         "turn_count": len(runs),
-        "latest": conversation_run_summary(runs[-1]),
+        "latest": conversation_run_summary(runs[-1], session_title=session_title),
         "turns": turns,
     }
 
@@ -1267,8 +1372,9 @@ async def list_eval_hub_traces(
         offset=offset,
     )
     records = []
+    title_map = await load_chat_session_titles([run.session_id for run in rows])
     for run in rows:
-        summary = conversation_run_summary(run)
+        summary = conversation_run_summary(run, session_title=title_map.get(run.session_id))
         span_count = (await session.execute(
             select(func.count()).select_from(TraceSpan).where(TraceSpan.run_id == run.id)
         )).scalar() or 0
@@ -1527,11 +1633,18 @@ async def create_simulation_run(session: AsyncSession, scenario_id: str) -> dict
     }
 
 
-def conversation_run_summary(run: ConversationRun) -> dict[str, Any]:
+def conversation_run_summary(run: ConversationRun, *, session_title: str | None = None) -> dict[str, Any]:
     raw = run.raw_json if isinstance(run.raw_json, dict) else {}
+    failure_class = raw.get("failure_class")
+    if not isinstance(failure_class, str) or not failure_class:
+        failure_class = classify_failure(error=raw.get("error"), error_reason=raw.get("error_reason"))
+    title = _conversation_session_title(run, session_title)
+    model_config = _extract_runtime_model_config(raw)
     return {
         "id": run.id,
         "session_id": run.session_id,
+        "session_title": title,
+        "title": title,
         "user_id": run.user_id,
         "trace_id": run.trace_id,
         "scene": run.scene,
@@ -1539,6 +1652,7 @@ def conversation_run_summary(run: ConversationRun) -> dict[str, Any]:
         "agent_id": run.worker,
         "model_provider": run.model_provider,
         "model_name": run.model_name,
+        "model_config": model_config,
         "status": run.status,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "ended_at": run.ended_at.isoformat() if run.ended_at else None,
@@ -1559,7 +1673,7 @@ def conversation_run_summary(run: ConversationRun) -> dict[str, Any]:
         "repeated_action_rate": float(raw.get("repeated_action_rate") or 0.0),
         "error": raw.get("error"),
         "error_reason": raw.get("error_reason"),
-        "failure_class": classify_failure(error=raw.get("error"), error_reason=raw.get("error_reason")),
+        "failure_class": failure_class,
     }
 
 
@@ -1702,11 +1816,13 @@ async def aggregate_failures(session: AsyncSession, *, since: datetime) -> dict[
     for run in runs:
         raw = run.raw_json if isinstance(run.raw_json, dict) else {}
         metrics_for_run = metric_by_run.get(run.id, {})
-        failure_class = classify_failure(
-            error=raw.get("error"),
-            error_reason=raw.get("error_reason"),
-            metrics=metrics_for_run,
-        )
+        failure_class = raw.get("failure_class")
+        if not isinstance(failure_class, str) or not failure_class:
+            failure_class = classify_failure(
+                error=raw.get("error"),
+                error_reason=raw.get("error_reason"),
+                metrics=metrics_for_run,
+            )
         if failure_class != "none":
             by_failure_class[failure_class] = by_failure_class.get(failure_class, 0) + 1
             if run.scene:

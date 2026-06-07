@@ -147,6 +147,7 @@ type DeviceLocation = {
 type StreamChatReplyOptions = {
     onDelta?: (partialText: string, deltaText: string) => void;
     onFinal?: () => void;
+    onAgentResult?: (agentResult: Record<string, unknown>, payload: Record<string, unknown>) => void;
     clientContextOverrides?: Record<string, unknown>;
     attachments?: AppChatAttachment[];
     model?: string;
@@ -271,10 +272,14 @@ async function streamChatReply(
         }
 
         if (eventType === 'final') {
+            const agentResult = payloadRecord.agent_result;
+            if (agentResult && typeof agentResult === 'object' && !Array.isArray(agentResult)) {
+                options.onAgentResult?.(agentResult as Record<string, unknown>, payloadRecord);
+            }
             options.onFinal?.();
             if (!collected.trim()) {
                 const finalText = extractText(
-                    payloadRecord.final || payloadRecord.output || payloadRecord.data || parsedPayload
+                    payloadRecord.answer || payloadRecord.final || payloadRecord.output || payloadRecord.data || parsedPayload
                 );
                 if (finalText) {
                     await emitDeltaSmoothly(finalText);

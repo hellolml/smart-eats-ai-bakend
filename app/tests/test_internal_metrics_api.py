@@ -8,6 +8,7 @@ from app.agent.realtime_eval import RealtimeEvalResult
 from app.common.security import create_access_token
 from app.infra.db import AsyncSessionLocal
 from app.infra.eval_db import eval_session, init_eval_db
+from app.infra.models.chat import ChatSession
 from app.infra.models.eval import EvalRunJob
 from evals.persistence.postgres import EvalPersistenceStore
 
@@ -431,6 +432,15 @@ async def test_monitoring_endpoints_return_empty_state(client):
 
 @pytest.mark.asyncio
 async def test_monitoring_api_reads_conversation_tables_and_reviews(client):
+    async with AsyncSessionLocal() as session:
+        session.add(ChatSession(
+            id="monitoring-session",
+            user_id="monitoring-user",
+            scene="eat_out",
+            title="周末寿司聚餐推荐",
+        ))
+        await session.commit()
+
     result = RealtimeEvalResult(
         id="monitoring-test-run-1",
         session_id="monitoring-session",
@@ -448,7 +458,26 @@ async def test_monitoring_api_reads_conversation_tables_and_reviews(client):
         {"event": "context", "data": {"scene": "eat_out", "agent_id": "restaurant_worker"}},
         {"event": "tool_call", "data": {"name": "restaurant_search", "args": {"q": "sushi"}, "latency_ms": 120}},
         {"event": "tool_result", "data": {"name": "restaurant_search", "output_preview": "ok"}},
-        {"event": "final", "data": {"answer": {"state": "completed", "scene": "eat_out"}}},
+        {
+            "event": "final",
+            "data": {
+                "answer": {"state": "completed", "scene": "eat_out"},
+                "agent_result": {
+                    "status": "completed",
+                    "worker": "food_advisor",
+                    "final": {"state": "completed", "scene": "eat_out"},
+                    "diagnostics": {
+                        "model_config": {
+                            "source": "env",
+                            "provider": "openai",
+                            "provider_value": "openai:kimi-k2.5",
+                            "model_planner": "kimi-k2.5",
+                            "api_key": "must-not-leak",
+                        }
+                    },
+                },
+            },
+        },
     ]
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as session:
@@ -474,10 +503,24 @@ async def test_monitoring_api_reads_conversation_tables_and_reviews(client):
     assert traces.status_code == 200
     trace_rows = traces.json()["records"]
     assert any(row["id"] == "monitoring-test-run-1" for row in trace_rows)
+    target_trace = next(row for row in trace_rows if row["id"] == "monitoring-test-run-1")
+    assert target_trace["session_title"] == "周末寿司聚餐推荐"
+    assert target_trace["title"] == "周末寿司聚餐推荐"
+    assert target_trace["model_config"]["provider_value"] == "openai:kimi-k2.5"
+    assert target_trace["model_config"]["model_planner"] == "kimi-k2.5"
+    assert "api_key" not in target_trace["model_config"]
 
     detail = await client.get("/api/v1/internal/monitoring/traces/monitoring-test-run-1", headers=_auth_headers())
     assert detail.status_code == 200
+    assert detail.json()["run"]["session_title"] == "周末寿司聚餐推荐"
+    assert detail.json()["run"]["model_config"]["provider_value"] == "openai:kimi-k2.5"
     assert detail.json()["events"][1]["tool_name"] == "restaurant_search"
+
+    live_sessions = await client.get("/api/v1/internal/eval-hub/live-sessions?window=24h", headers=_auth_headers())
+    assert live_sessions.status_code == 200
+    live_rows = live_sessions.json()["records"]
+    target_session = next(row for row in live_rows if row["session_id"] == "monitoring-session")
+    assert target_session["session_title"] == "周末寿司聚餐推荐"
 
     review = await client.post(
         "/api/v1/internal/monitoring/reviews/monitoring-test-run-1",

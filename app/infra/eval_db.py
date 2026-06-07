@@ -92,3 +92,11 @@ async def init_eval_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     _initialized_urls.add(database_url)
+
+
+async def close_eval_db() -> None:
+    for engine in list(_engine_cache.values()):
+        await engine.dispose()
+    _engine_cache.clear()
+    _session_factory_cache.clear()
+    _initialized_urls.clear()

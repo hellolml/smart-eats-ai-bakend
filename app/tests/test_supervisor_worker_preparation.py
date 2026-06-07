@@ -74,6 +74,28 @@ async def test_travel_worker_marks_new_attachments_as_refresh_sources():
 
 
 @pytest.mark.asyncio
+async def test_travel_worker_infers_confirm_candidates_action_from_message():
+    payload = await _prepare_worker_payload(
+        _spec("travel_planner"),
+        {
+            "session_id": "s1",
+            "user_id": "u1",
+            "message": "确认这些候选地点，请继续生成最终每日行程。",
+            "scene": "travel_planner",
+            "context_overrides": {
+                "latest_travel_final_json": {
+                    "state": "candidates_ready",
+                    "candidates": [{"name": "宽窄巷子"}],
+                }
+            },
+        },
+    )
+
+    assert payload["travel_action"] == "confirm_candidates"
+    assert payload["context_overrides"]["action"] == "confirm_candidates"
+
+
+@pytest.mark.asyncio
 async def test_food_worker_injects_food_decision_contract():
     payload = await _prepare_worker_payload(
         _spec("food_advisor"),
@@ -88,8 +110,8 @@ async def test_food_worker_injects_food_decision_contract():
 
     assert payload["agent_id"] == "food_decision"
     assert payload["scene"] == "eat"
-    assert payload["context_overrides"]["intent"] == "eat_out"
-    assert "food_decision" in payload["context_overrides"]["forced_skill_ids"]
+    assert payload["context_overrides"]["intent"] == "decide_food"
+    assert "food_assistant" in payload["context_overrides"]["forced_skill_ids"]
     assert "user_preference_md" in payload["context_overrides"]
 
 

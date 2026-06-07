@@ -12,7 +12,7 @@ from app.api.deps import db_dep, get_optional_user_id, minio_dep, redis_dep
 from app.common.config import settings
 from app.common.errors import envelope
 from app.common.sse import sse_event
-from app.domain.app.service import AppBffService
+from app.domain.app.chat_service import ChatAppService
 
 router = APIRouter()
 logger = logging.getLogger("chat.api")
@@ -22,12 +22,38 @@ def _quick_intent(message: str | None) -> str:
     text = (message or "").strip().lower()
     if not text:
         return "unknown"
-    if any(token in text for token in ("出去吃", "外出", "餐厅", "吃饭")):
-        return "eat_out"
     if any(token in text for token in ("做饭", "在家做", "菜谱", "食谱", "冰箱")):
         return "cook_home"
-    if any(token in text for token in ("路线", "导航", "怎么走")):
+    if any(token in text for token in ("路线", "导航", "怎么走", "怎么去")):
         return "route"
+    if any(
+        token in text
+        for token in (
+            "出去吃",
+            "外出",
+            "餐厅",
+            "吃饭",
+            "吃什么",
+            "吃点啥",
+            "好吃",
+            "美食",
+            "饭店",
+            "夜宵",
+            "烧烤",
+            "火锅",
+            "粤菜",
+            "川菜",
+            "湘菜",
+            "日料",
+            "小吃",
+            "奶茶",
+            "咖啡",
+            "甜品",
+            "人均",
+            "附近找",
+        )
+    ):
+        return "eat_out"
     return "chat"
 
 
@@ -80,7 +106,7 @@ async def create_chat_session(
     payload: SessionCreateRequest | None = None,
 ):
     user_id = _resolve_user_id(user_id)
-    data = await AppBffService.create_chat_session(
+    data = await ChatAppService.create_chat_session(
         user_id,
         db,
         scene=payload.scene if payload else None,
@@ -101,7 +127,7 @@ async def list_chat_sessions(
     scene: str | None = Query(None),
 ):
     user_id = _resolve_user_id(user_id)
-    data = await AppBffService.list_chat_sessions(user_id, db, limit, offset, q, scene=scene)
+    data = await ChatAppService.list_chat_sessions(user_id, db, limit, offset, q, scene=scene)
     trace_id = getattr(request.state, "trace_id", "")
     return envelope(data, trace_id)
 
@@ -118,7 +144,7 @@ async def list_chat_messages(
     user_id = _resolve_user_id(user_id)
     trace_id = getattr(request.state, "trace_id", "")
     try:
-        data = await AppBffService.list_chat_messages(user_id, session_id, db, limit, offset)
+        data = await ChatAppService.list_chat_messages(user_id, session_id, db, limit, offset)
     except HTTPException as exc:
         if exc.status_code == 403:
             return envelope({"messages": [], "offset": offset, "limit": limit}, trace_id)
@@ -142,7 +168,7 @@ async def rename_chat_session(
     user_id = _resolve_user_id(user_id)
     trace_id = getattr(request.state, "trace_id", "")
     try:
-        data = await AppBffService.rename_chat_session(user_id, session_id, payload.title, db)
+        data = await ChatAppService.rename_chat_session(user_id, session_id, payload.title, db)
     except HTTPException as exc:
         if exc.status_code == 404:
             return envelope({"updated": False}, trace_id, code=40401, message="not found")
@@ -163,7 +189,7 @@ async def delete_chat_session(
     user_id = _resolve_user_id(user_id)
     trace_id = getattr(request.state, "trace_id", "")
     try:
-        data = await AppBffService.delete_chat_session(user_id, session_id, db, redis)
+        data = await ChatAppService.delete_chat_session(user_id, session_id, db, redis)
     except HTTPException as exc:
         if exc.status_code == 404:
             return envelope({"deleted": False}, trace_id, code=40401, message="not found")
@@ -182,7 +208,7 @@ async def stop_chat(
     user_id: str | None = Depends(get_optional_user_id),
 ):
     user_id = _resolve_user_id(user_id)
-    data = await AppBffService.stop_chat_session(user_id, session_id, db, redis)
+    data = await ChatAppService.stop_chat_session(user_id, session_id, db, redis)
     trace_id = getattr(request.state, "trace_id", "")
     return envelope(data, trace_id)
 
@@ -197,9 +223,9 @@ async def upload_chat_attachment(
     file: UploadFile = File(...),
 ):
     user_id = _resolve_user_id(user_id)
-    await AppBffService.ensure_chat_session_access(user_id, session_id, db, allow_missing=False)
+    await ChatAppService.ensure_chat_session_access(user_id, session_id, db, allow_missing=False)
     content = await file.read()
-    data = await AppBffService.create_chat_attachment(
+    data = await ChatAppService.create_chat_attachment(
         user_id=user_id or "anonymous",
         session_id=session_id,
         filename=file.filename,
@@ -236,7 +262,7 @@ async def chat_stream(
     )
 
     raw = payload.model_dump(exclude_unset=True)
-    state = await AppBffService.prepare_chat_stream_state(
+    state = await ChatAppService.prepare_chat_stream_state(
         session_id=session_id,
         user_id=user_id,
         payload=raw,
@@ -250,8 +276,11 @@ async def chat_stream(
     )
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        async for item in run_chat_stream(request, db, redis, state):
-            yield sse_event(item["event"], item["data"])
+        try:
+            async for item in run_chat_stream(request, db, redis, state):
+                yield sse_event(item["event"], item["data"])
+        finally:
+            await db.close()
 
     return StreamingResponse(
         event_stream(),

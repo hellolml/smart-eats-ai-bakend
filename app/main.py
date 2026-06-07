@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Callable
 from uuid import uuid4
 
@@ -12,19 +13,18 @@ from app.api.v1.router import router as v1_router
 from app.common.errors import AppError, INVALID_PARAMS, app_error_from_http, envelope
 from app.common.logging import init_logging
 from app.common.config import settings
-from app.infra.db import init_db
+from app.infra.db import close_db, init_db
+from app.infra.eval_db import close_eval_db
+from app.infra.redis import close_redis
 from app.agent.tools import describe_tools
 
 logger = init_logging()
-
-app = FastAPI(title="smart-eats")
 
 
 def _should_warmup_rag(env: str | None) -> bool:
     return (env or "").lower() != "test"
 
 
-@app.on_event("startup")
 async def on_startup() -> None:
     from app.agent.llm_adapters import ProviderRegistry
     config = ProviderRegistry.get(settings.LLM_PROVIDER)
@@ -48,6 +48,24 @@ async def on_startup() -> None:
             logger.warning("RAG warmup skipped: %s", e)
     else:
         logger.info("RAG warmup skipped for ENV=%s", settings.ENV)
+
+
+async def on_shutdown() -> None:
+    await close_redis()
+    await close_eval_db()
+    await close_db()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await on_startup()
+    try:
+        yield
+    finally:
+        await on_shutdown()
+
+
+app = FastAPI(title="smart-eats", lifespan=lifespan)
 
 
 @app.middleware("http")

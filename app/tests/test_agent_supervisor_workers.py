@@ -52,6 +52,46 @@ async def test_route_worker_forces_route_skill():
     assert overrides["forced_skill_ids"] == ["route_planner"]
 
 
+@pytest.mark.asyncio
+async def test_food_worker_forces_food_assistant_owner(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.common.config.settings.USER_PREFERENCE_MD_DIR", str(tmp_path))
+
+    payload = await _prepare_worker_payload(
+        _spec("food_advisor"),
+        {"session_id": "s1", "user_id": "u1", "message": "可以啊", "scene": "eat"},
+    )
+
+    overrides = payload["context_overrides"]
+    assert payload["scene"] == "eat"
+    assert payload["agent_id"] == "food_decision"
+    assert overrides["intent"] == "eat_out"
+    assert "food_assistant" in overrides["forced_skill_ids"]
+
+
+@pytest.mark.asyncio
+async def test_food_worker_keeps_affirmative_restaurant_followup_in_eat_out_mode(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.common.config.settings.USER_PREFERENCE_MD_DIR", str(tmp_path))
+
+    payload = await _prepare_worker_payload(
+        _spec("food_advisor"),
+        {
+            "session_id": "s1",
+            "user_id": "u1",
+            "message": "可以啊",
+            "scene": "eat",
+            "context_overrides": {
+                "intent": "eat_out",
+                "last_restaurants": [{"name": "一食坊粉面", "lat": 31.1, "lng": 121.1}],
+            },
+        },
+    )
+
+    overrides = payload["context_overrides"]
+    assert overrides["intent"] == "eat_out"
+    assert "food_assistant" in overrides["forced_skill_ids"]
+    assert "home_chef" not in overrides["forced_skill_ids"]
+
+
 def test_worker_agent_uses_cached_runtime_graph_without_message_final_json_channel():
     source = inspect.getsource(worker_module.build_worker_agent)
 

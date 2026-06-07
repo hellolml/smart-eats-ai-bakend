@@ -106,16 +106,138 @@ def test_food_assistant_finalizes_when_restaurants_found():
     assert state.context["last_restaurants"][0]["name"] == "一食坊粉面"
 
 
+def test_food_assistant_does_not_duplicate_price_prefix():
+    state = AgentRuntimeState(session_id="s1", message="人民广场附近粤菜")
+
+    handled = FoodAssistantHooks().handle_tool_result(
+        state,
+        "search_restaurants",
+        [
+            {
+                "name": "人民广场粤味小馆",
+                "address": "人民广场步行 8 分钟",
+                "rating": "4.7",
+                "price": "人均 88",
+            }
+        ],
+    )
+
+    assert handled is not None
+    reason = handled["recommendations"][0]["reason"]
+    assert "人均 88" in reason
+    assert "人均 人均" not in reason
+
+
+def test_food_assistant_short_circuits_selected_restaurant_with_typo_particle():
+    state = AgentRuntimeState(session_id="s1", message="味汁园把")
+    state.context = {
+        "last_restaurants": [
+            {"name": "长沙米粉(惟盛园店)", "address": "惟盛园小区6栋"},
+            {
+                "name": "味汁园(惟盛园店)",
+                "address": "惟盛园小区4栋2单元106",
+                "lat": 28.148423,
+                "lng": 112.933207,
+            },
+        ]
+    }
+
+    handled = FoodAssistantHooks().short_circuit_final(state)
+
+    assert handled is not None
+    assert handled["recommendations"][0]["title"] == "味汁园(惟盛园店)"
+    assert handled["selected_restaurant"]["name"] == "味汁园(惟盛园店)"
+    assert state.context["selected_restaurant"]["name"] == "味汁园(惟盛园店)"
+    assert handled["followups"][0] == "我可以继续帮你规划路线。"
+
+
 def test_food_assistant_filters_food_decision_for_eat_out_mode():
     state = AgentRuntimeState(session_id="s1", message="出去吃粉面")
     state.context = {"food_mode": "eat_out"}
 
     allowed = FoodAssistantHooks().filter_allowed_tools(
         state,
-        ["food_decision", "search_restaurants", "geocode_location"],
+        [
+            "memory_search",
+            "food_decision",
+            "get_fridge_items",
+            "search_restaurants",
+            "geocode_location",
+            "plan_route",
+            "get_weather",
+        ],
     )
 
-    assert allowed == ["search_restaurants", "geocode_location"]
+    assert allowed == ["search_restaurants", "geocode_location", "get_weather"]
+
+
+def test_food_assistant_filters_decide_food_to_decision_tool_only():
+    state = AgentRuntimeState(session_id="s1", message="吃什么好")
+    state.context = {"food_mode": "decide_food"}
+
+    allowed = FoodAssistantHooks().filter_allowed_tools(
+        state,
+        [
+            "memory_search",
+            "food_decision",
+            "get_fridge_items",
+            "search_restaurants",
+            "geocode_location",
+            "get_weather",
+        ],
+    )
+
+    assert allowed == ["food_decision"]
+
+
+def test_home_chef_filters_to_recipe_tools_only():
+    state = AgentRuntimeState(session_id="s1", message="冰箱里有鸡蛋怎么做", scene="home_chef")
+    state.context = {"intent": "cook_home"}
+
+    allowed = HomeChefHooks().filter_allowed_tools(
+        state,
+        [
+            "memory_search",
+            "food_decision",
+            "get_fridge_items",
+            "rag_search_recipes",
+            "search_recipes",
+            "search_restaurants",
+            "geocode_location",
+        ],
+    )
+
+    assert allowed == ["get_fridge_items", "rag_search_recipes", "search_recipes"]
+
+
+@pytest.mark.asyncio
+async def test_food_assistant_keeps_affirmative_followup_in_eat_out_mode():
+    state = AgentRuntimeState(session_id="s1", message="可以啊")
+    context = {
+        "intent": "eat_out",
+        "history": [
+            {
+                "role": "assistant",
+                "content": "要不要我按距离、评分或口味再帮你筛一轮？",
+            }
+        ],
+    }
+
+    extra = await FoodAssistantHooks().build_context(state, context, runtime=None)
+
+    assert extra["food_mode"] == "eat_out"
+    assert state.context["food_mode"] == "eat_out"
+
+
+def test_route_hook_filters_non_route_tools():
+    state = AgentRuntimeState(session_id="s1", message="怎么走")
+
+    allowed = RoutePlannerHooks().filter_allowed_tools(
+        state,
+        ["memory_search", "geocode_location", "plan_route", "source_event_search"],
+    )
+
+    assert allowed == ["geocode_location", "plan_route"]
 
 
 def test_runtime_blocks_repeated_tool_call_loop():
@@ -219,6 +341,24 @@ def test_route_hook_returns_missing_origin_final():
     assert "出发位置" in handled["recommendations"][0]["title"]
 
 
+def test_route_hook_short_circuits_bare_route_followup_to_clarification():
+    state = AgentRuntimeState(session_id="s1", scene="route", message="怎么走呢")
+    state.context = {}
+
+    handled = RoutePlannerHooks().short_circuit_final(state)
+
+    assert handled is not None
+    assert handled["status"] == "needs_clarification"
+    assert "去哪儿" in handled["recommendations"][0]["title"]
+
+
+def test_route_hook_does_not_short_circuit_explicit_destination():
+    state = AgentRuntimeState(session_id="s1", scene="route", message="怎么去西湖")
+    state.context = {}
+
+    assert RoutePlannerHooks().short_circuit_final(state) is None
+
+
 def test_route_hook_records_latest_route_directive():
     state = AgentRuntimeState(session_id="s1")
     result = {"distance_m": 1200, "duration_s": 600, "steps": [{"instruction": "步行"}]}
@@ -257,6 +397,108 @@ def test_travel_plan_new_hook_stops_at_candidate_confirmation():
     assert handled["await_confirmation"] is True
     assert handled["candidates"][0]["poi"]["poi_id"] == "B001"
     assert handled["itinerary"]["days"] == []
+
+
+def test_travel_plan_new_filters_tools_by_workflow_phase():
+    hook = TravelPlanNewHooks()
+    allowed_tools = [
+        "memory_search",
+        "source_event_search",
+        "geocode_location",
+        "plan_route",
+        "travel_fetch_url_content",
+        "travel_search_poi",
+        "travel_search_nearby_poi",
+        "travel_create_personal_map",
+        "food_decision",
+    ]
+
+    ingesting = AgentRuntimeState(session_id="s-ingest", scene="travel_planner")
+    assert hook.filter_allowed_tools(ingesting, allowed_tools) == [
+        "travel_fetch_url_content",
+        "travel_search_poi",
+        "travel_search_nearby_poi",
+    ]
+
+    pending = AgentRuntimeState(
+        session_id="s-pending",
+        scene="travel_planner",
+        context_overrides={
+            "travel_payload": {
+                "destination": "杭州",
+                "extracted_places": [{"name": "西湖", "category": "attraction"}],
+            }
+        },
+    )
+    assert hook.filter_allowed_tools(pending, allowed_tools) == ["travel_search_poi"]
+
+    candidates_ready = AgentRuntimeState(
+        session_id="s-candidates",
+        scene="travel_planner",
+        context_overrides={
+            "travel_payload": {
+                "candidates": [
+                    {
+                        "name": "西湖",
+                        "poi": {"poi_id": "B001", "longitude": 120.148, "latitude": 30.242},
+                    }
+                ]
+            }
+        },
+    )
+    assert hook.filter_allowed_tools(candidates_ready, allowed_tools) == []
+
+    map_action = AgentRuntimeState(
+        session_id="s-map",
+        scene="travel_planner",
+        context_overrides={"travel_action": "generate_map"},
+    )
+    assert hook.filter_allowed_tools(map_action, allowed_tools) == ["travel_create_personal_map"]
+
+
+def test_travel_plan_new_limits_poi_verification_batch_and_finalizes_on_budget():
+    content = "\n".join(
+        f"{index}. **地点{index}** - 推荐理由"
+        for index in range(1, 12)
+    )
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message="杭州3天",
+        skill_state={"last_ai_message_content": content},
+        context_overrides={"travel_payload": {"destination": "杭州"}},
+    )
+    hook = TravelPlanNewHooks()
+
+    calls = hook.forced_tool_calls(state) or []
+
+    assert len(calls) == 8
+    for index in range(1, 9):
+        state.observations.append(
+            {
+                "tool": "travel_search_poi",
+                "result": {
+                    "query": {"keywords": f"地点{index}", "city": "杭州", "category": "attraction"},
+                    "selected_poi": {
+                        "poi_id": f"POI{index}",
+                        "name": f"地点{index}",
+                        "address": "杭州",
+                        "longitude": 120 + index / 1000,
+                        "latitude": 30 + index / 1000,
+                    },
+                    "pois": [],
+                },
+            }
+        )
+
+    handled = hook.handle_tool_result(state, "travel_search_poi", state.observations[-1]["result"])
+
+    assert handled is not None
+    assert handled["state"] == "candidates_ready"
+    assert handled["await_confirmation"] is True
+    assert len(handled["candidates"]) == 8
+    assert handled["pending_places"]
+    assert "POI 验证预算" in handled["warnings"][0]
 
 
 def test_travel_plan_new_verifies_all_extracted_places_before_candidate_confirmation():
@@ -649,7 +891,7 @@ def test_travel_plan_new_warns_for_generic_food_addition():
     assert "具体店名" in context["system_directive"]
 
 
-def test_travel_plan_new_filters_map_tool_until_itinerary_confirmation():
+def test_travel_plan_new_filters_all_tools_until_itinerary_confirmation():
     state = AgentRuntimeState(
         session_id="s1",
         scene="travel_planner",
@@ -672,7 +914,7 @@ def test_travel_plan_new_filters_map_tool_until_itinerary_confirmation():
         ["travel_search_poi", "travel_create_personal_map"],
     )
 
-    assert allowed == ["travel_search_poi"]
+    assert allowed == []
 
 
 def test_travel_plan_new_forces_map_tool_after_itinerary_confirmation():
@@ -708,6 +950,32 @@ def test_travel_plan_new_forces_map_tool_after_itinerary_confirmation():
     assert calls is not None
     assert calls[0]["name"] == "travel_create_personal_map"
     assert calls[0]["args"]["line_list"][0]["pointInfoList"][0]["poiId"] == "B001"
+
+
+def test_travel_plan_new_default_map_title_does_not_duplicate_travel_word():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_action": "generate_map",
+            "travel_payload": {
+                "trip_meta": {},
+                "candidates": [
+                    {
+                        "name": "西湖",
+                        "poi": {"poi_id": "B001", "name": "西湖", "longitude": 120.148, "latitude": 30.242},
+                    }
+                ],
+            },
+        },
+    )
+
+    calls = TravelPlanNewHooks().forced_tool_calls(state)
+
+    assert calls is not None
+    title = calls[0]["args"]["title"]
+    assert title == "旅行地图"
+    assert "旅行旅行" not in title
 
 
 def test_travel_plan_new_line_list_uses_verified_pois_and_connects_days():

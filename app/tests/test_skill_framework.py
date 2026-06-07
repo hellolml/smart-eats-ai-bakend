@@ -125,6 +125,21 @@ def test_skill_resolver_activates_by_keyword_and_records_reason(tmp_path):
     assert active.activation_reasons["home_chef"] == ["scene:chat", "keyword:冰箱"]
 
 
+def test_skill_resolver_keeps_forced_skill_ahead_of_priority(tmp_path):
+    from app.agent.skills.loader import load_skills_from_path
+    from app.agent.skills.resolver import SkillResolver
+
+    _write_skill(tmp_path, "ambient_high", priority=99, keywords=["吃"], tools=["memory_search"])
+    _write_skill(tmp_path, "forced_low", priority=1, keywords=[], tools=["food_decision"])
+    skills = load_skills_from_path(tmp_path)
+    state = AgentRuntimeState(session_id="s1", message="今天吃什么？", scene="chat")
+
+    active = SkillResolver(skills, max_active=1).resolve(state, {"forced_skill_ids": ["forced_low"]})
+
+    assert [skill.id for skill in active.skills] == ["forced_low"]
+    assert "forced" in active.activation_reasons["forced_low"]
+
+
 def test_skill_prompt_composer_orders_by_priority_and_limits_chars(tmp_path):
     from app.agent.skills.loader import load_skills_from_path
     from app.agent.skills.prompt import SkillPromptComposer
@@ -229,6 +244,76 @@ def test_skill_runtime_exposes_strictest_tool_call_limit(tmp_path):
     result = runtime.resolve(state, {"user_message": state.message}, base_tools=[])
 
     assert result.context["skill_diagnostics"]["max_tool_calls_per_turn"] == 4
+
+
+@pytest.mark.asyncio
+async def test_runtime_skill_diagnostics_reflect_filtered_travel_tools():
+    from app.agent.runtime import builder as runtime_builder
+    from app.agent.runtime.graph import get_agent_runtime_config
+
+    state = AgentRuntimeState(
+        session_id="s-travel-filtered-tools",
+        message="帮我做杭州1天旅行攻略：西湖",
+        scene="travel_planner",
+        intent="travel",
+    )
+    context, _prompt = await runtime_builder._resolve_runtime_skills(
+        state,
+        {
+            "user_message": state.message,
+            "ui_scene": "travel_planner",
+            "intent": "travel",
+            "forced_skill_ids": ["travel_plan_new"],
+        },
+        get_agent_runtime_config(),
+    )
+
+    assert context["allowed_tools"] == [
+        "travel_fetch_url_content",
+        "travel_search_poi",
+        "travel_search_nearby_poi",
+    ]
+    assert context["skill_allowed_tools"] == context["allowed_tools"]
+    tool_sources = context["skill_diagnostics"]["tool_sources"]
+    assert "memory_search" not in tool_sources
+    assert "source_event_search" not in tool_sources
+    assert set(tool_sources) == set(context["allowed_tools"])
+
+
+def test_real_food_worker_skill_set_does_not_activate_route_planner():
+    from app.agent.skills.runtime import SkillRuntime
+
+    runtime = SkillRuntime(
+        skills_path="agent_skills",
+        enabled=True,
+        max_active=3,
+        max_prompt_chars=1000,
+        global_allowlist=[
+            "food_decision",
+            "get_ip_location",
+            "geocode_location",
+            "search_restaurants",
+            "plan_route",
+            "memory_search",
+        ],
+    )
+    state = AgentRuntimeState(session_id="s1", message="附近好吃的", scene="eat")
+
+    result = runtime.resolve(
+        state,
+        {
+            "user_message": state.message,
+            "intent": "eat_out",
+            "forced_skill_ids": ["food_assistant"],
+        },
+        base_tools=[],
+    )
+
+    active_ids = [item.id for item in result.active_skills]
+    assert "food_assistant" in active_ids
+    assert "route_planner" not in active_ids
+    assert "search_restaurants" in result.allowed_tools
+    assert "plan_route" not in result.allowed_tools
 
 
 def test_skill_system_prompt_includes_skill_addendum():

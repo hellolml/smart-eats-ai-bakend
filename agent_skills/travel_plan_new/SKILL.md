@@ -23,8 +23,6 @@ activation:
   min_score: 1
 tools:
   allow:
-    - geocode_location
-    - plan_route
     - travel_fetch_url_content
     - travel_search_poi
     - travel_search_nearby_poi
@@ -33,7 +31,7 @@ tools:
 safety:
   can_override_global_rules: false
   allow_external_tools: false
-  max_tool_calls_per_turn: 20
+  max_tool_calls_per_turn: 8
 context:
   read:
     - user_message
@@ -49,13 +47,7 @@ context:
 hooks:
   class: hooks.TravelPlanNewHooks
 instructions:
-  includes:
-    - references/orchestrate-travel-content.md
-    - references/extract-places.md
-    - references/curate-candidates.md
-    - references/generate-itinerary.md
-    - references/personal-map.md
-  max_chars: 80000
+  max_chars: 12000
 ---
 # Travel Plan New Skill
 
@@ -98,7 +90,7 @@ instructions:
 | `places_extracted` | `extract-places.md` §3-9 | 无 | 从解析内容中提取结构化地点列表（名称、类别、上下文片段、推荐理由、排除原因等），不凭常识补充 | 地点列表非空 |
 | `candidates_ready` | `curate-candidates.md` | `travel_search_poi`（验证每个地点）+ `travel_search_nearby_poi`（补全附近餐厅酒店） | **必须调用** POI 验证工具；验证成功后按景点/住宿/美食分类展示候选列表；展示验证失败的地点和原因；**必须停下来等用户确认** | 用户通过 `travel_action=confirm_candidates` 或明确确认 |
 | `candidates_confirmed` | `curate-candidates.md` §8 | 无 | 记录用户增删后的最终候选列表 | 候选列表已确认 |
-| `itinerary_generated` | `generate-itinerary.md` | `plan_route`（可选，规划交通） | 生成结构化 `itinerary.days`；**必须停下来询问用户是否生成高德地图**，等待用户确认 | 用户通过 `travel_action=confirm_itinerary` 或 `travel_action=generate_map` 或明确确认 |
+| `itinerary_generated` | `generate-itinerary.md` | 无 | 生成结构化 `itinerary.days`；**必须停下来询问用户是否生成高德地图**，等待用户确认 | 用户通过 `travel_action=confirm_itinerary` 或 `travel_action=generate_map` 或明确确认 |
 | `map_generated` | `personal-map.md` + `generate-itinerary.md` §高德个人地图输出流程 | `travel_create_personal_map`（**必须调用**） | 用已验证 POI 构建 `line_list`，调用地图工具生成二维码；返回包含 `map.qr_code_url` 和 `map.schema_url` 的最终结果 | 地图工具返回成功 |
 
 ### 关键交互节点（不可跳过）
@@ -115,5 +107,4 @@ references 文件中可能使用旧名称，实际调用时必须使用以下注
 |--------------------|--------------|
 | `maps_text_search` | `travel_search_poi` |
 | `maps_around_search` | `travel_search_nearby_poi` |
-| `maps_direction_walking/driving/transit_integrated` | `plan_route` |
 | `maps_schema_personal_map` | `travel_create_personal_map` |

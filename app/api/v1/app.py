@@ -45,6 +45,7 @@ from app.domain.app.schemas import (
     WheelSpinRequest,
 )
 from app.domain.app.service import AppBffService
+from app.domain.app.chat_service import ChatAppService
 from app.domain.decision.service import DecisionService
 from app.domain.group_decision.service import GroupDecisionService
 from app.domain.preferences.markdown_profile import build_preference_context, read_user_preference_profile
@@ -179,7 +180,7 @@ class GroupDecisionVoteRequest(BaseModel):
 
 @router.get("/chat/models")
 async def list_chat_models(request: Request, db: db_dep, user_id: str = Depends(get_current_user_id)):
-    data = await AppBffService.list_chat_models_for_user(db, user_id)
+    data = await ChatAppService.list_chat_models_for_user(db, user_id)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -1049,7 +1050,7 @@ async def create_chat_session(
     user_id: str = Depends(get_current_user_id),
     payload: ChatSessionCreateRequest | None = None,
 ):
-    data = await AppBffService.create_chat_session(
+    data = await ChatAppService.create_chat_session(
         user_id,
         db,
         scene=payload.scene if payload else None,
@@ -1068,7 +1069,7 @@ async def list_chat_sessions(
     q: str | None = Query(default=None),
     scene: str | None = Query(default=None),
 ):
-    data = await AppBffService.list_chat_sessions(user_id, db, limit, offset, q, scene=scene)
+    data = await ChatAppService.list_chat_sessions(user_id, db, limit, offset, q, scene=scene)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -1081,7 +1082,7 @@ async def list_chat_messages(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    data = await AppBffService.list_chat_messages(user_id, session_id, db, limit, offset)
+    data = await ChatAppService.list_chat_messages(user_id, session_id, db, limit, offset)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -1095,7 +1096,7 @@ async def rename_chat_session(
 ):
     if not payload.title:
         return envelope({"updated": False}, getattr(request.state, "trace_id", ""))
-    data = await AppBffService.rename_chat_session(user_id, session_id, payload.title, db)
+    data = await ChatAppService.rename_chat_session(user_id, session_id, payload.title, db)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -1107,7 +1108,7 @@ async def delete_chat_session(
     redis: redis_dep,
     user_id: str = Depends(get_current_user_id),
 ):
-    data = await AppBffService.delete_chat_session(user_id, session_id, db, redis)
+    data = await ChatAppService.delete_chat_session(user_id, session_id, db, redis)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -1119,7 +1120,7 @@ async def stop_chat(
     redis: redis_dep,
     user_id: str = Depends(get_current_user_id),
 ):
-    data = await AppBffService.stop_chat_session(user_id, session_id, db, redis)
+    data = await ChatAppService.stop_chat_session(user_id, session_id, db, redis)
     return envelope(data, getattr(request.state, "trace_id", ""))
 
 
@@ -1132,9 +1133,9 @@ async def upload_chat_attachment(
     user_id: str = Depends(get_current_user_id),
     file: UploadFile = File(...),
 ):
-    await AppBffService.ensure_chat_session_access(user_id, session_id, db, allow_missing=False)
+    await ChatAppService.ensure_chat_session_access(user_id, session_id, db, allow_missing=False)
     content = await file.read()
-    data = await AppBffService.create_chat_attachment(
+    data = await ChatAppService.create_chat_attachment(
         user_id=user_id,
         session_id=session_id,
         filename=file.filename,
@@ -1155,7 +1156,7 @@ async def chat_stream(
     user_id: str = Depends(get_current_user_id),
 ):
     raw = payload.model_dump(exclude_unset=True) if payload else {}
-    state = await AppBffService.prepare_chat_stream_state(
+    state = await ChatAppService.prepare_chat_stream_state(
         session_id=session_id,
         user_id=user_id,
         payload=raw,
@@ -1169,8 +1170,11 @@ async def chat_stream(
     )
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        async for item in run_chat_stream(request, db, redis, state):
-            yield sse_event(item["event"], item["data"])
+        try:
+            async for item in run_chat_stream(request, db, redis, state):
+                yield sse_event(item["event"], item["data"])
+        finally:
+            await db.close()
 
     return StreamingResponse(
         event_stream(),

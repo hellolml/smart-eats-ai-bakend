@@ -123,10 +123,24 @@ def build_trace_from_events(
             step_index += 1
 
         elif event_type == "final":
+            agent_result = data.get("agent_result") if isinstance(data.get("agent_result"), dict) else {}
             trace.final_json = data.get("answer") or final_json
             # 兜底：如果 final 事件没有 answer，用传入的 final_json
             if trace.final_json is None:
                 trace.final_json = final_json
+            if agent_result:
+                trace.actual_worker = agent_result.get("worker") or trace.actual_worker
+                diagnostics = agent_result.get("diagnostics")
+                if isinstance(diagnostics, dict):
+                    route = diagnostics.get("route")
+                    if isinstance(route, dict):
+                        trace.actual_scene = route.get("intent") or trace.actual_scene
+                        trace.actual_worker = route.get("worker") or trace.actual_worker
+                    trace.allowed_tools = diagnostics.get("active_tools") or trace.allowed_tools
+                    trace.active_skills = diagnostics.get("active_skills") or trace.active_skills
+                failure_class = agent_result.get("failure_class") or data.get("failure_class")
+                if failure_class:
+                    trace.error_reason = str(failure_class)
             # 从 final_json 中再次尝试提取 scene/worker
             if isinstance(trace.final_json, dict):
                 if not trace.actual_scene:
@@ -175,6 +189,7 @@ class RealtimeEvalResult:
     """实时评测结果."""
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     session_id: str = ""
+    session_title: str | None = None
     user_message: str | None = None
     scene: str | None = None
     agent_id: str | None = None
@@ -207,6 +222,7 @@ class RealtimeEvalResult:
         return {
             "id": self.id,
             "session_id": self.session_id,
+            "session_title": self.session_title,
             "user_message": self.user_message,
             "scene": self.scene,
             "agent_id": self.agent_id,

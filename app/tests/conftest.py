@@ -9,11 +9,12 @@ os.environ.setdefault("LANGGRAPH_STORE_BACKEND", "memory")
 import pytest
 import pytest_asyncio
 from fakeredis import aioredis as fakeredis
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from app.infra.db import init_db
 from app.infra.redis import get_redis
 from app.main import app
+from app.common.config import settings
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
@@ -35,7 +36,13 @@ async def override_redis():
     await redis_client.aclose()
 
 
+@pytest.fixture(autouse=True)
+def disable_background_realtime_eval(monkeypatch):
+    monkeypatch.setattr(settings, "REALTIME_EVAL_ENABLED", False)
+
+
 @pytest_asyncio.fixture()
 async def client():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

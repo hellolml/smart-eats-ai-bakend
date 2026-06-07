@@ -87,6 +87,10 @@ async def init_db() -> None:
             await _ensure_sqlite_columns(conn)
 
 
+async def close_db() -> None:
+    await engine.dispose()
+
+
 async def _postgres_table_exists(conn, table_name: str) -> bool:
     result = await conn.execute(text("SELECT to_regclass(:table_name)"), {"table_name": table_name})
     return result.scalar_one_or_none() is not None

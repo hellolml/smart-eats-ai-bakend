@@ -24,6 +24,18 @@
     }
   },
   {
+    "id": "route-ambiguous-followup-clarification",
+    "message": "怎么走呢",
+    "scene": "eat",
+    "expect": {
+      "no_fallback": true,
+      "no_tool_calls": true,
+      "worker": "route_planner",
+      "intent_in": ["route", "unknown"],
+      "status_in": ["needs_clarification"]
+    }
+  },
+  {
     "id": "eatout-cuisine-budget",
     "message": "想在人民广场附近吃粤菜，人均100以内",
     "expect": {
@@ -52,7 +64,7 @@
     "message": "吃什么好",
     "expect": {
       "no_fallback": true,
-      "intent_in": ["unknown", "eat_out", "cook_home"]
+      "intent_in": ["unknown", "eat_out", "cook_home", "decide_food"]
     }
   },
   {
@@ -61,6 +73,108 @@
     "expect": {
       "no_fallback": true,
       "intent_in": ["chat", "unknown"]
+    }
+  },
+  {
+    "id": "travel-plan-basic",
+    "message": "帮我做一个杭州3天旅行攻略，想轻松一点",
+    "expect": {
+      "no_fallback": true,
+      "worker": "travel_planner",
+      "intent_in": ["travel", "unknown"]
+    }
+  },
+  {
+    "id": "travel-map-request",
+    "message": "把这个旅行计划生成地图",
+    "scene": "travel_planner",
+    "expect": {
+      "no_fallback": true,
+      "worker": "travel_planner",
+      "intent_in": ["travel", "unknown"]
+    }
+  },
+  {
+    "id": "travel-food-cross-scene",
+    "message": "我在东京旅行，附近有什么好吃的",
+    "scene": "travel_planner",
+    "expect": {
+      "no_fallback": true,
+      "worker": "food_advisor",
+      "intent_in": ["eat_out", "decide_food", "food", "unknown"]
+    }
+  },
+  {
+    "id": "travel-multiturn-plan-adjust-map",
+    "turns": [
+      {
+        "message": "帮我做一个东京5天旅行攻略",
+        "expect": {
+          "no_fallback": true,
+          "worker": "travel_planner",
+          "intent_in": ["travel", "unknown"]
+        }
+      },
+      {
+        "message": "第二天换成亲子路线",
+        "scene": "travel_planner",
+        "expect": {
+          "no_fallback": true,
+          "worker": "travel_planner",
+          "intent_in": ["travel", "unknown"]
+        }
+      },
+      {
+        "message": "生成地图",
+        "scene": "travel_planner",
+        "expect": {
+          "no_fallback": true,
+          "worker": "travel_planner",
+          "intent_in": ["travel", "unknown"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "travel-cross-scene-food-route",
+    "turns": [
+      {
+        "message": "我在东京旅行，附近有什么好吃的",
+        "scene": "travel_planner",
+        "expect": {
+          "no_fallback": true,
+          "worker": "food_advisor",
+          "intent_in": ["eat_out", "decide_food", "food", "unknown"]
+        }
+      },
+      {
+        "message": "从酒店怎么去浅草寺",
+        "scene": "travel_planner",
+        "expect": {
+          "no_fallback": true,
+          "worker": "route_planner",
+          "intent_in": ["route", "unknown"]
+        }
+      }
+    ]
+  },
+  {
+    "id": "food-affirmative-followup",
+    "message": "可以啊",
+    "scene": "eat",
+    "context_overrides": {
+      "intent": "eat_out",
+      "history": [
+        {
+          "role": "assistant",
+          "content": "要不要我按距离、评分或口味再帮你筛一轮？"
+        }
+      ]
+    },
+    "expect": {
+      "no_fallback": true,
+      "worker": "food_advisor",
+      "intent_in": ["eat_out", "unknown"]
     }
   }
 ]

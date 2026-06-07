@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
+from app.common.config import settings
 from app.domain.llm_config.resolver import resolve_model_config
 from app.infra.db import AsyncSessionLocal
 from app.infra.models.user import User
@@ -155,6 +156,22 @@ async def test_llm_config_manual_config_overrides_env_selection(client):
     assert resolved.source == "user_config"
     assert resolved.config_id == config_id
     assert resolved.model_planner == "gpt-5.4-mini"
+
+
+@pytest.mark.asyncio
+async def test_llm_config_env_model_value_overrides_default_without_user(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_PROVIDERS", "openai,qwen")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openai:glm-5")
+    monkeypatch.setattr(settings, "OPENAI_MODEL_PLANNER", "glm-5")
+    monkeypatch.setattr(settings, "OPENAI_MODEL_WRITER", "glm-5")
+
+    async with AsyncSessionLocal() as db:
+        resolved = await resolve_model_config(db, None, "openai:kimi-k2.5")
+
+    assert resolved.source == "env"
+    assert resolved.provider_value == "openai:kimi-k2.5"
+    assert resolved.model_planner == "kimi-k2.5"
+    assert resolved.model_writer == "kimi-k2.5"
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,6 @@ priority: 75
 activation:
   scenes:
     - route
-    - eat
   intents:
     - route
   keywords:

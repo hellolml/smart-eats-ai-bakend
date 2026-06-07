@@ -262,6 +262,11 @@ async def save_assistant_message(
     session_id: str,
     content: str,
     final_json: dict[str, Any] | None,
+    *,
+    agent_result: dict[str, Any] | None = None,
+    trace_id: str | None = None,
+    failure_class: str | None = None,
+    business_payload: dict[str, Any] | None = None,
 ) -> None:
     last_stmt = (
         select(ChatMessage)
@@ -273,7 +278,15 @@ async def save_assistant_message(
     last_msg = last_result.scalar_one_or_none()
     if last_msg and (last_msg.content or "") == content:
         return
-    payload = {"answer": final_json}
+    payload: dict[str, Any] = {"answer": final_json}
+    if isinstance(agent_result, dict):
+        payload["agent_result"] = agent_result
+    if trace_id:
+        payload["trace_id"] = trace_id
+    if failure_class:
+        payload["failure_class"] = failure_class
+    if isinstance(business_payload, dict) and business_payload:
+        payload["business_payload"] = business_payload
     msg = ChatMessage(
         id=str(uuid4()),
         session_id=session_id,

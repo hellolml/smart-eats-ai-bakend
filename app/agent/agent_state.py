@@ -62,6 +62,8 @@ class AgentState(BaseModel):
     context_budget: dict[str, Any] = Field(default_factory=dict)
     retrieved_memories: list[dict[str, Any]] = Field(default_factory=list)
     source_refs: list[dict[str, Any]] = Field(default_factory=list)
+    route_decision: dict[str, Any] | None = None
+    agent_result: dict[str, Any] | None = None
 
 
 AgentStateGraphSchema = TypedDict(

@@ -16,10 +16,12 @@ from app.agent.agent_state import (
 from app.agent.intent import infer_food_worker_intent
 from app.agent.runtime.graph import (
     AgentRuntimeGraphState,
+    build_agent_runtime_graph,
     build_cached_agent_runtime_graph,
     runtime_graph_configurable,
 )
-from app.agent.runtime.finalization import fallback_final
+from app.agent.contracts import final_json_for_failure
+from app.domain.travel.workflow import TravelCandidateService, TravelSourceIngestionService
 from app.domain.preferences.markdown_profile import (
     build_preference_context,
     ensure_user_preference_file,
@@ -81,6 +83,8 @@ def build_worker_agents(
     redis_client: Any,
     provider: str | None,
     resolved_model_config: dict[str, Any] | None,
+    planner: Any | None = None,
+    tool_node: Any | None = None,
 ) -> list[Any]:
     return [
         build_worker_agent(
@@ -89,6 +93,8 @@ def build_worker_agents(
             redis_client=redis_client,
             provider=provider,
             resolved_model_config=resolved_model_config,
+            planner=planner,
+            tool_node=tool_node,
         )
         for spec in WORKER_SPECS
     ]
@@ -101,35 +107,53 @@ def build_worker_agent(
     redis_client: Any,
     provider: str | None,
     resolved_model_config: dict[str, Any] | None,
+    planner: Any | None = None,
+    tool_node: Any | None = None,
 ) -> Any:
     async def worker_node(state: dict[str, Any], store: Any = None) -> dict[str, Any]:
         payload = await _prepare_worker_payload(spec, state)
         payload["persist_user_message"] = False
         payload["user_message_logged"] = True
         payload["last_user_message"] = payload.get("message")
-        graph = build_cached_agent_runtime_graph(
-            provider=provider,
-            resolved_model_config=resolved_model_config,
-        ).compile(store=store)
+        if planner is not None or tool_node is not None:
+            graph = build_agent_runtime_graph(
+                db=db,
+                redis_client=redis_client,
+                provider=provider,
+                resolved_model_config=resolved_model_config,
+                planner=planner,
+                tool_node=tool_node,
+            ).compile(store=store)
+        else:
+            graph = build_cached_agent_runtime_graph(
+                provider=provider,
+                resolved_model_config=resolved_model_config,
+            ).compile(store=store)
 
         latest: dict[str, Any] | None = None
         events: list[dict[str, Any]] = []
-        async for update in graph.astream(
-            payload,
-            stream_mode="values",
-            config={
-                "configurable": {
-                    "thread_id": f"{payload.get('session_id')}:{spec.name}",
-                    **runtime_graph_configurable(db=db, redis_client=redis_client),
-                }
-            },
-        ):
-            if isinstance(update, dict):
-                latest = update
-                update_events = update.get("events")
-                if isinstance(update_events, list):
-                    events.extend(item for item in update_events if isinstance(item, dict))
-                    update["events"] = []
+        try:
+            async for update in graph.astream(
+                payload,
+                stream_mode="values",
+                config={
+                    "configurable": {
+                        "thread_id": f"{payload.get('session_id')}:{spec.name}",
+                        **runtime_graph_configurable(db=db, redis_client=redis_client),
+                    }
+                },
+            ):
+                if isinstance(update, dict):
+                    latest = update
+                    update_events = update.get("events")
+                    if isinstance(update_events, list):
+                        events.extend(item for item in update_events if isinstance(item, dict))
+                        update["events"] = []
+        except Exception as exc:
+            setattr(exc, "agent_worker_latest_state", latest or payload)
+            setattr(exc, "agent_worker_name", spec.name)
+            setattr(exc, "agent_worker_events", events)
+            raise
 
         final_json = _final_json_from_update(latest)
         text = _render_worker_text(final_json)
@@ -199,7 +223,7 @@ async def _prepare_food_worker_payload(payload: dict[str, Any]) -> dict[str, Any
     context.food_profile = preference_context.get("profile") or {}
     context.forced_skill_ids = _merge_forced_skill_ids(
         context.forced_skill_ids,
-        ["home_chef"] if intent == "cook_home" else ["food_decision", "restaurant_finder"],
+        ["home_chef"] if intent == "cook_home" else ["food_assistant"],
     )
     _sync_context_payload(next_payload, context)
     return next_payload
@@ -224,17 +248,23 @@ async def _prepare_travel_worker_payload(
     travel_payload = next_payload.get("travel_payload")
     merged_payload: dict[str, Any] = {}
     if latest_final_json:
-        merged_payload.update(_travel_context_from_final_json(latest_final_json))
+        merged_payload.update(TravelCandidateService.context_from_final_json(latest_final_json))
     if isinstance(travel_payload, dict):
         merged_payload.update(travel_payload)
     if isinstance(plan_payload, dict):
         merged_payload.update(plan_payload)
-    if _has_new_attachments(merged_payload):
+    if not action:
+        action = TravelCandidateService.infer_action_from_message(
+            str(next_payload.get("message") or ""),
+            latest=latest_final_json,
+            payload=merged_payload,
+        )
+    if TravelSourceIngestionService.has_new_attachments(merged_payload):
         action = "refresh_sources"
     if action:
         next_payload["travel_action"] = action
     if action == "refresh_sources":
-        _mark_refresh_sources(merged_payload, latest_final_json)
+        merged_payload = TravelSourceIngestionService.mark_refresh_sources(merged_payload, latest_final_json)
     if merged_payload:
         next_payload["travel_payload"] = merged_payload
         next_payload["payload"] = merged_payload
@@ -335,49 +365,6 @@ def _merge_forced_skill_ids(existing: Any, required: list[str]) -> list[str]:
     return values
 
 
-def _travel_context_from_final_json(latest: dict[str, Any]) -> dict[str, Any]:
-    keys = (
-        "previous_final_json",
-        "state",
-        "trip_meta",
-        "sources",
-        "places",
-        "candidates",
-        "failed_places",
-        "food_items",
-        "candidate_groups",
-        "itinerary",
-        "map",
-        "raw_text",
-    )
-    payload = {key: latest.get(key) for key in keys if latest.get(key) not in (None, [], {})}
-    payload["previous_final_json"] = latest
-    return payload
-
-
-def _has_new_attachments(payload: dict[str, Any]) -> bool:
-    value = payload.get("new_attachments")
-    return isinstance(value, list) and any(isinstance(item, dict) for item in value)
-
-
-def _mark_refresh_sources(payload: dict[str, Any], latest: dict[str, Any] | None) -> None:
-    previous = latest if isinstance(latest, dict) else payload.get("previous_final_json")
-    if isinstance(previous, dict):
-        if previous.get("itinerary") and not payload.get("previous_itinerary"):
-            payload["previous_itinerary"] = previous.get("itinerary")
-        if previous.get("map") and not payload.get("previous_map"):
-            payload["previous_map"] = previous.get("map")
-    payload["state"] = "ingesting_content"
-    payload["refresh_sources"] = True
-    payload["stale_artifacts"] = {
-        "itinerary": bool(payload.get("previous_itinerary")),
-        "map": bool(payload.get("previous_map")),
-        "reason": "new_attachments",
-    }
-    payload.pop("itinerary", None)
-    payload.pop("map", None)
-
-
 def _worker_context(spec: WorkerSpec, state: dict[str, Any]) -> AgentContext:
     overrides: dict[str, Any] = {
         "agent_id": spec.agent_id or spec.name,
@@ -406,7 +393,7 @@ def _worker_context(spec: WorkerSpec, state: dict[str, Any]) -> AgentContext:
 def _final_json_from_update(update: dict[str, Any] | None) -> dict[str, Any]:
     if isinstance(update, dict) and isinstance(update.get("final_json"), dict):
         return update["final_json"]
-    return fallback_final()
+    return final_json_for_failure("worker_no_final")
 
 
 def _render_worker_text(final_json: dict[str, Any]) -> str:

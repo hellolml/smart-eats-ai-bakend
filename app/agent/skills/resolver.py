@@ -32,7 +32,15 @@ class SkillResolver:
             if score >= skill.activation.min_score:
                 scored.append((score, skill, reasons))
 
-        scored.sort(key=lambda item: (item[1].priority, item[0], item[1].id), reverse=True)
+        scored.sort(
+            key=lambda item: (
+                item[1].id in forced_skill_ids,
+                item[1].priority,
+                item[0],
+                item[1].id,
+            ),
+            reverse=True,
+        )
         if self.max_active > 0:
             scored = scored[: self.max_active]
 

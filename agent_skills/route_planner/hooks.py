@@ -54,6 +54,22 @@ class RoutePlannerHooks(BaseSkillHooks):
             extra["route_target_candidate"] = target
         return extra
 
+    def short_circuit_final(self, state: Any) -> dict[str, Any] | None:
+        context = getattr(state, "context", None)
+        context = context if isinstance(context, dict) else {}
+        if context.get("route_target_candidate") or _explicit_route_destination(getattr(state, "message", None)):
+            return None
+        if context.get("last_restaurants"):
+            return None
+        if not _is_bare_route_followup(getattr(state, "message", None)):
+            return None
+        return _note_final(
+            "你想去哪儿？",
+            "当前路线追问缺少明确目的地。",
+            ["告诉我餐厅、景点或地址名称，我再帮你规划路线。"],
+            status="needs_clarification",
+        )
+
     def normalize_tool_args(self, state: Any, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         if tool_name == "plan_route":
             updated = dict(args)
@@ -120,6 +136,8 @@ class RoutePlannerHooks(BaseSkillHooks):
         return _note_final("路线规划失败", "暂时无法获取路线信息。", ["换个出发地或目的地试试？"])
 
     def forced_tool_calls(self, state: Any) -> list[dict[str, Any]] | None:
+        if _has_called_tool(state, "plan_route"):
+            return None
         context = getattr(state, "context", None)
         context = context if isinstance(context, dict) else {}
         target = context.get("route_target_candidate")
@@ -142,6 +160,24 @@ class RoutePlannerHooks(BaseSkillHooks):
             }
         ]
 
+    def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
+        route_tools = {"geocode_location", "plan_route"}
+        filtered = [tool for tool in allowed_tools if tool in route_tools]
+        return filtered if filtered else None
+
+
+def _has_called_tool(state: Any, tool_name: str) -> bool:
+    for attr in ("tool_calls", "observations"):
+        values = getattr(state, attr, None)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if isinstance(item, dict) and item.get("tool") == tool_name:
+                return True
+            if isinstance(item, dict) and item.get("name") == tool_name:
+                return True
+    return False
+
 
 def _ensure_context_overrides(state: Any) -> dict[str, Any]:
     if getattr(state, "context_overrides", None) is None:
@@ -149,12 +185,15 @@ def _ensure_context_overrides(state: Any) -> dict[str, Any]:
     return state.context_overrides
 
 
-def _note_final(title: str, reason: str, followups: list[str]) -> dict[str, Any]:
-    return {
+def _note_final(title: str, reason: str, followups: list[str], *, status: str | None = None) -> dict[str, Any]:
+    payload = {
         "recommendations": [{"type": "note", "title": title, "reason": reason}],
         "followups": followups,
         "warnings": [],
     }
+    if status:
+        payload["status"] = status
+    return payload
 
 
 def _emit_recovery_event(state: Any, trigger: str, tool_name: str) -> None:
@@ -190,6 +229,15 @@ CONFIRM_CUES: tuple[str, ...] = (
     "怎么走",
 )
 
+ROUTE_ONLY_CUES: tuple[str, ...] = (
+    "怎么走",
+    "怎么去",
+    "导航",
+    "路线",
+    "带我去",
+    "前往",
+)
+
 INFO_QUERY_CUES: tuple[str, ...] = (
     "怎么样",
     "好吃吗",
@@ -221,6 +269,46 @@ def _normalize_match_text(value: Any) -> str:
     if not text:
         return ""
     return re.sub(r"[\s，。！？、,.!?:：；;（）()\[\]{}<>\-_'\"“”‘’]", "", text)
+
+
+def _is_bare_route_followup(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    normalized = _normalize_match_text(text)
+    if not normalized:
+        return False
+    cue_norms = [_normalize_match_text(cue) for cue in ROUTE_ONLY_CUES]
+    filler_norms = {"呢", "啊", "呀", "吗", "一下", "吧", "给我", "帮我", "帮忙"}
+    stripped = normalized
+    for cue in cue_norms:
+        stripped = stripped.replace(cue, "")
+    for filler in filler_norms:
+        stripped = stripped.replace(filler, "")
+    return not stripped and any(cue in normalized for cue in cue_norms)
+
+
+def _explicit_route_destination(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text or _is_bare_route_followup(text):
+        return None
+    patterns = (
+        r"从.+?怎么去(.+)$",
+        r"从.+?到(.+)$",
+        r"去(.+?)怎么走",
+        r"去(.+)$",
+        r"怎么去(.+)$",
+        r"带我去(.+)$",
+        r"前往(.+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        destination = match.group(1).strip(" ，。！？!?,. ")
+        if destination:
+            return destination
+    return None
 
 
 def _coerce_geo_candidate(payload: Any) -> dict[str, float] | None:
@@ -284,7 +372,7 @@ def _extract_target_from_candidates(
         name = str(row.get("name") or row.get("title") or "").strip()
         if not name:
             continue
-        geo = _coerce_geo_candidate(row.get("geo"))
+        geo = _coerce_geo_candidate(row.get("geo")) or _coerce_geo_candidate(row)
         if not geo:
             continue
         normalized_name = _normalize_match_text(name)

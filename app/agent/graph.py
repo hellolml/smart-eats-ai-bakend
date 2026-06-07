@@ -26,7 +26,8 @@ from app.agent.runtime.graph import (
     _initialize_graph_state,
     _state_from_dict,
 )
-from app.agent.runtime.finalization import fallback_final, final_json_from_text
+from app.agent.runtime.finalization import final_json_from_text
+from app.agent.contracts import build_agent_run_result, final_json_for_failure, is_fallback_final
 from app.agent.metrics import record_agent_metric
 from app.agent.realtime_eval import (
     build_trace_from_events,
@@ -152,46 +153,121 @@ async def _persist_realtime_eval(
         logger.warning("realtime_eval_persist_failed id=%s", result.id, exc_info=True)
 
 
-def _normalize_llm_upstream_error_message(exc: Exception) -> str:
+def _extract_llm_error_parts(exc: Exception) -> dict[str, str | int | None]:
     body = getattr(exc, "body", None)
     error_type = ""
     error_message = ""
+    error_code = ""
 
     if isinstance(body, dict):
         error = body.get("error")
         if isinstance(error, dict):
             error_type = str(error.get("type") or error.get("code") or "").strip()
+            error_code = str(error.get("code") or error.get("type") or "").strip()
             error_message = str(error.get("message") or "").strip()
 
     raw_message = str(exc).strip()
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if not isinstance(status_code, int):
+        status_code = getattr(exc, "status_code", None)
+    return {
+        "error_type": error_type,
+        "error_code": error_code,
+        "error_message": error_message,
+        "raw_message": raw_message,
+        "status_code": status_code if isinstance(status_code, int) else None,
+    }
+
+
+def _classify_llm_upstream_issue(exc: Exception) -> dict[str, Any]:
+    parts = _extract_llm_error_parts(exc)
+    error_type = str(parts.get("error_type") or "")
+    error_code = str(parts.get("error_code") or "")
+    error_message = str(parts.get("error_message") or "")
+    raw_message = str(parts.get("raw_message") or "")
+    status_code = parts.get("status_code")
     combined = " ".join(part for part in (error_type, error_message, raw_message) if part)
     combined_lower = combined.lower()
 
     if error_type == "AllocationQuota.FreeTierOnly" or "free tier" in combined_lower:
-        return "当前模型免费额度已用尽，请在模型管理控制台关闭“仅使用免费额度”模式，或切换到可用模型后重试。"
+        return {
+            "category": "provider_quota",
+            "code": "free_tier_quota_exhausted",
+            "http_status": status_code,
+            "provider_error_code": error_code or error_type,
+            "user_message": "当前模型免费额度已用尽，请在模型管理控制台关闭“仅使用免费额度”模式，或切换到可用模型后重试。",
+            "action": "disable_free_tier_only_or_switch_model",
+        }
 
     if "coding_plan_subscription_expired" in combined_lower or "subscription is expired" in combined_lower:
-        return "当前模型订阅已过期，请在模型管理中切换到可用模型，或更新后端 LLM_PROVIDER / 模型配置后重试。"
+        return {
+            "category": "provider_auth",
+            "code": "subscription_expired",
+            "http_status": status_code,
+            "provider_error_code": error_code or error_type,
+            "user_message": "当前模型订阅已过期，请在模型管理中切换到可用模型，或更新后端 LLM_PROVIDER / 模型配置后重试。",
+            "action": "switch_model_or_refresh_provider_subscription",
+        }
 
     if "request timed out" in combined_lower or "timed out" in combined_lower:
-        return "模型响应超时，请稍后重试；如果旅行规划较复杂，请减少一次输入的信息量，或在后端调大 LLM_PLANNER_REQUEST_TIMEOUT_SECONDS。"
+        return {
+            "category": "provider_timeout",
+            "code": "model_timeout",
+            "http_status": status_code,
+            "provider_error_code": error_code or error_type,
+            "user_message": "模型响应超时，请稍后重试；如果旅行规划较复杂，请减少一次输入的信息量，或在后端调大 LLM_PLANNER_REQUEST_TIMEOUT_SECONDS。",
+            "action": "retry_reduce_context_or_increase_timeout",
+        }
 
     if "unexpected item type in content" in combined_lower or "messages input is invalid" in combined_lower:
-        return "模型未接受本次图片输入，请确认当前模型支持多模态图片，或重新上传图片后再试。"
+        return {
+            "category": "provider_schema",
+            "code": "invalid_multimodal_payload",
+            "http_status": status_code,
+            "provider_error_code": error_code or error_type,
+            "user_message": "模型未接受本次图片输入，请确认当前模型支持多模态图片，或重新上传图片后再试。",
+            "action": "switch_to_vision_model_or_fix_image_payload",
+        }
 
+    if status_code in {401, 403} or any(token in combined_lower for token in ("api key", "unauthorized", "permissiondenied")):
+        return {
+            "category": "provider_auth",
+            "code": "provider_auth_failed",
+            "http_status": status_code,
+            "provider_error_code": error_code or error_type,
+            "user_message": error_message or raw_message or "模型服务认证失败，请检查 API Key、模型权限或 provider 配置。",
+            "action": "check_api_key_model_permission_or_provider_config",
+        }
+    if status_code == 429 or "rate limit" in combined_lower:
+        return {
+            "category": "provider_rate_limit",
+            "code": "provider_rate_limited",
+            "http_status": status_code,
+            "provider_error_code": error_code or error_type,
+            "user_message": error_message or "模型服务限流，请稍后重试或切换可用模型。",
+            "action": "retry_later_or_switch_model",
+        }
     if error_message:
-        return error_message
-    return raw_message or "LLM 上游服务暂时不可用，请稍后重试。"
+        user_message = error_message
+    else:
+        user_message = raw_message or "LLM 上游服务暂时不可用，请稍后重试。"
+    return {
+        "category": "provider_model_error",
+        "code": "provider_upstream_error",
+        "http_status": status_code,
+        "provider_error_code": error_code or error_type,
+        "user_message": user_message,
+        "action": "inspect_provider_error_and_model_config",
+    }
+
+
+def _normalize_llm_upstream_error_message(exc: Exception) -> str:
+    return str(_classify_llm_upstream_issue(exc).get("user_message") or "LLM 上游服务暂时不可用，请稍后重试。")
 
 
 def _is_fallback_payload(final_json: dict[str, Any]) -> bool:
-    recs = final_json.get("recommendations") if isinstance(final_json, dict) else None
-    if not isinstance(recs, list) or not recs:
-        return False
-    for item in recs:
-        if isinstance(item, dict) and str(item.get("reason") or "") == "fallback":
-            return True
-    return False
+    return is_fallback_final(final_json)
 
 
 def _with_agent_metadata(final_json: dict[str, Any], state: AgentRuntimeState) -> dict[str, Any]:
@@ -319,6 +395,73 @@ def _final_json_from_latest_ai_message(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _agent_result_from_state(value: Any) -> dict[str, Any] | None:
+    result = getattr(value, "agent_result", None)
+    if result is None and isinstance(value, dict):
+        result = value.get("agent_result")
+    return result if isinstance(result, dict) else None
+
+
+def _route_decision_from_state(value: Any) -> dict[str, Any] | None:
+    route = getattr(value, "route_decision", None)
+    if route is None and isinstance(value, dict):
+        route = value.get("route_decision")
+    return route if isinstance(route, dict) else None
+
+
+def _runtime_diagnostics_from_state(value: Any) -> dict[str, Any]:
+    context = getattr(value, "context", None)
+    if context is None and isinstance(value, dict):
+        context = value.get("context")
+    if not isinstance(context, dict):
+        return {}
+
+    diagnostics: dict[str, Any] = {}
+    active_tools = context.get("allowed_tools")
+    if isinstance(active_tools, list):
+        diagnostics["active_tools"] = [item for item in active_tools if isinstance(item, str)]
+
+    active_skills = context.get("active_skills")
+    if isinstance(active_skills, list):
+        diagnostics["active_skills"] = [item for item in active_skills if isinstance(item, dict)]
+
+    skill_diagnostics = context.get("skill_diagnostics")
+    if isinstance(skill_diagnostics, dict):
+        diagnostics["skill_diagnostics"] = skill_diagnostics
+
+    provider = getattr(value, "provider", None)
+    if provider is None and isinstance(value, dict):
+        provider = value.get("provider")
+    resolved_model_config = getattr(value, "resolved_model_config", None)
+    if resolved_model_config is None and isinstance(value, dict):
+        resolved_model_config = value.get("resolved_model_config")
+    diagnostics.update(_model_diagnostics(provider, resolved_model_config))
+
+    return diagnostics
+
+
+def _model_diagnostics(provider: Any, resolved_model_config: Any) -> dict[str, Any]:
+    model_config: dict[str, Any] = {}
+    if isinstance(provider, str) and provider:
+        model_config["provider_value"] = provider
+    if isinstance(resolved_model_config, dict):
+        for key in (
+            "source",
+            "provider",
+            "provider_value",
+            "config_id",
+            "display_name",
+            "base_url",
+            "model_planner",
+            "model_writer",
+            "model_vision_planner",
+        ):
+            value = resolved_model_config.get(key)
+            if value not in (None, "", [], {}):
+                model_config[key] = value
+    return {"model_config": model_config} if model_config else {}
+
+
 async def _load_graph_snapshot(graph: Any, config: dict[str, Any], checkpointer: Any) -> Any:
     if not checkpointer:
         return None
@@ -329,7 +472,8 @@ async def _load_graph_snapshot(graph: Any, config: dict[str, Any], checkpointer:
 
 def _resolve_graph_input(state: ChatState, snapshot: Any, checkpointer: Any) -> Any:
     has_pending = bool(snapshot and getattr(snapshot, "next", None))
-    if has_pending and checkpointer:
+    explicit_resume = bool(state.resume_from_checkpoint or state.checkpoint_ref or state.replay_from_checkpoint)
+    if has_pending and checkpointer and explicit_resume:
         resume_payload: dict[str, Any] = {}
         user_message = (state.message or "").strip()
         if user_message:
@@ -409,7 +553,7 @@ async def run_chat_stream(
             has_pending = bool(snapshot and getattr(snapshot, "next", None))
             input_payload = _resolve_graph_input(state, snapshot, checkpointer)
 
-            if has_pending:
+            if has_pending and (state.resume_from_checkpoint or state.checkpoint_ref or state.replay_from_checkpoint):
                 logger.info(
                     "agent_auto_resume session_id=%s trace_id=%s",
                     state.session_id,
@@ -468,10 +612,27 @@ async def run_chat_stream(
         runtime_state = _coerce_runtime_state(latest_state, state)
         final_json = runtime_state.final_json
         if not final_json:
-            final_json = _final_json_from_latest_ai_message(latest_state) or fallback_final()
+            final_json = _final_json_from_latest_ai_message(latest_state) or final_json_for_failure("worker_no_final")
             runtime_state.final_json = final_json
         final_json = _with_agent_metadata(final_json, runtime_state)
         runtime_state.final_json = final_json
+        agent_result = (
+            runtime_state.agent_result
+            if isinstance(runtime_state.agent_result, dict)
+            else _agent_result_from_state(latest_state)
+        )
+        if not isinstance(agent_result, dict):
+            agent_result = build_agent_run_result(
+                final_json=final_json,
+                route_decision=_route_decision_from_state(latest_state) or runtime_state.route_decision,
+                worker=runtime_state.agent_id,
+                trace_id=trace_id,
+            )
+        else:
+            agent_result = dict(agent_result)
+            agent_result.setdefault("trace_id", trace_id)
+            agent_result.setdefault("final", final_json)
+        runtime_state.agent_result = agent_result
 
         session_id = runtime_state.session_id or state.session_id
         if _is_fallback_payload(final_json):
@@ -497,6 +658,10 @@ async def run_chat_stream(
             runtime_state.session_id,
             answer_text,
             runtime_state.final_json,
+            agent_result=agent_result,
+            trace_id=trace_id,
+            failure_class=agent_result.get("failure_class"),
+            business_payload=agent_result.get("business_payload") or {},
         )
         await _apply_turn_preference_extraction(
             db,
@@ -509,7 +674,17 @@ async def run_chat_stream(
         resolved_model_name = None
         if isinstance(runtime_state.resolved_model_config, dict):
             resolved_model_name = runtime_state.resolved_model_config.get("model_planner")
-        final_event = {"event": "final", "data": {"stopped": False, "answer": final_json}}
+        final_event = {
+            "event": "final",
+            "data": {
+                "stopped": False,
+                "answer": final_json,
+                "agent_result": agent_result,
+                "trace_id": trace_id,
+                "failure_class": agent_result.get("failure_class"),
+                "business_payload": agent_result.get("business_payload") or {},
+            },
+        }
         _schedule_realtime_eval(
             session_id=runtime_state.session_id or state.session_id,
             user_id=runtime_state.user_id,
@@ -534,12 +709,59 @@ async def run_chat_stream(
             trace_id,
             str(exc),
         )
-        message = _normalize_llm_upstream_error_message(exc)
+        provider_issue = _classify_llm_upstream_issue(exc)
+        message = str(provider_issue.get("user_message") or _normalize_llm_upstream_error_message(exc))
+        final_json = final_json_for_failure("upstream_error", message=message)
+        final_json["provider_issue"] = {
+            key: value
+            for key, value in provider_issue.items()
+            if key != "user_message" and value not in (None, "", [], {})
+        }
+        latest_value = locals().get("latest_state", state)
+        worker_latest_value = getattr(exc, "agent_worker_latest_state", None)
+        worker_events = getattr(exc, "agent_worker_events", None)
+        if isinstance(worker_events, list):
+            collected_events.extend(item for item in worker_events if isinstance(item, dict))
+        diagnostics_source = worker_latest_value if worker_latest_value is not None else latest_value
+        runtime_state = _coerce_runtime_state(diagnostics_source, state)
+        route_decision = _route_decision_from_state(latest_value) or _route_decision_from_state(diagnostics_source) or runtime_state.route_decision
+        runtime_diagnostics = _runtime_diagnostics_from_state(diagnostics_source)
+        agent_result = build_agent_run_result(
+            final_json=final_json,
+            route_decision=route_decision,
+            worker=runtime_state.agent_id,
+            trace_id=trace_id,
+            diagnostics={
+                **runtime_diagnostics,
+                "fallback_reason": "upstream_error",
+                "provider_issue": provider_issue,
+                "provider_issue_code": provider_issue.get("code"),
+                "provider_issue_category": provider_issue.get("category"),
+            },
+            failure_class="upstream_error",
+            status="failed",
+        )
+        answer_text = _render_final_text(final_json)
         error_event = {
             "event": "error",
             "data": {
                 "message": message,
                 "code": LLM_UPSTREAM_ERROR,
+                "failure_class": "upstream_error",
+                "provider_issue": provider_issue,
+                "trace_id": trace_id,
+            },
+        }
+        final_event = {
+            "event": "final",
+            "data": {
+                "stopped": False,
+                "answer": final_json,
+                "agent_result": agent_result,
+                "trace_id": trace_id,
+                "failure_class": "upstream_error",
+                "provider_issue": provider_issue,
+                "business_payload": {},
             },
         }
         resolved_model_name = None
@@ -550,18 +772,35 @@ async def run_chat_stream(
             user_id=state.user_id,
             trace_id=trace_id,
             user_message=state.message,
-            events=[*collected_events, error_event],
-            final_json=None,
+            events=[*collected_events, error_event, final_event],
+            final_json=final_json,
             model_provider=provider,
             model_name=resolved_model_name,
             started_at=started_at,
             ended_at=datetime.now(timezone.utc),
             total_duration_ms=(time.monotonic() - stream_start_time) * 1000,
         )
-        yield {
-            "event": "error",
-            "data": envelope(None, trace_id, code=LLM_UPSTREAM_ERROR, message=message),
-        }
+        record_agent_metric(state.session_id, "fallback_final")
+        try:
+            await conversation.save_assistant_message(
+                db,
+                redis_client,
+                state.session_id,
+                answer_text,
+                final_json,
+                agent_result=agent_result,
+                trace_id=trace_id,
+                failure_class="upstream_error",
+                business_payload={},
+            )
+        except Exception:
+            logger.warning("failed_final_persist_failed session_id=%s trace_id=%s", state.session_id, trace_id, exc_info=True)
+        error_payload = envelope(None, trace_id, code=LLM_UPSTREAM_ERROR, message=message)
+        error_payload["failure_class"] = "upstream_error"
+        error_payload["provider_issue"] = provider_issue
+        yield {"event": "error", "data": error_payload}
+        yield {"event": "delta", "data": {"token": answer_text}}
+        yield final_event
         return
     finally:
         if conversation_cache:

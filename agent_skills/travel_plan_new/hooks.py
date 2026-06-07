@@ -6,6 +6,22 @@ from typing import Any
 from app.agent.runtime.hooks import BaseSkillHooks
 
 
+MAX_TRAVEL_POI_VERIFICATIONS_PER_RUN = 8
+TRAVEL_CONTENT_TOOLS = {
+    "travel_fetch_url_content",
+    "travel_search_poi",
+    "travel_search_nearby_poi",
+}
+TRAVEL_POI_TOOLS = {"travel_search_poi"}
+TRAVEL_MAP_TOOLS = {"travel_create_personal_map"}
+TRAVEL_NO_TOOL_PHASES = {
+    "candidates_ready",
+    "candidates_confirmed",
+    "itinerary_generated",
+    "map_generated",
+}
+
+
 class TravelPlanNewHooks(BaseSkillHooks):
     def build_context(
         self,
@@ -134,7 +150,7 @@ class TravelPlanNewHooks(BaseSkillHooks):
                 if candidates:
                     return _submit_final_for_confirmed(state, action, candidates)
                 return _no_places_final(state, result)
-            if _pending_verifiable_places(state):
+            if _pending_verifiable_places(state) and not _poi_verification_budget_reached(state):
                 return None
             # 正常流程：收集候选并展示给用户确认
             candidates = _collect_verified_candidates(state)
@@ -226,7 +242,7 @@ class TravelPlanNewHooks(BaseSkillHooks):
                     }
                     for item in pending_places[:20]
                     if item.get("name")
-                ]
+                ][:MAX_TRAVEL_POI_VERIFICATIONS_PER_RUN]
         if not _is_map_action(action):
             return None
         line_list = _line_list_from_payload(overrides)
@@ -256,14 +272,16 @@ class TravelPlanNewHooks(BaseSkillHooks):
             trip_meta=trip_meta,
         )
         if _is_map_action(action):
-            map_tools = [tool_name for tool_name in allowed_tools if tool_name == "travel_create_personal_map"]
-            return map_tools or ["travel_create_personal_map"]
+            return _filter_tools(allowed_tools, TRAVEL_MAP_TOOLS)
         if _pending_verifiable_places(state):
-            poi_tools = [tool_name for tool_name in allowed_tools if tool_name == "travel_search_poi"]
-            return poi_tools or ["travel_search_poi"]
-        if phase != "map_generated":
-            return [tool_name for tool_name in allowed_tools if tool_name != "travel_create_personal_map"]
-        return None
+            return _filter_tools(allowed_tools, TRAVEL_POI_TOOLS)
+        if phase in TRAVEL_NO_TOOL_PHASES:
+            return []
+        return _filter_tools(allowed_tools, TRAVEL_CONTENT_TOOLS)
+
+
+def _filter_tools(allowed_tools: list[str], selected: set[str]) -> list[str]:
+    return [tool_name for tool_name in allowed_tools if tool_name in selected]
 
 
 def _context_overrides(state: Any) -> dict[str, Any]:
@@ -277,8 +295,19 @@ def _preference_context(overrides: dict[str, Any]) -> dict[str, Any]:
 
 
 def _travel_action(overrides: dict[str, Any]) -> str:
-    value = overrides.get("travel_action")
-    return str(value or "").strip()
+    for key in ("travel_action", "action"):
+        value = overrides.get(key)
+        if value:
+            return str(value).strip()
+    for payload_key in ("travel_payload", "payload"):
+        payload = overrides.get(payload_key)
+        if not isinstance(payload, dict):
+            continue
+        for key in ("travel_action", "action"):
+            value = payload.get(key)
+            if value:
+                return str(value).strip()
+    return ""
 
 
 def _is_map_action(action: str) -> bool:
@@ -900,6 +929,22 @@ def _pending_verifiable_places(state: Any) -> list[dict[str, Any]]:
             continue
         pending.append({**place, "category": category, "aliases": aliases})
     return pending
+
+
+def _poi_verification_count(state: Any) -> int:
+    observations = getattr(state, "observations", None)
+    if not isinstance(observations, list):
+        return 0
+    return sum(
+        1
+        for observation in observations
+        if isinstance(observation, dict)
+        and observation.get("tool") in {"travel_search_poi", "travel_search_nearby_poi"}
+    )
+
+
+def _poi_verification_budget_reached(state: Any) -> bool:
+    return _poi_verification_count(state) >= MAX_TRAVEL_POI_VERIFICATIONS_PER_RUN
 
 
 def _processed_poi_names(state: Any) -> set[str]:
@@ -1943,6 +1988,9 @@ def _candidate_confirmation_final(state: Any, candidates: list[dict[str, Any]]) 
     followups = ["确认候选地点后，将继续生成最终每日行程。"]
     if failed_places:
         followups.insert(0, "部分地点未验证通过，你可以补充准确名称、删除或改成附近地标。")
+    budget_reached = _poi_verification_budget_reached(state) and bool(pending_places)
+    if budget_reached:
+        followups.insert(0, "本轮已验证一批候选地点；如果还要继续验证剩余地点，请先确认或让我继续。")
     groups = _candidate_groups(candidates, failed_places, food_items, excluded_places, pending_places)
     raw_text = _candidate_markdown(candidates, failed_places, food_items, groups, extracted_places, preference_summary, excluded_places, pending_places)
     return {
@@ -1971,7 +2019,10 @@ def _candidate_confirmation_final(state: Any, candidates: list[dict[str, Any]]) 
             }
         ],
         "followups": followups,
-        "warnings": [f"{item.get('name')}：{item.get('reason')}" for item in failed_places],
+        "warnings": [
+            *([f"已达到本轮 POI 验证预算，仍有 {len(pending_places)} 个地点待确认或继续验证。"] if budget_reached else []),
+            *[f"{item.get('name')}：{item.get('reason')}" for item in failed_places],
+        ],
     }
 
 
@@ -2335,9 +2386,17 @@ def _build_rough_itinerary(candidates: list[dict[str, Any]], trip_meta: dict[str
 
 
 def _map_title(trip_meta: dict[str, Any]) -> str:
-    destination = str(trip_meta.get("destination") or "旅行").strip()
+    destination = str(trip_meta.get("destination") or "").strip()
     days = str(trip_meta.get("days") or "").strip()
-    return f"{destination}{days}日游地图" if days else f"{destination}旅行地图"
+    if not destination:
+        return f"{days}日游地图" if days else "旅行地图"
+    if days:
+        return f"{destination}{days}日游地图"
+    if destination.endswith("地图"):
+        return destination
+    if destination.endswith(("旅行", "旅游", "行程")):
+        return f"{destination}地图"
+    return f"{destination}旅行地图"
 
 
 def _line_list_from_payload(overrides: dict[str, Any]) -> list[dict[str, Any]]:

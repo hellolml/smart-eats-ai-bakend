@@ -5,7 +5,22 @@ from typing import Any
 from app.agent.runtime.hooks import BaseSkillHooks
 
 
+HOME_CHEF_ALLOWED_TOOLS = {
+    "get_fridge_items",
+    "rag_search_recipes",
+    "search_recipes",
+}
+
+
 class HomeChefHooks(BaseSkillHooks):
+    def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
+        context = getattr(state, "context", None)
+        intent = context.get("intent") if isinstance(context, dict) else None
+        food_mode = context.get("food_mode") if isinstance(context, dict) else None
+        if getattr(state, "scene", None) != "home_chef" and intent != "cook_home" and food_mode != "cook_home":
+            return None
+        return [tool for tool in allowed_tools if tool in HOME_CHEF_ALLOWED_TOOLS]
+
     def handle_tool_result(self, state: Any, tool_name: str, result: Any) -> dict[str, Any] | None:
         if tool_name == "get_fridge_items":
             return self._handle_get_fridge_items(state, result)

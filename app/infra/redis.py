@@ -19,3 +19,11 @@ def _get_client() -> redis.Redis:
 async def get_redis() -> AsyncGenerator[redis.Redis, None]:
     client = _get_client()
     yield client
+
+
+async def close_redis() -> None:
+    global _redis_client
+    if _redis_client is None:
+        return
+    await _redis_client.aclose()
+    _redis_client = None

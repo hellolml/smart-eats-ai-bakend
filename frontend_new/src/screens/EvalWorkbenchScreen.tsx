@@ -50,6 +50,27 @@ const displayValue = (value: unknown, fallback = 'n/a') => {
   return String(value);
 };
 
+function sessionTitle(value: any) {
+  return value?.session_title
+    || value?.title
+    || value?.latest?.session_title
+    || value?.latest?.title
+    || value?.run?.session_title
+    || value?.run?.title
+    || value?.session_id
+    || value?.sessionId
+    || '未命名会话';
+}
+
+function modelLabel(value: any) {
+  const config = value?.model_config || {};
+  return config.provider_value
+    || config.model_planner
+    || config.model_writer
+    || value?.model_name
+    || '未知模型';
+}
+
 function toolLabel(name?: string | null) {
   const map: Record<string, string> = {
     food_decision: '餐饮决策',
@@ -211,6 +232,7 @@ function groupSessions(records: any[]) {
   });
   return Array.from(map.entries()).map(([sessionId, runs]) => ({
     sessionId,
+    title: sessionTitle(runs[0]),
     latest: runs[0],
     runs,
   }));
@@ -261,11 +283,12 @@ function SessionsTab({ sessions, selectedTrace, expertMode, onOpenTrace }: { ses
           return (
             <button key={session.sessionId} onClick={() => onOpenTrace(run.id)} className="w-full rounded-xl bg-white p-4 text-left shadow-sm">
               <div className="flex items-center justify-between gap-2">
-                <span className="truncate font-mono text-xs font-black text-blue-700">{session.sessionId}</span>
+                <span className="truncate text-sm font-black text-gray-900">{session.title}</span>
                 <Badge tone={scoreTone(run.overall_quality)}>{pct(run.overall_quality)}</Badge>
               </div>
+              <div className="mt-1 truncate font-mono text-[10px] font-semibold text-gray-400">{session.sessionId}</div>
               <div className="mt-2 text-sm font-black text-gray-900">{sceneLabel(run.scene)} · {run.status === 'completed' ? '已完成' : '异常'}</div>
-              <div className="mt-1 text-xs font-semibold text-gray-500">{session.runs.length} 轮 · {ms(run.latency_ms || run.total_duration_ms)} · {run.model_name || '未知模型'}</div>
+              <div className="mt-1 text-xs font-semibold text-gray-500">{session.runs.length} 轮 · {ms(run.latency_ms || run.total_duration_ms)} · {modelLabel(run)}</div>
             </button>
           );
         })}
@@ -284,7 +307,7 @@ function TraceDetailMobile({ detail, expertMode }: { detail: any; expertMode: bo
   const toolSummaries = summarizeTools(tools);
   return (
     <Section title="执行过程">
-      <Conclusion title={run.status === 'completed' ? '这轮执行完成了' : '这轮执行异常'} body={`${sceneLabel(run.scene)} · ${run.model_name || '未知模型'} · ${ms(run.latency_ms)}`} tone={scoreTone(run.overall_quality)} />
+      <Conclusion title={run.status === 'completed' ? '这轮执行完成了' : '这轮执行异常'} body={`${sessionTitle(run)} · ${sceneLabel(run.scene)} · ${modelLabel(run)} · ${ms(run.latency_ms)}`} tone={scoreTone(run.overall_quality)} />
       <div className="space-y-2">
         {events.map((event: any, index: number) => (
           <div key={event.id || index} className="rounded-xl border border-gray-100 bg-white p-3">
@@ -426,9 +449,10 @@ function RunCard({ run }: { run: any }) {
   return (
     <div className="rounded-xl bg-white p-3 shadow-sm">
       <div className="flex items-center justify-between gap-2">
-        <span className="truncate font-mono text-xs font-black text-blue-700">{run.id}</span>
+        <span className="truncate text-sm font-black text-gray-900">{sessionTitle(run)}</span>
         <Badge tone={scoreTone(run.overall_quality)}>{pct(run.overall_quality)}</Badge>
       </div>
+      <div className="mt-1 truncate font-mono text-[10px] font-semibold text-gray-400">{run.session_id || run.id}</div>
       <div className="mt-1 text-xs font-semibold text-gray-500">{sceneLabel(run.scene)} · {run.status || 'completed'} · {ms(run.latency_ms || run.total_duration_ms)}</div>
     </div>
   );

@@ -4,7 +4,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agent.graph import _render_final_text, run_chat_stream
+from app.agent.graph import _render_final_text, _resolve_graph_input, run_chat_stream
 from app.agent.runtime.graph import _best_effort_final_from_observations, get_agent_runtime_config
 from app.agent.state import ChatState
 
@@ -55,12 +55,87 @@ class _FakeGraphBuilder:
         return _FakeCompiledGraph(self._updates)
 
 
+class _SlowFakeCompiledGraph:
+    async def astream(self, *_args, **_kwargs):
+        await asyncio.sleep(0.2)
+        yield {
+            "session_id": "s-slow",
+            "message": "quick dinner",
+            "final_json": {
+                "recommendations": [{"type": "note", "title": "slow final", "reason": "test"}],
+                "followups": [],
+                "warnings": [],
+            },
+        }
+
+
+class _SlowFakeGraphBuilder:
+    def compile(self, **_kwargs):
+        return _SlowFakeCompiledGraph()
+
+
+class _FailingCompiledGraph:
+    async def astream(self, *_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+        yield  # pragma: no cover
+
+
+class _FailingGraphBuilder:
+    def compile(self, **_kwargs):
+        return _FailingCompiledGraph()
+
+
+class _FailingAfterSnapshotCompiledGraph:
+    async def astream(self, *_args, **_kwargs):
+        yield {
+            "session_id": "s-upstream",
+            "message": "今天吃什么",
+            "route_decision": {
+                "worker": "food_advisor",
+                "intent": "eat_out",
+                "confidence": 0.9,
+                "reason": "food_intent",
+            },
+        }
+        exc = RuntimeError("provider unavailable")
+        exc.agent_worker_latest_state = {
+            "session_id": "s-upstream",
+            "message": "今天吃什么",
+            "context": {
+                "allowed_tools": ["get_ip_location", "geocode_location", "search_restaurants", "get_weather"],
+                "active_skills": [{"id": "food_assistant"}, {"id": "restaurant_finder"}],
+                "skill_diagnostics": {"max_tool_calls_per_turn": 4},
+            },
+        }
+        raise exc
+
+
+class _FailingAfterSnapshotGraphBuilder:
+    def compile(self, **_kwargs):
+        return _FailingAfterSnapshotCompiledGraph()
+
+
 class _FakeStatefulCheckpointerContext:
     async def __aenter__(self):
         return object()
 
     async def __aexit__(self, exc_type, exc, tb):
         return False
+
+
+class _PendingSnapshot:
+    next = ("worker",)
+    values = {"session_id": "stale"}
+
+
+def test_resolve_graph_input_ignores_pending_checkpoint_without_explicit_resume():
+    state = ChatState(session_id="s-new-turn", message="从酒店怎么去浅草寺")
+
+    resolved = _resolve_graph_input(state, _PendingSnapshot(), checkpointer=object())
+
+    assert isinstance(resolved, dict)
+    assert resolved["session_id"] == "s-new-turn"
+    assert resolved["message"] == "从酒店怎么去浅草寺"
 
 
 @pytest.mark.asyncio
@@ -287,7 +362,7 @@ async def test_run_chat_stream_supervisor_runtime_ignores_message_final_json(mon
 
 
 @pytest.mark.asyncio
-async def test_run_chat_stream_supervisor_runtime_falls_back_without_state_final_json(monkeypatch):
+async def test_run_chat_stream_supervisor_runtime_uses_direct_ai_text_without_state_final_json(monkeypatch):
     async def _noop_save_assistant_message(*_args, **_kwargs):
         return None
 
@@ -317,7 +392,82 @@ async def test_run_chat_stream_supervisor_runtime_falls_back_without_state_final
         )
     ]
 
-    assert events[-1]["data"]["answer"]["recommendations"][0]["reason"] == "fallback"
+    assert events[-1]["data"]["answer"]["recommendations"][0]["title"] == "你好，我在。"
+    assert events[-1]["data"]["answer"]["recommendations"][0].get("reason") != "fallback"
+    assert events[-1]["data"]["agent_result"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_converts_upstream_exception_to_failed_final(monkeypatch):
+    saved = []
+    scheduled = []
+
+    async def _save_assistant_message(*_args, **kwargs):
+        saved.append(kwargs)
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _save_assistant_message)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr("app.agent.graph._schedule_realtime_eval", lambda **kwargs: scheduled.append(kwargs))
+    monkeypatch.setattr("app.agent.supervisor.build_supervisor_runtime_graph", lambda **_kwargs: _FailingGraphBuilder())
+
+    events = [
+        item
+        async for item in run_chat_stream(
+            _FakeRequest(),
+            db=None,
+            redis_client=_FakeRedis(),
+            state=ChatState(session_id="s-upstream", message="今天吃什么", trace_id="trace-upstream"),
+        )
+    ]
+
+    assert [item["event"] for item in events] == ["thinking", "error", "delta", "final"]
+    error_data = events[1]["data"]
+    final_data = events[-1]["data"]
+    assert error_data["failure_class"] == "upstream_error"
+    assert error_data["provider_issue"]["code"] == "provider_upstream_error"
+    assert final_data["trace_id"] == "trace-upstream"
+    assert final_data["failure_class"] == "upstream_error"
+    assert final_data["provider_issue"]["code"] == "provider_upstream_error"
+    assert final_data["agent_result"]["status"] == "failed"
+    assert final_data["agent_result"]["failure_class"] == "upstream_error"
+    assert final_data["agent_result"]["final"]["failure_class"] == "upstream_error"
+    assert final_data["agent_result"]["diagnostics"]["provider_issue"]["code"] == "provider_upstream_error"
+    assert saved[-1]["failure_class"] == "upstream_error"
+    assert saved[-1]["agent_result"]["status"] == "failed"
+    assert saved[-1]["agent_result"]["diagnostics"]["provider_issue"]["code"] == "provider_upstream_error"
+    assert scheduled[-1]["events"][-1]["event"] == "final"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_stream_preserves_runtime_diagnostics_on_upstream_exception(monkeypatch):
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.agent.graph.conversation.save_assistant_message", _noop)
+    monkeypatch.setattr("app.agent.graph._apply_turn_preference_extraction", _noop)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr("app.agent.graph._schedule_realtime_eval", lambda **_kwargs: None)
+    monkeypatch.setattr("app.agent.supervisor.build_supervisor_runtime_graph", lambda **_kwargs: _FailingAfterSnapshotGraphBuilder())
+
+    events = [
+        item
+        async for item in run_chat_stream(
+            _FakeRequest(),
+            db=None,
+            redis_client=_FakeRedis(),
+            state=ChatState(session_id="s-upstream", message="今天吃什么", trace_id="trace-upstream"),
+        )
+    ]
+
+    diagnostics = events[-1]["data"]["agent_result"]["diagnostics"]
+    assert diagnostics["route"]["worker"] == "food_advisor"
+    assert diagnostics["active_tools"] == ["get_ip_location", "geocode_location", "search_restaurants", "get_weather"]
+    assert [item["id"] for item in diagnostics["active_skills"]] == ["food_assistant", "restaurant_finder"]
+    assert diagnostics["skill_diagnostics"]["max_tool_calls_per_turn"] == 4
 
 
 @pytest.mark.asyncio
@@ -362,11 +512,8 @@ async def test_chat_stream_stop(client, monkeypatch):
     assert resp.status_code == 200
     session_id = resp.json()["data"]["session_id"]
 
-    async def _slow_plan_tool_calls(self, system, user, available_tools):
-        await asyncio.sleep(0.2)
-        return {"content": "", "tool_calls": []}
-
-    monkeypatch.setattr("app.agent.llm_adapters.OpenAIPlanner.plan_tool_calls", _slow_plan_tool_calls)
+    monkeypatch.setattr("app.agent.graph.checkpointer_context", lambda: _FakeCheckpointerContext())
+    monkeypatch.setattr("app.agent.supervisor.build_supervisor_runtime_graph", lambda **_kwargs: _SlowFakeGraphBuilder())
 
     got_tool_call = False
     got_delta = False

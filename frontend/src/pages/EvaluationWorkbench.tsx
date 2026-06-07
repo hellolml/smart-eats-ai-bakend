@@ -120,6 +120,15 @@ const sceneLabel = (value?: string | null) => {
     return map[value || ''] || value || '未识别';
 };
 
+const modelLabel = (value: any) => {
+    const config = value?.model_config || {};
+    return config.provider_value
+        || config.model_planner
+        || config.model_writer
+        || value?.model_name
+        || '未知模型';
+};
+
 const metricLabel = (value?: string | null) => METRIC_COPY[value || ''] || value || '未知指标';
 
 const failureInfo = (value?: string | null) => FAILURE_COPY[value || 'none'] || {
@@ -239,6 +248,18 @@ const toneClass = (tone: Tone) => {
 
 const getErrorMessage = (error: unknown) => error instanceof ApiError ? error.message : error instanceof Error ? error.message : '请求失败';
 
+const sessionTitle = (value: any) => (
+    value?.session_title
+    || value?.title
+    || value?.latest?.session_title
+    || value?.latest?.title
+    || value?.run?.session_title
+    || value?.run?.title
+    || value?.session_id
+    || value?.sessionId
+    || '未命名会话'
+);
+
 function buildQualityOverviewView(overview: any) {
     const monitoring = overview?.monitoring || {};
     const safety = overview?.safety || {};
@@ -267,6 +288,7 @@ function buildSessionInspectionView(session: any) {
     const failure = failureInfo(latest.failure_class);
     return {
         sessionId: session?.session_id,
+        title: sessionTitle(session),
         status: latest.status || 'unknown',
         quality,
         scene: sceneLabel(latest.scene),
@@ -702,9 +724,10 @@ function QualityOverview({
                         {sessions.slice(0, 5).map((item) => (
                             <button key={item.session_id} onClick={() => onOpenSession(item.session_id)} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:bg-white">
                                 <div className="flex items-center justify-between gap-2">
-                                    <span className="truncate font-mono text-[12px] font-black text-sky-700">{item.session_id}</span>
+                                    <span className="truncate text-[13px] font-black text-slate-900">{sessionTitle(item)}</span>
                                     <Badge tone={scoreTone(item.latest_score)}>{fmtPct(item.latest_score)}</Badge>
                                 </div>
+                                <div className="mt-1 truncate font-mono text-[11px] font-semibold text-slate-400">{item.session_id}</div>
                                 <div className="mt-2 text-[12px] font-semibold text-slate-600">
                                     {sceneLabel(item.scene)} · {item.turn_count || 0} 轮 · {fmtMs(item.latency_ms)}
                                 </div>
@@ -757,7 +780,10 @@ function SessionInspection({
                     headers={['会话', '最近场景', '结果', '质量', '轮次', '耗时', '模型']}
                     empty="暂无线上会话"
                     rows={sessions.map((item) => [
-                        <button className="font-mono text-sky-700 underline-offset-2 hover:underline" onClick={() => onOpenSession(item.session_id)}>{item.session_id}</button>,
+                        <button className="text-left underline-offset-2 hover:underline" onClick={() => onOpenSession(item.session_id)}>
+                            <span className="block max-w-[260px] truncate font-black text-sky-700">{sessionTitle(item)}</span>
+                            <span className="block max-w-[260px] truncate font-mono text-[11px] font-semibold text-slate-400">{item.session_id}</span>
+                        </button>,
                         sceneLabel(item.scene),
                         <Badge tone={item.status === 'completed' ? 'good' : 'bad'}>{item.status === 'completed' ? '已完成' : '异常'}</Badge>,
                         <Badge tone={scoreTone(item.latest_score)}>{fmtPct(item.latest_score)}</Badge>,
@@ -772,7 +798,7 @@ function SessionInspection({
                     <ExplainEmpty title="选择左侧一段会话" body="这里会用普通话解释这段会话是否完成、Agent 做了哪些步骤、是否需要人工处理。" />
                 ) : (
                     <div className="grid max-h-[calc(100dvh-280px)] gap-4 overflow-auto p-4">
-                        <ConclusionCard title={vm.conclusion} body={`${vm.reason}。${vm.nextAction}`} tone={scoreTone(vm.quality)} />
+                        <ConclusionCard title={`${vm.title}：${vm.conclusion}`} body={`${vm.reason}。${vm.nextAction}`} tone={scoreTone(vm.quality)} />
                         <div className="grid grid-cols-2 gap-2">
                             <MiniFact label="场景" value={vm.scene} />
                             <MiniFact label="执行器" value={vm.worker} />
@@ -797,7 +823,7 @@ function SessionInspection({
                                                 <span className="ml-auto text-[12px] font-semibold text-slate-500">{fmtMs(run.latency_ms)}</span>
                                             </div>
                                             <div className="mt-2 text-[13px] font-semibold text-slate-600">
-                                                {sceneLabel(run.scene)} · {run.model_name || '未知模型'} · 工具 {tools.length} 个
+                                                {sceneLabel(run.scene)} · {modelLabel(run)} · 工具 {tools.length} 个
                                             </div>
                                             <div className="mt-3">
                                                 <Button tone="light" onClick={() => onOpenTrace(traceId)}>查看执行过程</Button>
@@ -847,7 +873,10 @@ function ExecutionProcess({
                     empty="暂无执行轨迹"
                     rows={traces.map((item) => [
                         <button className="font-mono text-sky-700 underline-offset-2 hover:underline" onClick={() => onOpenTrace(item.trace_id || item.id)}>{item.trace_id || item.id}</button>,
-                        <span className="font-mono text-[12px]">{item.session_id}</span>,
+                        <span>
+                            <span className="block max-w-[220px] truncate font-black text-slate-800">{sessionTitle(item)}</span>
+                            <span className="block max-w-[220px] truncate font-mono text-[11px] font-semibold text-slate-400">{item.session_id}</span>
+                        </span>,
                         sceneLabel(item.scene),
                         <Badge tone={item.status === 'completed' ? 'good' : 'bad'}>{item.status === 'completed' ? '完成' : '异常'}</Badge>,
                         <Badge tone={scoreTone(item.score)}>{fmtPct(item.score)}</Badge>,
@@ -871,7 +900,7 @@ function ExecutionProcess({
                     <div className="grid max-h-[calc(100dvh-280px)] gap-4 overflow-auto p-4">
                         <ConclusionCard
                             title={run.status === 'completed' && Number(run.overall_quality || 0) >= 0.8 ? '这次执行完成了任务' : '这次执行需要复核'}
-                            body={`${sceneLabel(run.scene)} / ${run.worker || run.agent_id || '未知执行器'} / ${run.model_name || '未知模型'} / ${fmtMs(run.latency_ms)}`}
+                            body={`${sessionTitle(run)} / ${sceneLabel(run.scene)} / ${run.worker || run.agent_id || '未知执行器'} / ${modelLabel(run)} / ${fmtMs(run.latency_ms)}`}
                             tone={scoreTone(run.overall_quality)}
                         />
                         <Timeline items={timeline} />

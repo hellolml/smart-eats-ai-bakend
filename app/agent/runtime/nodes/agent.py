@@ -173,16 +173,16 @@ def make_agent_node(*, agent_config: Any, planner: Any, registered_tools: list[s
             ai_message_contents.append(content)
             skill_state["ai_message_contents"] = ai_message_contents[-6:]
             chat_state.skill_state = skill_state
-        normalized_tool_calls = ai_message.tool_calls
-        if not normalized_tool_calls:
-            forced_tool_calls = hook_manager.forced_tool_calls(chat_state)
-            if forced_tool_calls:
-                runtime_builder.logger.info(
-                    "agent_forcing_skill_tool_calls session_id=%s tools=%s",
-                    chat_state.session_id,
-                    [call.get("name") for call in forced_tool_calls],
-                )
-                normalized_tool_calls = forced_tool_calls
+        forced_tool_calls = hook_manager.forced_tool_calls(chat_state)
+        if forced_tool_calls:
+            runtime_builder.logger.info(
+                "agent_forcing_skill_tool_calls session_id=%s tools=%s",
+                chat_state.session_id,
+                [call.get("name") for call in forced_tool_calls],
+            )
+            normalized_tool_calls = forced_tool_calls
+        else:
+            normalized_tool_calls = ai_message.tool_calls
         runtime_builder.logger.info(
             "agent_tool_choice session_id=%s scene=%s tool_calls=%s",
             chat_state.session_id,

@@ -46,6 +46,9 @@ export interface ChatStreamResult {
   qrCodeUrl?: string;
   schemaUrl?: string;
   finalJson?: Record<string, unknown>;
+  agentResult?: Record<string, unknown>;
+  failureClass?: string;
+  businessPayload?: Record<string, unknown>;
 }
 
 export interface ChatSessionSummary {
@@ -538,6 +541,9 @@ export const appApi = {
       let qrCodeUrl = '';
       let schemaUrl = '';
       let finalJson: Record<string, unknown> | undefined;
+      let agentResult: Record<string, unknown> | undefined;
+      let businessPayload: Record<string, unknown> | undefined;
+      let failureClass: string | undefined;
 
       const consumeBlock = (block: string) => {
         const lines = block.split(/\r?\n/);
@@ -572,11 +578,33 @@ export const appApi = {
         }
         if (eventName === 'final') {
           if (parsed && typeof parsed === 'object') {
-            const answer = (parsed as Record<string, unknown>).answer;
+            const record = parsed as Record<string, unknown>;
+            const answer = record.answer;
+            const nextAgentResult = record.agent_result;
+            const nextBusinessPayload = record.business_payload;
+            if (nextAgentResult && typeof nextAgentResult === 'object' && !Array.isArray(nextAgentResult)) {
+              agentResult = nextAgentResult as Record<string, unknown>;
+            }
+            if (nextBusinessPayload && typeof nextBusinessPayload === 'object' && !Array.isArray(nextBusinessPayload)) {
+              businessPayload = nextBusinessPayload as Record<string, unknown>;
+            }
+            failureClass = typeof record.failure_class === 'string'
+              ? record.failure_class
+              : typeof agentResult?.failure_class === 'string'
+                ? agentResult.failure_class
+                : failureClass;
             if (answer && typeof answer === 'object' && !Array.isArray(answer)) {
               finalJson = answer as Record<string, unknown>;
               qrCodeUrl = qrCodeUrl || findStringByKeys(finalJson, ['qr_code_url', 'qrCodeUrl']) || '';
               schemaUrl = schemaUrl || findStringByKeys(finalJson, ['schema_url', 'schemaUrl']) || '';
+            }
+            if (!finalJson && agentResult?.final && typeof agentResult.final === 'object' && !Array.isArray(agentResult.final)) {
+              finalJson = agentResult.final as Record<string, unknown>;
+            }
+            if (finalJson && businessPayload) {
+              finalJson = { ...businessPayload, ...finalJson };
+            } else if (!finalJson && businessPayload) {
+              finalJson = businessPayload;
             }
           }
           const finalText = extractFinalText(parsed);
@@ -601,7 +629,15 @@ export const appApi = {
         blocks.forEach(consumeBlock);
       }
       if (buffer.trim()) consumeBlock(buffer);
-      return { text: collected, qrCodeUrl: qrCodeUrl || undefined, schemaUrl: schemaUrl || undefined, finalJson };
+      return {
+        text: collected,
+        qrCodeUrl: qrCodeUrl || undefined,
+        schemaUrl: schemaUrl || undefined,
+        finalJson,
+        agentResult,
+        failureClass,
+        businessPayload
+      };
     },
     async stop(sessionId: string) {
       return request<{ stopped: boolean; session_id: string }>(`/chat/session/${sessionId}/stop`, {
