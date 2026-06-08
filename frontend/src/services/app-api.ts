@@ -1970,7 +1970,7 @@ export const appApi = {
             review_confidence?: number;
             dataset_candidate?: boolean;
         }) {
-            return request<{ review: MonitoringReview }>(
+            return request<{ review: MonitoringReview; converted_case?: Record<string, unknown> | null }>(
                 `/monitoring/reviews/${encodeURIComponent(runId)}`,
                 { scope: 'internal', auth: true, method: 'POST', body: payload }
             );

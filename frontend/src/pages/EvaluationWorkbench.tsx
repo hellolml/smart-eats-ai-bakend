@@ -141,11 +141,21 @@ const sceneLabel = (value?: string | null) => {
 };
 
 const modelLabel = (value: any) => {
+    const run = value?.run || value?.latest || value || {};
+    const cost = value?.cost || run?.cost || {};
+    const spans = Array.isArray(value?.spans) ? value.spans : [];
+    const usageSpan = spans.find((span: any) => span?.span_type === 'llm_call' || span?.input?.model || span?.output?.model_name);
     const config = value?.model_config || {};
-    return config.provider_value
+    return cost.model_name
+        || usageSpan?.output?.model_name
+        || usageSpan?.output?.model
+        || usageSpan?.input?.model
+        || run.model_name
+        || value?.model_name
+        || value?.model
         || config.model_planner
         || config.model_writer
-        || value?.model_name
+        || config.provider_value
         || '未知模型';
 };
 
@@ -1050,7 +1060,7 @@ function SessionInspection({
                             <Badge tone={scoreTone(item.latest_score)}>{fmtPct(item.latest_score)}</Badge>,
                             item.turn_count || 0,
                             fmtMs(item.latency_ms),
-                            item.model || 'n/a',
+                            modelLabel(item),
                         ])}
                     />
                 )}
@@ -1090,7 +1100,7 @@ function SessionInspection({
                                                 <span className="ml-auto text-[12px] font-semibold text-slate-500">{fmtMs(run.latency_ms)}</span>
                                             </div>
                                             <div className="mt-2 text-[13px] font-semibold text-slate-600">
-                                                {sceneLabel(run.scene)} · {modelLabel(run)} · 工具 {tools.length} 个
+                                                {sceneLabel(run.scene)} · {modelLabel(turn)} · 工具 {tools.length} 个
                                             </div>
                                             <div className="mt-3 flex flex-wrap gap-2">
                                                 <Button tone="light" onClick={() => onOpenTrace(traceId)}>查看执行过程</Button>
@@ -1181,7 +1191,7 @@ function ExecutionProcess({
                         <div className="grid gap-4">
                             <ConclusionCard
                                 title={run.environment_failure ? '环境或模型服务导致失败' : run.agent_fallback ? 'Agent 兜底需要复核' : run.status === 'completed' && Number(run.overall_quality || 0) >= 0.8 ? '这次执行完成了任务' : '这次执行需要复核'}
-                                body={`${sessionTitle(run)} / ${sceneLabel(run.scene)} / ${run.worker || run.agent_id || '未知执行器'} / ${modelLabel(run)} / ${failureInfo(failureKey(run)).title} / ${fmtMs(run.latency_ms)}`}
+                                body={`${sessionTitle(run)} / ${sceneLabel(run.scene)} / ${run.worker || run.agent_id || '未知执行器'} / ${modelLabel(selected)} / ${failureInfo(failureKey(run)).title} / ${fmtMs(run.latency_ms)}`}
                                 tone={run.environment_failure ? 'warn' : scoreTone(run.overall_quality)}
                             />
                             <ScoreBreakdown detail={selected} />
@@ -1283,14 +1293,40 @@ function SafetyGovernance({ data }: { data: ReturnType<typeof buildSafetyGoverna
     );
 }
 
-function HumanReviews({ data, onRefresh, onOpenTrace }: { data: any; onRefresh: () => void; onOpenTrace: (traceId: string) => void }) {
+function HumanReviews({ data, onRefresh, onOpenTrace }: { data: any; onRefresh: () => Promise<void> | void; onOpenTrace: (traceId: string) => void }) {
     const records = data?.records || [];
+    const [busyRunId, setBusyRunId] = useState<string>('');
+    const [message, setMessage] = useState('');
+
+    const submitReview = async (run: any, payload: Record<string, unknown>, successText: string) => {
+        if (!run?.id) return;
+        setBusyRunId(run.id);
+        setMessage('');
+        try {
+            const response = await appApi.evaluations.submitMonitoringReview(run.id, payload as any);
+            const converted = response?.converted_case?.case_id || response?.converted_case?.id;
+            setMessage(converted ? `${successText}，已生成 Case：${converted}` : successText);
+            await onRefresh();
+        } catch (error) {
+            setMessage(getErrorMessage(error));
+        } finally {
+            setBusyRunId('');
+        }
+    };
+
     return (
         <Panel title="待人工审核">
             <div className="grid gap-3 p-4">
+                <ConclusionCard
+                    title="人工审核是质量闭环的人工判定"
+                    body="低分、工具失败、安全风险或你手动送审的会话会进入这里。接受表示结果可用；拒绝会计入人工驳回；转数据集 Case 会把这条线上 Trace 变成 draft 回归用例，后续可复跑。"
+                    tone="info"
+                />
+                {message && <Badge tone={message.includes('失败') || message.includes('not found') ? 'bad' : 'good'}>{message}</Badge>}
                 {records.map((item: any) => {
                     const run = item.run || {};
                     const review = item.review || {};
+                    const busy = busyRunId === run.id;
                     return (
                         <div key={run.id} className="rounded-lg border border-slate-200 bg-white p-4">
                             <div className="flex flex-wrap items-center gap-2">
@@ -1301,10 +1337,15 @@ function HumanReviews({ data, onRefresh, onOpenTrace }: { data: any; onRefresh: 
                             <div className="mt-2 text-sm font-semibold text-slate-700">
                                 进入审核原因：{displayValue(review.failure_reason || review.reason || run.failure_class, '低分或系统规则命中')}
                             </div>
+                            {review.decision && review.decision !== 'pending' && (
+                                <div className="mt-2 text-[12px] font-semibold text-slate-500">
+                                    当前审核状态：{review.decision} {review.updated_at ? `· ${fmtTime(review.updated_at)}` : ''}
+                                </div>
+                            )}
                             <div className="mt-3 flex flex-wrap gap-2">
-                                <Button tone="green" onClick={async () => { await appApi.evaluations.submitMonitoringReview(run.id, { decision: 'accepted' }); await onRefresh(); }}>接受</Button>
-                                <Button tone="danger" onClick={async () => { await appApi.evaluations.submitMonitoringReview(run.id, { decision: 'rejected', reason: 'manual_reject' }); await onRefresh(); }}>拒绝</Button>
-                                <Button tone="light" onClick={async () => { await appApi.evaluations.submitMonitoringReview(run.id, { decision: 'converted_to_case', reason: 'converted_to_case' }); await onRefresh(); }}>转数据集 Case</Button>
+                                <Button tone="green" disabled={busy} onClick={() => submitReview(run, { decision: 'accepted', reason: 'manual_accept' }, '已标记为人工接受')}>接受</Button>
+                                <Button tone="danger" disabled={busy} onClick={() => submitReview(run, { decision: 'rejected', reason: 'manual_reject', failure_reason: review.failure_reason || run.failure_class || 'manual_reject' }, '已标记为人工拒绝')}>拒绝</Button>
+                                <Button tone="light" disabled={busy} onClick={() => submitReview(run, { decision: 'converted_to_case', reason: 'converted_to_case', convert_to_case: true, dataset: 'regression', dataset_version: 'draft', priority: 'p1' }, '已转入 regression draft 数据集')}>转数据集 Case</Button>
                                 <Button tone="light" onClick={() => onOpenTrace(run.trace_id || run.id)}>查看执行过程</Button>
                                 <Button tone="light" onClick={() => openOriginalSession(run)}>打开原始会话</Button>
                             </div>

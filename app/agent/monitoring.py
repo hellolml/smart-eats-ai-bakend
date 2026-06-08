@@ -1515,8 +1515,9 @@ async def load_conversation_trace(session: AsyncSession, run_id: str) -> dict[st
     )).scalars().all()
     review = await session.scalar(select(ConversationHumanReview).where(ConversationHumanReview.run_id == run_id))
     cost = await session.scalar(select(ConversationCost).where(ConversationCost.run_id == run_id))
+    run_summary = _summary_with_cost_model(conversation_run_summary(run, session_title=title_map.get(run.session_id)), cost)
     return {
-        "run": conversation_run_summary(run, session_title=title_map.get(run.session_id)),
+        "run": run_summary,
         "events": [trace_event_summary(item) for item in events],
         "spans": [trace_span_summary(item) for item in await list_trace_spans_for_run(session, run_id)],
         "tool_calls": [tool_call_summary(item) for item in tools],
@@ -1677,10 +1678,15 @@ async def list_eval_hub_live_sessions(
     for run in rows:
         grouped.setdefault(run.session_id, []).append(run)
     title_map = await load_chat_session_titles(list(grouped.keys()))
+    latest_runs = [runs[0] for runs in grouped.values() if runs]
+    cost_rows = (await session.execute(
+        select(ConversationCost).where(ConversationCost.run_id.in_([run.id for run in latest_runs])) if latest_runs else select(ConversationCost).where(false())
+    )).scalars().all()
+    cost_map = {cost.run_id: cost for cost in cost_rows}
     records = []
     for session_id, runs in list(grouped.items())[offset:offset + limit]:
         latest = runs[0]
-        latest_summary = conversation_run_summary(latest, session_title=title_map.get(session_id))
+        latest_summary = _summary_with_cost_model(conversation_run_summary(latest, session_title=title_map.get(session_id)), cost_map.get(latest.id))
         records.append({
             "session_id": session_id,
             "session_title": latest_summary.get("session_title"),
@@ -1693,7 +1699,9 @@ async def list_eval_hub_live_sessions(
             "risk_level": "high" if latest.status == "error" or latest.is_fallback else "normal",
             "turn_count": len(runs),
             "latency_ms": latest.latency_ms,
-            "model": latest.model_name,
+            "model": latest_summary.get("model_name"),
+            "model_name": latest_summary.get("model_name"),
+            "model_provider": latest_summary.get("model_provider"),
             "trace_id": latest.trace_id,
             "created_at": latest.started_at.isoformat() if latest.started_at else None,
         })
@@ -1743,8 +1751,13 @@ async def list_eval_hub_traces(
     )
     records = []
     title_map = await load_chat_session_titles([run.session_id for run in rows])
+    cost_rows = (await session.execute(
+        select(ConversationCost).where(ConversationCost.run_id.in_([run.id for run in rows])) if rows else select(ConversationCost).where(false())
+    )).scalars().all()
+    cost_map = {cost.run_id: cost for cost in cost_rows}
     for run in rows:
-        summary = conversation_run_summary(run, session_title=title_map.get(run.session_id))
+        cost = cost_map.get(run.id)
+        summary = _summary_with_cost_model(conversation_run_summary(run, session_title=title_map.get(run.session_id)), cost)
         span_count = (await session.execute(
             select(func.count()).select_from(TraceSpan).where(TraceSpan.run_id == run.id)
         )).scalar() or 0
@@ -1754,7 +1767,7 @@ async def list_eval_hub_traces(
             "output_preview": (run.raw_json or {}).get("final_answer_preview") if isinstance(run.raw_json, dict) else None,
             "span_count": int(span_count),
             "score": summary.get("overall_quality"),
-            "cost": None,
+            "cost": cost_summary(cost) if cost else None,
         })
     return {"total": total, "limit": limit, "offset": offset, "records": records}
 
@@ -2381,6 +2394,17 @@ def conversation_run_summary(run: ConversationRun, *, session_title: str | None 
         "failure_class": failure_class,
         "root_failure_class": root_failure_class,
     }
+
+
+def _summary_with_cost_model(summary: dict[str, Any], cost: ConversationCost | None) -> dict[str, Any]:
+    if cost and cost.model_name:
+        summary["model_name"] = cost.model_name
+        summary["model"] = cost.model_name
+        if cost.provider:
+            summary["model_provider"] = cost.provider
+    elif summary.get("model_name"):
+        summary["model"] = summary.get("model_name")
+    return summary
 
 
 def trace_event_summary(event: ConversationTraceEvent) -> dict[str, Any]:
