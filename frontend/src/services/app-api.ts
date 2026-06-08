@@ -1923,6 +1923,42 @@ export const appApi = {
             );
         },
 
+        async generateDatasetCases(dataset: string, payload: Record<string, unknown>) {
+            return request<any>(
+                `/eval-datasets/${encodeURIComponent(dataset)}/cases/generate`,
+                { scope: 'internal', auth: true, method: 'POST', body: payload }
+            );
+        },
+
+        async reviewDatasetCase(dataset: string, caseId: string, payload: Record<string, unknown>) {
+            return request<any>(
+                `/eval-datasets/${encodeURIComponent(dataset)}/cases/${encodeURIComponent(caseId)}/review`,
+                { scope: 'internal', auth: true, method: 'PATCH', body: payload }
+            );
+        },
+
+        async activateDatasetVersion(dataset: string, version: string) {
+            return request<any>(
+                `/eval-datasets/${encodeURIComponent(dataset)}/versions/${encodeURIComponent(version)}/activate`,
+                { scope: 'internal', auth: true, method: 'POST' }
+            );
+        },
+
+        async getEvalRunStability(runId: string) {
+            return request<any>(
+                `/eval-runs/${encodeURIComponent(runId)}/stability`,
+                { scope: 'internal', auth: true }
+            );
+        },
+
+        async listComponentRuns() {
+            return request<any>('/eval-component-runs', { scope: 'internal', auth: true });
+        },
+
+        async createComponentRun(payload: { component: string; dataset?: string }) {
+            return request<any>('/eval-component-runs', { scope: 'internal', auth: true, method: 'POST', body: payload });
+        },
+
         async submitMonitoringReview(runId: string, payload: {
             decision: string;
             reason?: string;
@@ -2080,8 +2116,19 @@ export const appApi = {
             return request<any>('/eval-hub/simulations/scenarios', { scope: 'internal', auth: true, method: 'POST', body: payload });
         },
 
-        async createHubSimulationRun(scenarioId: string) {
-            return request<any>(`/eval-hub/simulations/scenarios/${encodeURIComponent(scenarioId)}/runs`, { scope: 'internal', auth: true, method: 'POST' });
+        async createHubSimulationRun(scenarioId: string, payload: Record<string, unknown> = {}) {
+            return request<any>(`/eval-hub/simulations/scenarios/${encodeURIComponent(scenarioId)}/runs`, { scope: 'internal', auth: true, method: 'POST', body: payload });
+        },
+
+        async getHubSimulationRun(scenarioId: string, runId: string) {
+            return request<any>(`/eval-hub/simulations/scenarios/${encodeURIComponent(scenarioId)}/runs/${encodeURIComponent(runId)}`, { scope: 'internal', auth: true });
+        },
+
+        async convertHubSimulationRunToDataset(scenarioId: string, runId: string, payload: Record<string, unknown>) {
+            return request<any>(
+                `/eval-hub/simulations/scenarios/${encodeURIComponent(scenarioId)}/runs/${encodeURIComponent(runId)}/to-dataset`,
+                { scope: 'internal', auth: true, method: 'POST', body: payload }
+            );
         },
 
         async listHubAnnotationQueue(params: { decision?: string; limit?: number; offset?: number } = {}) {

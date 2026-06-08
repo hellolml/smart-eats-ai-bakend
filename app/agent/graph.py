@@ -617,6 +617,13 @@ async def run_chat_stream(
                 latest_state = updated
                 events = updated.events if hasattr(updated, "events") else updated.get("events", [])
                 for item in events:
+                    if isinstance(item, dict):
+                        data = item.get("data")
+                        if not isinstance(data, dict):
+                            data = {}
+                            item["data"] = data
+                        data.setdefault("timestamp", time.time())
+                        data.setdefault("elapsed_ms", (time.monotonic() - stream_start_time) * 1000)
                     collected_events.append(item)
                     yield item
                 if hasattr(updated, "events"):

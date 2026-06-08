@@ -97,7 +97,9 @@ const SPAN_COPY: Record<string, { title: string; icon: React.ElementType; tone: 
 
 const METRIC_COPY: Record<string, string> = {
     task_success_proxy: '任务完成率',
+    partial_success_proxy: '部分完成率',
     overall_quality: '综合质量',
+    tool_call_accuracy_proxy: '工具调用准确率',
     tool_error_rate: '工具失败率',
     provider_error_rate: '模型服务失败率',
     user_visible_fallback_rate: '用户可见兜底率',
@@ -111,6 +113,20 @@ const METRIC_COPY: Record<string, string> = {
     latency_p95_ms: 'P95 响应耗时',
     latency_p99_ms: 'P99 响应耗时',
 };
+
+const SCORE_METRICS = [
+    'overall_quality',
+    'task_success_proxy',
+    'partial_success_proxy',
+    'schema_compliance',
+    'constraint_satisfaction_rule',
+    'tool_call_accuracy_proxy',
+    'no_leak',
+    'recovery_rate',
+    'repeated_action_rate',
+    'tool_error_rate',
+    'provider_error_rate',
+];
 
 const sceneLabel = (value?: string | null) => {
     const map: Record<string, string> = {
@@ -171,6 +187,19 @@ const fmtMoney = (value: unknown) => {
 
 const fmtTime = (value: unknown) => value ? String(value).replace('T', ' ').slice(0, 16) : 'n/a';
 
+const fmtStepTime = (value: unknown) => {
+    if (!value) return '未记录';
+    if (typeof value === 'number') return new Date(value * 1000).toLocaleTimeString();
+    return String(value).replace('T', ' ').slice(0, 19);
+};
+
+const parseStepMs = (value: unknown) => {
+    if (!value) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value * 1000 : null;
+    const parsed = Date.parse(String(value));
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
 const displayValue = (value: unknown, fallback = 'n/a') => {
     if (value === null || value === undefined || value === '') return fallback;
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -187,6 +216,75 @@ const displayValue = (value: unknown, fallback = 'n/a') => {
     }
     return String(value);
 };
+
+const compactValue = (value: unknown, max = 220) => {
+    const text = displayValue(value, '');
+    if (!text) return '';
+    return text.length > max ? `${text.slice(0, max)}...` : text;
+};
+
+const firstPresent = (...values: unknown[]) => values.find((value) => value !== null && value !== undefined && value !== '');
+
+const stepInputSummary = (item: any) => compactValue(firstPresent(
+    item.metadata?.data?.question,
+    item.metadata?.data?.message,
+    item.raw?.data?.question,
+    item.raw?.data?.message,
+    item.input?.args,
+    item.input?.prompt,
+    item.input?.messages,
+    item.input?.provider || item.input?.model ? item.input : null,
+    item.input,
+    item.metadata?.data?.args,
+    item.metadata?.data?.input,
+    item.raw?.data?.args,
+    item.raw?.data?.input,
+));
+
+const stepOutputSummary = (item: any) => compactValue(firstPresent(
+    item.metadata?.data?.scene || item.metadata?.data?.worker || item.metadata?.data?.agent_id
+        ? {
+            scene: item.metadata?.data?.scene,
+            worker: item.metadata?.data?.worker || item.metadata?.data?.agent_id,
+            plan_type: item.metadata?.data?.plan_type,
+            active_skills: item.metadata?.data?.active_skills,
+            allowed_tools: item.metadata?.data?.allowed_tools,
+            retrieved_memory_count: item.metadata?.data?.retrieved_memory_count,
+        }
+        : null,
+    item.raw?.data?.scene || item.raw?.data?.worker || item.raw?.data?.agent_id
+        ? {
+            scene: item.raw?.data?.scene,
+            worker: item.raw?.data?.worker || item.raw?.data?.agent_id,
+            plan_type: item.raw?.data?.plan_type,
+            active_skills: item.raw?.data?.active_skills,
+            allowed_tools: item.raw?.data?.allowed_tools,
+            retrieved_memory_count: item.raw?.data?.retrieved_memory_count,
+        }
+        : null,
+    item.output?.output_preview,
+    item.output?.preview,
+    item.output?.result,
+    item.output?.usage,
+    item.output,
+    item.metadata?.data?.output_preview,
+    item.metadata?.data?.result_preview,
+    item.metadata?.data?.answer,
+    item.metadata?.data?.agent_result,
+    item.raw?.data?.output_preview,
+    item.raw?.data?.result_preview,
+    item.raw?.data?.answer,
+    item.raw?.data?.agent_result,
+));
+
+const stepErrorSummary = (item: any) => compactValue(firstPresent(
+    item.error,
+    item.output?.error,
+    item.metadata?.data?.error_reason,
+    item.metadata?.data?.error,
+    item.raw?.data?.error_reason,
+    item.raw?.data?.error,
+), 260);
 
 const renderCell = (value: React.ReactNode) => {
     if (React.isValidElement(value)) return value;
@@ -254,6 +352,89 @@ const toneClass = (tone: Tone) => {
 
 const getErrorMessage = (error: unknown) => error instanceof ApiError ? error.message : error instanceof Error ? error.message : '请求失败';
 
+const metricTone = (key: string, value: unknown): Tone => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 'neutral';
+    if (key.includes('error') || key.includes('fallback') || key === 'repeated_action_rate') {
+        if (number <= 0.02) return 'good';
+        if (number <= 0.15) return 'warn';
+        return 'bad';
+    }
+    return scoreTone(number);
+};
+
+const scoreMetricRows = (detail: any) => {
+    const run = detail?.run || detail?.latest || detail || {};
+    const metrics = detail?.metrics && typeof detail.metrics === 'object' ? detail.metrics : {};
+    return SCORE_METRICS
+        .map((key) => {
+            const value = metrics[key] ?? run[key];
+            if (value === undefined || value === null || value === '') return null;
+            return {
+                key,
+                label: metricLabel(key),
+                value: Number(value),
+                tone: metricTone(key, value),
+            };
+        })
+        .filter(Boolean) as Array<{ key: string; label: string; value: number; tone: Tone }>;
+};
+
+const compactObjectEntries = (value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    return Object.entries(value as Record<string, unknown>)
+        .filter(([, entryValue]) => entryValue !== null && entryValue !== undefined && entryValue !== '' && !(Array.isArray(entryValue) && !entryValue.length))
+        .slice(0, 4);
+};
+
+function DatasetExpectationSummary({ value }: { value: unknown }) {
+    const entries = compactObjectEntries(value);
+    if (!entries.length) return <span className="text-[11px] font-semibold text-slate-400">未记录明确期望</span>;
+    return (
+        <div className="flex max-w-[340px] flex-wrap gap-1.5">
+            {entries.map(([key, entryValue]) => (
+                <span key={key} className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold leading-relaxed text-slate-600">
+                    {key}: {compactValue(entryValue, 48)}
+                </span>
+            ))}
+        </div>
+    );
+}
+
+function DatasetScoringSummary({ value }: { value: unknown }) {
+    const metrics = Array.isArray((value as any)?.metrics)
+        ? (value as any).metrics
+        : Array.isArray(value)
+            ? value
+            : compactObjectEntries(value).map(([key]) => key);
+    if (!metrics.length) return <span className="text-[11px] font-semibold text-slate-400">默认评分</span>;
+    return (
+        <div className="flex max-w-[260px] flex-wrap gap-1.5">
+            {metrics.slice(0, 5).map((metric: unknown) => (
+                <span key={String(metric)} className="rounded-md bg-sky-50 px-2 py-1 text-[11px] font-black text-sky-700">
+                    {metricLabel(String(metric))}
+                </span>
+            ))}
+        </div>
+    );
+}
+
+const mergeDatasets = (...groups: any[][]) => {
+    const map = new Map<string, any>();
+    for (const group of groups) {
+        for (const item of group || []) {
+            const name = item?.name || item?.suite || item?.dataset;
+            if (!name) continue;
+            const key = `${name}:${item.version || 'file'}`;
+            map.set(key, { ...(map.get(key) || {}), ...item, name, suite: item.suite || name });
+        }
+    }
+    return Array.from(map.values()).sort((a, b) => {
+        const order: Record<string, number> = { quick: 0, full: 1, 'live-smoke': 2 };
+        return (order[a.name] ?? 10) - (order[b.name] ?? 10) || String(a.name).localeCompare(String(b.name));
+    });
+};
+
 const sessionTitle = (value: any) => (
     value?.session_title
     || value?.title
@@ -265,6 +446,20 @@ const sessionTitle = (value: any) => (
     || value?.sessionId
     || '未命名会话'
 );
+
+const originalSessionHref = (value: any) => {
+    const run = value?.run || value?.latest || value || {};
+    const sessionId = run.session_id || value?.session_id || value?.sessionId;
+    if (!sessionId) return '';
+    const scene = run.scene || value?.scene;
+    const route = scene === 'travel_planner' ? '/travel-planner' : '/ai-chat';
+    return `#${route}?session_id=${encodeURIComponent(String(sessionId))}`;
+};
+
+const openOriginalSession = (value: any) => {
+    const href = originalSessionHref(value);
+    if (href) window.open(href, '_blank', 'noopener,noreferrer');
+};
 
 function buildQualityOverviewView(overview: any) {
     const monitoring = overview?.monitoring || {};
@@ -321,9 +516,28 @@ function buildSessionInspectionView(session: any) {
 function buildExecutionTimelineView(detail: any) {
     const spans = Array.isArray(detail?.spans) ? detail.spans : [];
     const events = Array.isArray(detail?.events) ? detail.events : [];
+    const run = detail?.run || {};
+    const totalDuration = Number(run.latency_ms || run.total_duration_ms || 0);
     if (spans.length) {
+        const spanStarts = spans.map((span: any) => parseStepMs(span.started_at));
         return spans.map((span: any, index: number) => {
             const info = spanInfo(span.span_type);
+            const rawDuration = Number(span.duration_ms);
+            const inferredFromBounds = parseStepMs(span.ended_at) != null && parseStepMs(span.started_at) != null
+                ? Math.max(0, Number(parseStepMs(span.ended_at)) - Number(parseStepMs(span.started_at)))
+                : null;
+            const nextStart = spanStarts.slice(index + 1).find((value: number | null) => value != null);
+            const inferredFromNext = spanStarts[index] != null && nextStart != null
+                ? Math.max(0, Number(nextStart) - Number(spanStarts[index]))
+                : null;
+            const syntheticDuration = totalDuration > 0 ? Math.max(1, totalDuration / Math.max(spans.length, 1)) : null;
+            const duration = Number.isFinite(rawDuration) && rawDuration > 0
+                ? rawDuration
+                : inferredFromBounds && inferredFromBounds > 0
+                    ? inferredFromBounds
+                    : inferredFromNext && inferredFromNext > 0
+                        ? inferredFromNext
+                        : syntheticDuration;
             return {
                 id: span.id || `${span.span_type}-${index}`,
                 index,
@@ -331,15 +545,34 @@ function buildExecutionTimelineView(detail: any) {
                 subtitle: span.name || span.span_type,
                 tone: span.status === 'error' ? 'bad' as Tone : info.tone,
                 icon: info.icon,
-                duration: span.duration_ms,
+                duration,
+                durationEstimated: !(Number.isFinite(rawDuration) && rawDuration > 0),
+                durationRatio: totalDuration > 0 && duration ? duration / totalDuration : null,
                 status: span.status || 'ok',
+                startedAt: span.started_at,
+                endedAt: span.ended_at,
+                inputSummary: stepInputSummary(span),
+                outputSummary: stepOutputSummary(span),
+                errorSummary: stepErrorSummary(span),
                 detail: span.error || span.output?.output_preview || '',
                 raw: span,
             };
         });
     }
+    const eventStarts = events.map((event: any) => parseStepMs(event.timestamp));
     return events.map((event: any, index: number) => {
         const info = spanInfo(event.event_type);
+        const rawDuration = Number(event.duration_ms);
+        const nextStart = eventStarts.slice(index + 1).find((value: number | null) => value != null);
+        const inferredFromNext = eventStarts[index] != null && nextStart != null
+            ? Math.max(0, Number(nextStart) - Number(eventStarts[index]))
+            : null;
+        const syntheticDuration = totalDuration > 0 ? Math.max(1, totalDuration / Math.max(events.length, 1)) : null;
+        const duration = Number.isFinite(rawDuration) && rawDuration > 0
+            ? rawDuration
+            : inferredFromNext && inferredFromNext > 0
+                ? inferredFromNext
+                : syntheticDuration;
         return {
             id: `${event.event_type}-${index}`,
             index,
@@ -347,8 +580,15 @@ function buildExecutionTimelineView(detail: any) {
             subtitle: event.tool_name || event.event_type,
             tone: event.event_type === 'error' ? 'bad' as Tone : info.tone,
             icon: info.icon,
-            duration: event.duration_ms,
+            duration,
+            durationEstimated: !(Number.isFinite(rawDuration) && rawDuration > 0),
+            durationRatio: totalDuration > 0 && duration ? duration / totalDuration : null,
             status: event.event_type,
+            startedAt: event.timestamp,
+            endedAt: null,
+            inputSummary: stepInputSummary({ raw: event, metadata: { data: event.data } }),
+            outputSummary: stepOutputSummary({ raw: event, metadata: { data: event.data } }),
+            errorSummary: stepErrorSummary({ raw: event, metadata: { data: event.data } }),
             detail: event.data?.message || event.data?.output_preview || '',
             raw: event,
         };
@@ -426,6 +666,9 @@ function QualityOperationsWorkbench() {
     const [datasetCases, setDatasetCases] = useState<any[]>([]);
     const [experiments, setExperiments] = useState<any[]>([]);
     const [evaluators, setEvaluators] = useState<any[]>([]);
+    const [componentRuns, setComponentRuns] = useState<any[]>([]);
+    const [simulationScenarios, setSimulationScenarios] = useState<any[]>([]);
+    const [judgeAgreement, setJudgeAgreement] = useState<any>(null);
 
     const loadCore = useCallback(async () => {
         setLoading(true);
@@ -442,8 +685,12 @@ function QualityOperationsWorkbench() {
                 reportData,
                 jobData,
                 datasetData,
+                fileDatasetData,
                 experimentData,
                 evaluatorData,
+                componentData,
+                simulationData,
+                judgeData,
             ] = await Promise.all([
                 appApi.evaluations.getHubOverview(filters.window),
                 appApi.evaluations.listHubLiveSessions({ window: filters.window, limit: 100 }),
@@ -455,8 +702,12 @@ function QualityOperationsWorkbench() {
                 appApi.evaluations.listReports(),
                 appApi.evaluations.listEvalJobs({ limit: 50 }),
                 appApi.evaluations.listHubDatasets(),
+                appApi.evaluations.listDatasets(),
                 appApi.evaluations.listHubExperiments(),
                 appApi.evaluations.listHubEvaluators(),
+                appApi.evaluations.listComponentRuns(),
+                appApi.evaluations.listHubSimulationScenarios(),
+                appApi.evaluations.getJudgeHumanAgreement(undefined, '30d'),
             ]);
             setOverview(overviewData);
             setSessions(sessionsData.records || []);
@@ -467,14 +718,17 @@ function QualityOperationsWorkbench() {
             setReviews(reviewsData);
             setReports(reportData.reports || []);
             setJobs(jobData.records || []);
-            const datasetRecords = datasetData.datasets || [];
+            const datasetRecords = mergeDatasets(fileDatasetData.datasets || [], datasetData.datasets || []);
             setDatasets(datasetRecords);
             setExperiments(experimentData.records || []);
             setEvaluators(evaluatorData.evaluators || []);
+            setComponentRuns(componentData.records || []);
+            setSimulationScenarios(simulationData.scenarios || []);
+            setJudgeAgreement(judgeData || null);
             if (!datasetCases.length && datasetRecords.length) {
                 try {
                     const firstDataset = datasetRecords[0]?.name || datasetRecords[0]?.suite || 'regression';
-                    const cases = await appApi.evaluations.listHubDatasetCases(firstDataset);
+                    const cases = await appApi.evaluations.listDatasetCases(firstDataset);
                     setDatasetCases(cases.cases || []);
                 } catch {
                     setDatasetCases([]);
@@ -572,29 +826,43 @@ function QualityOperationsWorkbench() {
             );
         }
         if (view === 'offline') {
-            return <OfflineEvaluation reports={reports} jobs={jobs} />;
+            return <OfflineEvaluation reports={reports} jobs={jobs} datasets={datasets} onRefresh={loadCore} />;
         }
         if (view === 'data') {
-            return <DataFeedbackLoop datasets={datasets} cases={datasetCases} experiments={experiments} evaluators={evaluators} />;
+            return (
+                <DataFeedbackLoop
+                    datasets={datasets}
+                    cases={datasetCases}
+                    experiments={experiments}
+                    evaluators={evaluators}
+                    componentRuns={componentRuns}
+                    simulationScenarios={simulationScenarios}
+                    judgeAgreement={judgeAgreement}
+                    onRefresh={loadCore}
+                />
+            );
         }
         return <ExpertConsole overview={overview} sessions={sessions} traces={traces} selectedTrace={selectedTrace} selectedSession={selectedSession} failures={failures} cost={cost} safety={safety} />;
-    }, [view, quality, overview, sessions, failures, selectedSession, expertMode, selectedTrace, traces, cost, safety, reviews, reports, jobs, datasets, datasetCases, experiments, evaluators, loadCore]);
+    }, [view, quality, overview, sessions, failures, selectedSession, expertMode, selectedTrace, traces, cost, safety, reviews, reports, jobs, datasets, datasetCases, experiments, evaluators, componentRuns, simulationScenarios, judgeAgreement, loadCore]);
 
     return (
-        <div className="min-h-[100dvh] bg-[#eef2f6] text-slate-950">
+        <div className="min-h-[100dvh] bg-[#edf2f7] text-slate-950">
             <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
-                <div className="flex min-h-[66px] items-center gap-4 px-4 md:px-5">
-                    <div className="flex min-w-[260px] items-center gap-3">
-                        <div className="grid h-11 w-11 place-items-center rounded-lg border border-slate-950 bg-slate-950 text-white">
-                            <ClipboardCheck size={20} />
+                <div className="mx-auto flex max-w-[1480px] flex-wrap items-center gap-3 px-4 py-3 md:px-6">
+                    <div className="flex min-w-[220px] items-center gap-3">
+                        <div className="grid h-10 w-10 place-items-center rounded-lg border border-slate-900 bg-slate-950 text-white shadow-sm">
+                            <ClipboardCheck size={19} />
                         </div>
                         <div>
-                            <div className="text-[15px] font-black">AgentEval Hub</div>
-                            <div className="text-[12px] font-semibold text-slate-500">质检运营台 · Quality Ops</div>
+                            <div className="flex items-center gap-2 text-[15px] font-black">
+                                AgentEval Hub
+                                <Badge tone="info">{filters.environment}</Badge>
+                            </div>
+                            <div className="text-[12px] font-semibold text-slate-500">质检运营台 · {filters.window}</div>
                         </div>
                     </div>
-                    <div className="hidden h-9 w-px bg-slate-200 lg:block" />
-                    <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                         <Select value={filters.environment} onChange={(e) => setFilters((v) => ({ ...v, environment: e.target.value }))}>
                             <option value="local">local</option>
                             <option value="staging">staging</option>
@@ -609,6 +877,7 @@ function QualityOperationsWorkbench() {
                         <Input value={filters.model} onChange={(e) => setFilters((v) => ({ ...v, model: e.target.value }))} aria-label="模型过滤" className="w-36" />
                         <Input value={filters.scene} onChange={(e) => setFilters((v) => ({ ...v, scene: e.target.value }))} aria-label="场景过滤" placeholder="场景" className="w-28" />
                     </div>
+
                     <div className="flex items-center gap-2">
                         <Segmented
                             value={expertMode ? 'expert' : 'business'}
@@ -621,70 +890,25 @@ function QualityOperationsWorkbench() {
                         <Button onClick={loadCore}>刷新</Button>
                     </div>
                 </div>
+                <EvaluationTabs value={view} onChange={setView} />
             </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-[272px_minmax(0,1fr)]">
-                <aside className="hidden min-h-[calc(100dvh-66px)] border-r border-slate-200 bg-[#f8fafc] md:block">
-                    <div className="sticky top-[66px] grid gap-4 p-4">
-                        <div className="rounded-lg border border-slate-200 bg-white p-4">
-                            <div className="text-[11px] font-black uppercase text-slate-500">今日质检结论</div>
-                            <div className="mt-2 text-lg font-black text-slate-950">{quality.conclusion}</div>
-                            <div className="mt-1 text-[12px] font-semibold leading-relaxed text-slate-500">{quality.nextAction}</div>
-                        </div>
-                        <nav className="grid gap-1">
-                            {NAV_ITEMS.map((item) => {
-                                const Icon = item.icon;
-                                const active = view === item.key;
-                                return (
-                                    <button
-                                        key={item.key}
-                                        onClick={() => setView(item.key)}
-                                        className={`grid grid-cols-[34px_minmax(0,1fr)] items-center gap-2 rounded-lg border px-3 py-2.5 text-left transition ${active ? 'border-slate-300 bg-white shadow-[0_1px_0_rgba(15,23,42,0.05)]' : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-white'}`}
-                                    >
-                                        <span className={`grid h-8 w-8 place-items-center rounded-md ${active ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                                            <Icon size={16} />
-                                        </span>
-                                        <span>
-                                            <span className="block text-[13px] font-black">{item.title}</span>
-                                            <span className="block text-[11px] font-semibold text-slate-500">{item.subtitle}</span>
-                                        </span>
-                                    </button>
-                                );
-                            })}
-                        </nav>
-                    </div>
-                </aside>
-
-                <main className="min-w-0 p-3 md:p-5">
-                    <div className="mb-4 flex gap-2 overflow-x-auto md:hidden">
-                        {NAV_ITEMS.map((item) => (
-                            <button key={item.key} onClick={() => setView(item.key)} className={`whitespace-nowrap rounded-md border px-3 py-2 text-[12px] font-black ${view === item.key ? 'border-slate-950 bg-slate-950 text-white' : 'border-slate-200 bg-white text-slate-600'}`}>{item.title}</button>
-                        ))}
-                    </div>
-                    <section className="mb-5 rounded-lg border border-slate-200 bg-white p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <h1 className="m-0 text-[28px] font-black leading-none">{activeNav.title}</h1>
-                                    <Badge tone="info">{activeNav.subtitle}</Badge>
-                                    {expertMode && <Badge tone="warn">专家视图已开启</Badge>}
-                                </div>
-                                <p className="m-0 mt-2 text-sm font-semibold text-slate-500">
-                                    默认看结论、原因和下一步；需要排障时再打开专家视图。
-                                </p>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                {loading && <Badge tone="info">同步中</Badge>}
-                                {message && <Badge tone="good">{message}</Badge>}
-                                {error && <Badge tone="bad">{error}</Badge>}
-                                <Badge tone={scoreTone(quality.successRate)}>成功 {fmtPct(quality.successRate)}</Badge>
-                                <Badge tone={quality.pendingReviews ? 'warn' : 'good'}>待审 {quality.pendingReviews}</Badge>
-                            </div>
-                        </div>
-                    </section>
-                    {content}
-                </main>
-            </div>
+            <main className="mx-auto grid max-w-[1480px] gap-5 px-4 py-5 md:px-6">
+                <PageHeader
+                    title={activeNav.title}
+                    subtitle={activeNav.subtitle}
+                    description="默认看结论、原因和下一步；需要排障时再打开专家视图。"
+                    badges={[
+                        loading ? <Badge tone="info">同步中</Badge> : null,
+                        message ? <Badge tone="good">{message}</Badge> : null,
+                        error ? <Badge tone="bad">{error}</Badge> : null,
+                        <Badge tone={scoreTone(quality.successRate)}>成功 {fmtPct(quality.successRate)}</Badge>,
+                        <Badge tone={quality.pendingReviews ? 'warn' : 'good'}>待审 {quality.pendingReviews}</Badge>,
+                        expertMode ? <Badge tone="warn">专家视图已开启</Badge> : null,
+                    ]}
+                />
+                {content}
+            </main>
         </div>
     );
 }
@@ -707,7 +931,7 @@ function QualityOverview({
     const insights = buildFailureInsightView(failures);
     return (
         <div className="grid gap-4">
-            <div className="grid grid-cols-2 gap-3 xl:grid-cols-10">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-10">
                 <MetricCard title="对话数" value={quality.totalRuns} hint="已采集会话轮次" />
                 <MetricCard title="完成率" value={fmtPct(quality.successRate)} tone={scoreTone(quality.successRate)} hint="任务成功 proxy" />
                 <MetricCard title="失败会话" value={quality.failedRuns} tone={quality.failedRuns ? 'warn' : 'good'} />
@@ -739,7 +963,8 @@ function QualityOverview({
                 <Panel title="最近待关注会话">
                     <div className="grid gap-2 p-4">
                         {sessions.slice(0, 5).map((item) => (
-                            <button key={item.session_id} onClick={() => onOpenSession(item.session_id)} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:bg-white">
+                            <div key={item.session_id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:bg-white">
+                                <button onClick={() => onOpenSession(item.session_id)} className="w-full text-left">
                                 <div className="flex items-center justify-between gap-2">
                                     <span className="truncate text-[13px] font-black text-slate-900">{sessionTitle(item)}</span>
                                     <Badge tone={scoreTone(item.latest_score)}>{fmtPct(item.latest_score)}</Badge>
@@ -748,7 +973,11 @@ function QualityOverview({
                                 <div className="mt-2 text-[12px] font-semibold text-slate-600">
                                     {sceneLabel(item.scene)} · {item.turn_count || 0} 轮 · {fmtMs(item.latency_ms)}
                                 </div>
-                            </button>
+                                </button>
+                                <div className="mt-3">
+                                    <Button tone="light" onClick={() => openOriginalSession(item)}>打开原始会话</Button>
+                                </div>
+                            </div>
                         ))}
                         {!sessions.length && <ExplainEmpty title="还没有线上会话" body="开启 REALTIME_EVAL_ENABLED 并完成一轮聊天后，这里会出现会话质检结果。" />}
                     </div>
@@ -790,33 +1019,52 @@ function SessionInspection({
     onOpenTrace: (traceId: string) => void;
 }) {
     const vm = selected ? buildSessionInspectionView(selected) : null;
+    const latestTurn = selected?.turns?.[selected.turns.length - 1] || null;
     return (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_460px]">
-            <Panel title="会话列表">
-                <SimpleTable
-                    headers={['会话', '最近场景', '结果', '根因', '质量', '轮次', '耗时', '模型']}
-                    empty="暂无线上会话"
-                    rows={sessions.map((item) => [
-                        <button className="text-left underline-offset-2 hover:underline" onClick={() => onOpenSession(item.session_id)}>
-                            <span className="block max-w-[260px] truncate font-black text-sky-700">{sessionTitle(item)}</span>
-                            <span className="block max-w-[260px] truncate font-mono text-[11px] font-semibold text-slate-400">{item.session_id}</span>
-                        </button>,
-                        sceneLabel(item.scene),
-                        <Badge tone={item.status === 'completed' ? 'good' : 'bad'}>{item.status === 'completed' ? '已完成' : '异常'}</Badge>,
-                        <Badge tone={item.environment_failure ? 'warn' : failureInfo(failureKey(item)).tone}>{failureInfo(failureKey(item)).title}</Badge>,
-                        <Badge tone={scoreTone(item.latest_score)}>{fmtPct(item.latest_score)}</Badge>,
-                        item.turn_count || 0,
-                        fmtMs(item.latency_ms),
-                        item.model || 'n/a',
-                    ])}
-                />
-            </Panel>
-            <Panel title="会话质检结果">
-                {!vm ? (
+        <div className="grid gap-5">
+            <PageIntro
+                title="左侧定位会话，右侧直接看结论"
+                body="不用再滚到页面底部找详情。选中任意会话后，质检结论、每轮执行、工具调用和原始会话入口都会固定在右侧检查区。"
+            />
+            <WorkspaceSplit
+                listTitle="会话列表"
+                listHint="点击一行查看质检详情；按钮可直接跳回原始聊天。"
+                detailTitle="会话质检结果"
+                detailHint={selected ? sessionTitle(selected) : '等待选择会话'}
+                list={(
+                    <SimpleTable
+                        headers={['会话', '最近场景', '结果', '根因', '质量', '轮次', '耗时', '模型']}
+                        empty="暂无线上会话"
+                        minWidth="920px"
+                        rows={sessions.map((item) => [
+                            <div className="grid gap-2">
+                                <button className="text-left underline-offset-2 hover:underline" onClick={() => onOpenSession(item.session_id)}>
+                                    <span className="block max-w-[260px] truncate font-black text-sky-700">{sessionTitle(item)}</span>
+                                    <span className="block max-w-[260px] truncate font-mono text-[11px] font-semibold text-slate-400">{item.session_id}</span>
+                                </button>
+                                <Button tone="light" onClick={() => openOriginalSession(item)}>原始会话</Button>
+                            </div>,
+                            sceneLabel(item.scene),
+                            <Badge tone={item.status === 'completed' ? 'good' : 'bad'}>{item.status === 'completed' ? '已完成' : '异常'}</Badge>,
+                            <Badge tone={item.environment_failure ? 'warn' : failureInfo(failureKey(item)).tone}>{failureInfo(failureKey(item)).title}</Badge>,
+                            <Badge tone={scoreTone(item.latest_score)}>{fmtPct(item.latest_score)}</Badge>,
+                            item.turn_count || 0,
+                            fmtMs(item.latency_ms),
+                            item.model || 'n/a',
+                        ])}
+                    />
+                )}
+                detail={!vm ? (
                     <ExplainEmpty title="选择左侧一段会话" body="这里会用普通话解释这段会话是否完成、Agent 做了哪些步骤、是否需要人工处理。" />
                 ) : (
-                    <div className="grid max-h-[calc(100dvh-280px)] gap-4 overflow-auto p-4">
-                        <ConclusionCard title={`${vm.title}：${vm.conclusion}`} body={`${vm.reason}。${vm.nextAction}`} tone={scoreTone(vm.quality)} />
+                    <div className="grid gap-4">
+                        <ConclusionCard
+                            title={`${vm.title}：${vm.conclusion}`}
+                            body={`${vm.reason}。${vm.nextAction}`}
+                            tone={scoreTone(vm.quality)}
+                            action={<Button tone="light" onClick={() => openOriginalSession(selected)}>打开原始会话</Button>}
+                        />
+                        <ScoreBreakdown detail={latestTurn || selected} />
                         <div className="grid grid-cols-2 gap-2">
                             <MiniFact label="场景" value={vm.scene} />
                             <MiniFact label="执行器" value={vm.worker} />
@@ -844,8 +1092,9 @@ function SessionInspection({
                                             <div className="mt-2 text-[13px] font-semibold text-slate-600">
                                                 {sceneLabel(run.scene)} · {modelLabel(run)} · 工具 {tools.length} 个
                                             </div>
-                                            <div className="mt-3">
+                                            <div className="mt-3 flex flex-wrap gap-2">
                                                 <Button tone="light" onClick={() => onOpenTrace(traceId)}>查看执行过程</Button>
+                                                <Button tone="light" onClick={() => openOriginalSession(run)}>原始会话</Button>
                                             </div>
                                         </div>
                                     );
@@ -861,7 +1110,7 @@ function SessionInspection({
                         {expertMode && <DeveloperDetails value={selected} />}
                     </div>
                 )}
-            </Panel>
+            />
         </div>
     );
 }
@@ -885,55 +1134,69 @@ function ExecutionProcess({
     const timeline = buildExecutionTimelineView(selected);
     const traceId = run.trace_id || run.id;
     return (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_520px]">
-            <Panel title="执行轨迹列表">
-                <SimpleTable
-                    headers={['Trace 执行轨迹', '会话', '场景', '结果', '根因', '质量', '步骤', '耗时']}
-                    empty="暂无执行轨迹"
-                    rows={traces.map((item) => [
-                        <button className="font-mono text-sky-700 underline-offset-2 hover:underline" onClick={() => onOpenTrace(item.trace_id || item.id)}>{item.trace_id || item.id}</button>,
-                        <span>
-                            <span className="block max-w-[220px] truncate font-black text-slate-800">{sessionTitle(item)}</span>
-                            <span className="block max-w-[220px] truncate font-mono text-[11px] font-semibold text-slate-400">{item.session_id}</span>
-                        </span>,
-                        sceneLabel(item.scene),
-                        <Badge tone={item.status === 'completed' ? 'good' : 'bad'}>{item.status === 'completed' ? '完成' : '异常'}</Badge>,
-                        <Badge tone={item.environment_failure ? 'warn' : failureInfo(failureKey(item)).tone}>{failureInfo(failureKey(item)).title}</Badge>,
-                        <Badge tone={scoreTone(item.score)}>{fmtPct(item.score)}</Badge>,
-                        item.span_count ?? 0,
-                        fmtMs(item.latency_ms),
-                    ])}
-                />
-            </Panel>
-            <Panel
-                title="执行过程解读"
-                action={selected && (
+        <div className="grid gap-5">
+            <PageIntro
+                title="按 Trace 还原 Agent 每一步"
+                body="左侧选择一次执行，右侧立即展示结论、时间线、工具调用和原始会话入口。排障时不用在长页面里来回跳。"
+            />
+            <WorkspaceSplit
+                listTitle="执行轨迹列表"
+                listHint="选择一条 Trace 后，右侧时间线会解释 Agent 的每一步。"
+                detailTitle="执行过程解读"
+                detailHint={selected ? `${sceneLabel(run.scene)} / ${fmtMs(run.latency_ms)}` : '等待选择 Trace'}
+                detailAction={selected && (
                     <div className="flex gap-2">
                         <Button tone="light" onClick={() => onAddToDataset(traceId)}>加入数据集</Button>
                         <Button tone="light" onClick={() => onSendReview(run.id)}>送人工审核</Button>
+                        <Button tone="light" onClick={() => openOriginalSession(run)}>原始会话</Button>
                     </div>
                 )}
-            >
-                {!selected ? (
-                    <ExplainEmpty title="选择一条 Trace 执行轨迹" body="这里会按时间线解释 Agent 先理解了什么、调用了什么工具、在哪里失败或完成。" />
-                ) : (
-                    <div className="grid max-h-[calc(100dvh-280px)] gap-4 overflow-auto p-4">
-                        <ConclusionCard
-                            title={run.environment_failure ? '环境或模型服务导致失败' : run.agent_fallback ? 'Agent 兜底需要复核' : run.status === 'completed' && Number(run.overall_quality || 0) >= 0.8 ? '这次执行完成了任务' : '这次执行需要复核'}
-                            body={`${sessionTitle(run)} / ${sceneLabel(run.scene)} / ${run.worker || run.agent_id || '未知执行器'} / ${modelLabel(run)} / ${failureInfo(failureKey(run)).title} / ${fmtMs(run.latency_ms)}`}
-                            tone={run.environment_failure ? 'warn' : scoreTone(run.overall_quality)}
-                        />
-                        <Timeline items={timeline} />
-                        {selected.tool_calls?.length > 0 && (
-                            <div>
-                                <SectionTitle title="工具调用结果" hint="工具失败通常是影响回答质量的第一优先排查点。" />
-                                <ToolList tools={selected.tool_calls} />
-                            </div>
-                        )}
-                        {expertMode && <DeveloperDetails value={selected} />}
-                    </div>
+                list={(
+                    <SimpleTable
+                        headers={['Trace 执行轨迹', '会话', '场景', '结果', '根因', '质量', '步骤', '耗时']}
+                        empty="暂无执行轨迹"
+                        minWidth="940px"
+                        rows={traces.map((item) => [
+                            <button className="font-mono text-sky-700 underline-offset-2 hover:underline" onClick={() => onOpenTrace(item.trace_id || item.id)}>{item.trace_id || item.id}</button>,
+                            <span>
+                                <span className="block max-w-[220px] truncate font-black text-slate-800">{sessionTitle(item)}</span>
+                                <span className="block max-w-[220px] truncate font-mono text-[11px] font-semibold text-slate-400">{item.session_id}</span>
+                                <span className="mt-2 block">
+                                    <Button tone="light" onClick={() => openOriginalSession(item)}>原始会话</Button>
+                                </span>
+                            </span>,
+                            sceneLabel(item.scene),
+                            <Badge tone={item.status === 'completed' ? 'good' : 'bad'}>{item.status === 'completed' ? '完成' : '异常'}</Badge>,
+                            <Badge tone={item.environment_failure ? 'warn' : failureInfo(failureKey(item)).tone}>{failureInfo(failureKey(item)).title}</Badge>,
+                            <Badge tone={scoreTone(item.score)}>{fmtPct(item.score)}</Badge>,
+                            item.span_count ?? 0,
+                            fmtMs(item.latency_ms),
+                        ])}
+                    />
                 )}
-            </Panel>
+                detail={(
+                    !selected ? (
+                        <ExplainEmpty title="选择一条 Trace 执行轨迹" body="这里会按时间线解释 Agent 先理解了什么、调用了什么工具、在哪里失败或完成。" />
+                    ) : (
+                        <div className="grid gap-4">
+                            <ConclusionCard
+                                title={run.environment_failure ? '环境或模型服务导致失败' : run.agent_fallback ? 'Agent 兜底需要复核' : run.status === 'completed' && Number(run.overall_quality || 0) >= 0.8 ? '这次执行完成了任务' : '这次执行需要复核'}
+                                body={`${sessionTitle(run)} / ${sceneLabel(run.scene)} / ${run.worker || run.agent_id || '未知执行器'} / ${modelLabel(run)} / ${failureInfo(failureKey(run)).title} / ${fmtMs(run.latency_ms)}`}
+                                tone={run.environment_failure ? 'warn' : scoreTone(run.overall_quality)}
+                            />
+                            <ScoreBreakdown detail={selected} />
+                            <Timeline items={timeline} />
+                            {selected.tool_calls?.length > 0 && (
+                                <div>
+                                    <SectionTitle title="工具调用结果" hint="工具失败通常是影响回答质量的第一优先排查点。" />
+                                    <ToolList tools={selected.tool_calls} />
+                                </div>
+                            )}
+                            {expertMode && <DeveloperDetails value={selected} />}
+                        </div>
+                    )
+                )}
+            />
         </div>
     );
 }
@@ -941,20 +1204,29 @@ function ExecutionProcess({
 function FailureInsights({ failures, traces, onOpenTrace }: { failures: any; traces: any[]; onOpenTrace: (traceId: string) => void }) {
     const insights = buildFailureInsightView(failures);
     return (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="grid gap-5">
+            <PageIntro
+                title="先看问题类型，再回到具体 Trace"
+                body="每个异常都应该能落到模型服务、工具接口、Agent 判断、回答质量、安全风险或评测框架本身。"
+            />
             <Panel title="问题归因">
                 <FailureBars insights={insights} emptyText="当前窗口内没有明确失败归因。" />
             </Panel>
             <Panel title="低分或异常执行">
                 <div className="grid gap-2 p-4">
                     {traces.filter((item) => item.status !== 'completed' || item.environment_failure || item.agent_fallback || Number(item.score || item.overall_quality || 1) < 0.8).slice(0, 8).map((item) => (
-                        <button key={item.id || item.trace_id} onClick={() => onOpenTrace(item.trace_id || item.id)} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left hover:bg-white">
+                        <div key={item.id || item.trace_id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left hover:bg-white">
+                            <button onClick={() => onOpenTrace(item.trace_id || item.id)} className="w-full text-left">
                             <div className="flex items-center justify-between gap-2">
                                 <span className="truncate font-mono text-[12px] font-black text-sky-700">{item.trace_id || item.id}</span>
                                 <Badge tone={scoreTone(item.score || item.overall_quality)}>{fmtPct(item.score || item.overall_quality)}</Badge>
                             </div>
                             <div className="mt-2 text-[12px] font-semibold text-slate-600">{sceneLabel(item.scene)} · {item.status || 'unknown'} · {failureInfo(failureKey(item)).title} · {fmtMs(item.latency_ms)}</div>
-                        </button>
+                            </button>
+                            <div className="mt-3">
+                                <Button tone="light" onClick={() => openOriginalSession(item)}>打开原始会话</Button>
+                            </div>
+                        </div>
                     ))}
                     {!traces.length && <ExplainEmpty title="暂无 Trace" body="完成线上对话采集后，这里会列出需要复核的低分执行。" />}
                 </div>
@@ -1034,6 +1306,7 @@ function HumanReviews({ data, onRefresh, onOpenTrace }: { data: any; onRefresh: 
                                 <Button tone="danger" onClick={async () => { await appApi.evaluations.submitMonitoringReview(run.id, { decision: 'rejected', reason: 'manual_reject' }); await onRefresh(); }}>拒绝</Button>
                                 <Button tone="light" onClick={async () => { await appApi.evaluations.submitMonitoringReview(run.id, { decision: 'converted_to_case', reason: 'converted_to_case' }); await onRefresh(); }}>转数据集 Case</Button>
                                 <Button tone="light" onClick={() => onOpenTrace(run.trace_id || run.id)}>查看执行过程</Button>
+                                <Button tone="light" onClick={() => openOriginalSession(run)}>打开原始会话</Button>
                             </div>
                         </div>
                     );
@@ -1044,47 +1317,408 @@ function HumanReviews({ data, onRefresh, onOpenTrace }: { data: any; onRefresh: 
     );
 }
 
-function OfflineEvaluation({ reports, jobs }: { reports: any[]; jobs: any[] }) {
+function OfflineEvaluation({ reports, jobs, datasets, onRefresh }: { reports: any[]; jobs: any[]; datasets: any[]; onRefresh: () => Promise<void> | void }) {
+    const [runner, setRunner] = useState('fixture');
+    const [suite, setSuite] = useState('quick');
+    const [numTrials, setNumTrials] = useState(1);
+    const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:8000');
+    const [includeJudge, setIncludeJudge] = useState(false);
+    const [outcomeVerify, setOutcomeVerify] = useState(false);
+    const [persistDb, setPersistDb] = useState(true);
+    const [requireDbPersist, setRequireDbPersist] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [localMessage, setLocalMessage] = useState('');
+    const [selectedReport, setSelectedReport] = useState(reports[0]?.name || '');
+    const [reportDetail, setReportDetail] = useState<any>(null);
+    const [selectedCase, setSelectedCase] = useState<any>(null);
+    const [selectedDataset, setSelectedDataset] = useState(datasets[0]?.name || datasets[0]?.suite || 'quick');
+    const [datasetDetail, setDatasetDetail] = useState<any>(null);
+    const [activeJobDetail, setActiveJobDetail] = useState<any>(null);
+    const [offlineTab, setOfflineTab] = useState<'run' | 'jobs' | 'datasets' | 'reports'>('run');
+    const activeJob = jobs.find((item) => ['queued', 'running'].includes(item.status));
+
+    useEffect(() => {
+        if (!selectedReport && reports[0]?.name) setSelectedReport(reports[0].name);
+    }, [reports, selectedReport]);
+
+    useEffect(() => {
+        if (!selectedDataset && datasets[0]) setSelectedDataset(datasets[0].name || datasets[0].suite);
+    }, [datasets, selectedDataset]);
+
+    useEffect(() => {
+        if (!selectedReport) return;
+        let cancelled = false;
+        appApi.evaluations.getReport(selectedReport)
+            .then((data) => {
+                if (cancelled) return;
+                setReportDetail(data.report || null);
+                setSelectedCase(null);
+            })
+            .catch((error) => {
+                if (!cancelled) setLocalMessage(getErrorMessage(error));
+            });
+        return () => { cancelled = true; };
+    }, [selectedReport]);
+
+    useEffect(() => {
+        if (!selectedDataset) return;
+        let cancelled = false;
+        appApi.evaluations.listDatasetCases(selectedDataset)
+            .then((data) => {
+                if (!cancelled) setDatasetDetail(data);
+            })
+            .catch(async () => {
+                try {
+                    const data = await appApi.evaluations.listHubDatasetCases(selectedDataset);
+                    if (!cancelled) setDatasetDetail(data);
+                } catch {
+                    if (!cancelled) setDatasetDetail(null);
+                }
+            });
+        return () => { cancelled = true; };
+    }, [selectedDataset]);
+
+    useEffect(() => {
+        if (!activeJob) {
+            setActiveJobDetail(null);
+            return;
+        }
+        const timer = window.setInterval(() => {
+            void appApi.evaluations.getEvalJob(activeJob.id).then((data) => {
+                setActiveJobDetail(data.job || null);
+                if (!['queued', 'running'].includes(data.job?.status)) {
+                    void onRefresh();
+                }
+            }).catch(() => {});
+        }, 2000);
+        return () => window.clearInterval(timer);
+    }, [activeJob?.id, onRefresh]);
+
+    const runEval = async () => {
+        const risky = runner === 'live' || suite !== 'quick' || includeJudge || outcomeVerify;
+        if (risky && !window.confirm('这次评测可能调用真实模型、外部工具或 LLM Judge，确认开始吗？')) return;
+        setBusy(true);
+        setLocalMessage('');
+        try {
+            await appApi.evaluations.createEvalJob({
+                runner,
+                suite,
+                num_trials: numTrials,
+                base_url: baseUrl,
+                include_llm_judge: includeJudge,
+                outcome_verify: outcomeVerify,
+                persist_db: persistDb,
+                require_db_persist: requireDbPersist,
+            });
+            setLocalMessage('评测任务已创建');
+            await onRefresh();
+        } catch (error) {
+            const apiError = error as ApiError;
+            const active = (apiError as any)?.detail?.active_job;
+            setLocalMessage(active ? `已有任务运行中：${active.id}` : getErrorMessage(error));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const cancelJob = async (jobId: string) => {
+        setBusy(true);
+        try {
+            await appApi.evaluations.cancelEvalJob(jobId);
+            setLocalMessage('任务已取消');
+            await onRefresh();
+        } catch (error) {
+            setLocalMessage(getErrorMessage(error));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const openCase = async (caseId: string) => {
+        if (!selectedReport) return;
+        try {
+            const detail = await appApi.evaluations.getCaseDetail(selectedReport, caseId);
+            setSelectedCase(detail);
+        } catch (error) {
+            setLocalMessage(getErrorMessage(error));
+        }
+    };
+
+    const cases = Array.isArray(reportDetail?.results) ? reportDetail.results : [];
+    const datasetCases = Array.isArray(datasetDetail?.cases) ? datasetDetail.cases : [];
+
     return (
-        <div className="grid gap-4 xl:grid-cols-2">
-            <Panel title="发布前回归检查 Runs">
-                <SimpleTable
-                    headers={['报告', '范围', '通过率', '失败', '耗时']}
-                    empty="暂无离线评测报告"
-                    rows={reports.map((item) => [
-                        <span className="font-mono text-sky-700">{item.name}</span>,
-                        `${item.suite || 'n/a'} / ${item.runner || 'n/a'}`,
-                        <Badge tone={scoreTone(item.overall_success_rate)}>{fmtPct(item.overall_success_rate)}</Badge>,
-                        item.failed_cases ?? 0,
-                        `${Number(item.duration_seconds || 0).toFixed(2)}s`,
-                    ])}
+        <div className="grid gap-4">
+            {localMessage && <Badge tone={localMessage.includes('失败') || localMessage.includes('已有') ? 'warn' : 'good'}>{localMessage}</Badge>}
+            <PageIntro
+                title="发布前回归检查台"
+                body="这里可以运行 fixture quick、查看后台任务、检查评测集覆盖和报告结果。日常人工验证优先从 fixture quick 开始。"
+            />
+            <div className="flex gap-2 overflow-x-auto rounded-lg border border-slate-200 bg-white p-2">
+                {[
+                    ['run', '运行评测'],
+                    ['jobs', '任务队列'],
+                    ['datasets', '评测集'],
+                    ['reports', '报告结果'],
+                ].map(([key, label]) => (
+                    <button
+                        key={key}
+                        onClick={() => setOfflineTab(key as typeof offlineTab)}
+                        className={`whitespace-nowrap rounded-md px-4 py-2 text-[13px] font-black transition ${offlineTab === key ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                    >
+                        {label}
+                    </button>
+                ))}
+            </div>
+
+            {offlineTab === 'run' && (
+                <Panel title="运行评测">
+                    <div className="grid gap-4 p-4">
+                        <div className="grid gap-3 md:grid-cols-4">
+                            <label className="grid gap-1 text-[12px] font-black text-slate-500">Runner<Select value={runner} onChange={(e) => setRunner(e.target.value)}><option value="fixture">fixture</option><option value="live">live</option></Select></label>
+                            <label className="grid gap-1 text-[12px] font-black text-slate-500">Suite<Select value={suite} onChange={(e) => setSuite(e.target.value)}><option value="quick">quick</option><option value="full">full</option><option value="live-smoke">live-smoke</option></Select></label>
+                            <label className="grid gap-1 text-[12px] font-black text-slate-500">Trials<Input value={String(numTrials)} onChange={(e) => setNumTrials(Math.max(1, Number(e.target.value) || 1))} /></label>
+                            {runner === 'live' && <label className="grid gap-1 text-[12px] font-black text-slate-500">Base URL<Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></label>}
+                        </div>
+                        <div className="grid gap-2 text-[13px] font-semibold text-slate-600 md:grid-cols-4">
+                            <Toggle checked={includeJudge} onChange={setIncludeJudge} label="启用 LLM Judge" />
+                            <Toggle checked={outcomeVerify} onChange={setOutcomeVerify} label="启用 Outcome Verify" />
+                            <Toggle checked={persistDb} onChange={setPersistDb} label="写入评测数据库" />
+                            <Toggle checked={requireDbPersist} onChange={setRequireDbPersist} label="DB 写失败则任务失败" />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <Button tone="dark" onClick={runEval} disabled={busy || Boolean(activeJob)}>{activeJob ? `任务运行中：${activeJob.id.slice(0, 8)}` : '开始运行'}</Button>
+                            <span className="text-[12px] font-semibold text-slate-500">fixture quick 会直接运行；live/full/Judge/Outcome 会二次确认。</span>
+                        </div>
+                    </div>
+                </Panel>
+            )}
+
+            {offlineTab === 'jobs' && (
+                <Panel title="任务队列">
+                    <SimpleTable
+                        headers={['任务', '状态', '范围', '报告', '时间', '操作']}
+                        empty="暂无评测任务"
+                        rows={jobs.map((item) => [
+                            <span className="font-mono text-sky-700">{item.id}</span>,
+                            <Badge tone={item.status === 'succeeded' ? 'good' : item.status === 'failed' ? 'bad' : ['queued', 'running'].includes(item.status) ? 'warn' : 'neutral'}>{item.status}</Badge>,
+                            `${item.runner || 'n/a'} / ${item.suite || 'n/a'}`,
+                            item.report_name ? <button className="font-mono text-sky-700 underline" onClick={() => setSelectedReport(item.report_name)}>{item.report_name}</button> : 'n/a',
+                            `${fmtTime(item.started_at || item.created_at)} -> ${fmtTime(item.finished_at)}`,
+                            ['queued', 'running'].includes(item.status) ? <Button tone="danger" onClick={() => cancelJob(item.id)}>取消</Button> : <Button tone="light" onClick={() => item.report_name && setSelectedReport(item.report_name)}>打开报告</Button>,
+                        ])}
+                    />
+                    {activeJobDetail?.logs_tail && (
+                        <div className="border-t border-slate-100 p-4">
+                            <SectionTitle title="运行日志" hint="后台 run_eval.py 的日志尾部。" />
+                            <pre className="max-h-56 overflow-auto rounded-lg bg-slate-950 p-3 text-[11px] font-semibold text-slate-100">{activeJobDetail.logs_tail}</pre>
+                        </div>
+                    )}
+                </Panel>
+            )}
+
+            {offlineTab === 'datasets' && (
+                <Panel title="数据集">
+                    <div className="grid gap-3 p-4">
+                        <Select value={selectedDataset} onChange={(e) => setSelectedDataset(e.target.value)}>
+                            {datasets.map((item) => {
+                                const name = item.name || item.suite;
+                                return <option key={name} value={name}>{name} / {item.version || 'file'}</option>;
+                            })}
+                        </Select>
+                        <div className="grid grid-cols-3 gap-2">
+                            <MiniFact label="Case 数" value={datasetDetail?.total_cases ?? datasetCases.length} />
+                            <MiniFact label="版本" value={datasets.find((item) => (item.name || item.suite) === selectedDataset)?.version || 'n/a'} />
+                            <MiniFact label="状态" value={datasets.find((item) => (item.name || item.suite) === selectedDataset)?.status || 'active'} />
+                        </div>
+                        <ExplainEmpty
+                            title={`${selectedDataset || 'quick'} 评测集`}
+                            body="这里展示发布前回归用例：输入任务、期望路由/工具、评分指标和优先级。quick 用于 PR 或日常快速检查，full/live-smoke 用于定时或人工验证。"
+                        />
+                    </div>
+                    <DistributionMap title="Scene 分布" values={datasets.find((item) => (item.name || item.suite) === selectedDataset)?.by_scene || {}} />
+                    <DistributionMap title="Category 分布" values={datasets.find((item) => (item.name || item.suite) === selectedDataset)?.by_category || {}} />
+                    <DistributionMap title="Priority 分布" values={datasets.find((item) => (item.name || item.suite) === selectedDataset)?.by_priority || {}} />
+                    <SimpleTable
+                        headers={['Case', '任务内容', '场景/类别', '期望', '评分指标', '优先级']}
+                        minWidth="1280px"
+                        empty="暂无数据集 Case"
+                        rows={datasetCases.slice(0, 12).map((item: any) => [
+                            <span className="font-mono text-sky-700">{item.case_id || item.id}</span>,
+                            <span className="block max-w-[260px] whitespace-normal leading-relaxed">{item.task || item.input || item.user_message || '未记录任务内容'}</span>,
+                            <span>{sceneLabel(item.scene)}<span className="block text-[11px] text-slate-400">{item.category || 'n/a'}</span></span>,
+                            <DatasetExpectationSummary value={item.expectations_summary || item.expectations || item.expected} />,
+                            <DatasetScoringSummary value={item.scoring_summary || item.scoring || item.weights} />,
+                            <Badge tone={item.priority === 'p0' ? 'bad' : 'info'}>{item.priority || 'p1'}</Badge>,
+                        ])}
+                    />
+                </Panel>
+            )}
+
+            {offlineTab === 'reports' && (
+                <WorkspaceSplit
+                    listTitle="报告结果"
+                    listHint="选择报告和 Case 后，右侧立即展示评分、Trial、Trace Timeline。"
+                    detailTitle="Case 详情"
+                    detailHint={selectedCase?.case?.case_id || '等待选择 Case'}
+                    list={(
+                        <div className="grid gap-3">
+                            <div className="grid gap-3 p-4">
+                                <Select value={selectedReport} onChange={(e) => setSelectedReport(e.target.value)}>
+                                    {reports.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+                                </Select>
+                                {reportDetail ? (
+                                    <>
+                                        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                                            <MetricCard title="通过率" value={fmtPct(reportDetail.overall_success_rate)} tone={scoreTone(reportDetail.overall_success_rate)} />
+                                            <MetricCard title="Case" value={reportDetail.total_cases || cases.length} />
+                                            <MetricCard title="Trial" value={reportDetail.total_trials || 0} />
+                                            <MetricCard title="失败" value={reportDetail.failed_cases || 0} tone={reportDetail.failed_cases ? 'warn' : 'good'} />
+                                            <MetricCard title="耗时" value={`${Number(reportDetail.duration_seconds || 0).toFixed(2)}s`} />
+                                        </div>
+                                        {reportDetail.stability && (
+                                            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                                                <MetricCard title={`pass@${reportDetail.stability.k || 1}`} value={fmtPct(reportDetail.stability.pass_at_k)} tone={scoreTone(reportDetail.stability.pass_at_k)} hint="多次 trial 至少一次通过" />
+                                                <MetricCard title={`pass^${reportDetail.stability.k || 1}`} value={fmtPct(reportDetail.stability.pass_all_k)} tone={scoreTone(reportDetail.stability.pass_all_k)} hint="多次 trial 全部通过" />
+                                                <MetricCard title="分数波动" value={Number(reportDetail.stability.trial_variance || 0).toFixed(4)} tone={Number(reportDetail.stability.trial_variance || 0) > 0.05 ? 'warn' : 'good'} />
+                                                <MetricCard title="不稳定 Case" value={reportDetail.stability.flaky_cases?.length || 0} tone={reportDetail.stability.flaky_cases?.length ? 'warn' : 'good'} />
+                                            </div>
+                                        )}
+                                    </>
+                                ) : <ExplainEmpty title="暂无报告详情" body="选择报告或运行一次 fixture quick 后，这里会展示详细结果。" />}
+                            </div>
+                            {reportDetail?.stability?.flaky_cases?.length > 0 && (
+                                <SimpleTable
+                                    headers={['不稳定 Case', '通过次数', 'Trial 数', '分数波动', '分数序列']}
+                                    empty="暂无不稳定 Case"
+                                    rows={reportDetail.stability.flaky_cases.map((item: any) => [
+                                        <span className="font-mono text-amber-700">{item.case_id}</span>,
+                                        item.pass_count,
+                                        item.trials,
+                                        Number(item.variance || 0).toFixed(4),
+                                        displayValue(item.scores),
+                                    ])}
+                                />
+                            )}
+                            <SimpleTable
+                                headers={['Case', '场景', '类别', '优先级', '通过率', '操作']}
+                                empty="暂无 Case 结果"
+                                minWidth="720px"
+                                rows={cases.map((item: any) => [
+                                    <span className="font-mono text-sky-700">{item.case_id}</span>,
+                                    sceneLabel(item.scene),
+                                    item.category || 'n/a',
+                                    <Badge tone={item.priority === 'p0' ? 'bad' : 'info'}>{item.priority || 'p1'}</Badge>,
+                                    <Badge tone={scoreTone(item.success_rate)}>{fmtPct(item.success_rate)}</Badge>,
+                                    <Button tone="light" onClick={() => openCase(item.case_id)}>详情</Button>,
+                                ])}
+                            />
+                        </div>
+                    )}
+                    detail={selectedCase ? <OfflineCaseInspector detail={selectedCase} /> : <ExplainEmpty title="选择一个 Case" body="这里会展示任务、期望、评分明细、Trial 失败原因和离线 Trace Timeline。" />}
                 />
-            </Panel>
-            <Panel title="Web 触发评测任务">
-                <SimpleTable
-                    headers={['任务', '状态', '范围', '报告', '创建时间']}
-                    empty="暂无评测任务"
-                    rows={jobs.map((item) => [
-                        <span className="font-mono text-sky-700">{item.id}</span>,
-                        <Badge tone={item.status === 'succeeded' ? 'good' : item.status === 'failed' ? 'bad' : 'warn'}>{item.status}</Badge>,
-                        `${item.runner || 'n/a'} / ${item.suite || 'n/a'}`,
-                        item.report_name || 'n/a',
-                        fmtTime(item.created_at),
-                    ])}
-                />
-            </Panel>
+            )}
         </div>
     );
 }
 
-function DataFeedbackLoop({ datasets, cases, experiments, evaluators }: { datasets: any[]; cases: any[]; experiments: any[]; evaluators: any[] }) {
+function DataFeedbackLoop({
+    datasets,
+    cases,
+    experiments,
+    evaluators,
+    componentRuns,
+    simulationScenarios,
+    judgeAgreement,
+    onRefresh,
+}: {
+    datasets: any[];
+    cases: any[];
+    experiments: any[];
+    evaluators: any[];
+    componentRuns: any[];
+    simulationScenarios: any[];
+    judgeAgreement: any;
+    onRefresh: () => Promise<void> | void;
+}) {
+    const [message, setMessage] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    const generateDraftCase = async () => {
+        setBusy(true);
+        setMessage('');
+        try {
+            await appApi.evaluations.generateDatasetCases('regression', {
+                source: 'manual',
+                version: 'draft',
+                task: '用户需要在预算、口味和距离约束下得到可执行的餐饮建议',
+                scene: 'eat_out',
+                category: 'regression',
+                priority: 'p1',
+                must_include: ['推荐理由', '下一步行动'],
+                notes: '从 Web 工作台生成的 draft case，需要人工审核后进入 active。',
+            });
+            setMessage('已生成 regression draft case，等待人工审核。');
+            await onRefresh();
+        } catch (error) {
+            setMessage(getErrorMessage(error));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const runComponent = async (component: string) => {
+        setBusy(true);
+        setMessage('');
+        try {
+            await appApi.evaluations.createComponentRun({ component, dataset: 'component-regression' });
+            setMessage(`${component} 组件评测已生成。`);
+            await onRefresh();
+        } catch (error) {
+            setMessage(getErrorMessage(error));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const createSimulationScenario = async (runner: 'deterministic' | 'live_agent' = 'deterministic') => {
+        if (runner === 'live_agent' && !window.confirm('真实 Agent 模拟会调用模型和工具，并产生线上监控 Trace，确认运行吗？')) return;
+        setBusy(true);
+        setMessage('');
+        try {
+            const response = await appApi.evaluations.createHubSimulationScenario({
+                name: '餐饮多轮目标达成 smoke',
+                description: 'Synthetic User 用多轮追问验证 Agent 是否能持续推进用户目标。',
+                status: 'draft',
+                scenario: {
+                    persona: '预算敏感、需要明确下一步的用户',
+                    goal: '找到人均 100 以内、离静安寺近、适合今晚聚餐的选择',
+                    scene: 'eat_out',
+                    max_turns: 5,
+                    success_criteria: ['给出餐厅建议', '解释预算匹配', '给出可执行下一步'],
+                },
+            });
+            const scenarioId = response?.scenario?.id;
+            if (scenarioId) {
+                await appApi.evaluations.createHubSimulationRun(scenarioId, { runner, max_turns: 5 });
+            }
+            setMessage(runner === 'live_agent' ? '真实 Agent Synthetic User 模拟已创建。' : 'Synthetic User 场景和一次模拟运行已创建。');
+            await onRefresh();
+        } catch (error) {
+            setMessage(getErrorMessage(error));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <div className="grid gap-4">
+            {message && <Badge tone={message.includes('失败') ? 'bad' : 'info'}>{message}</Badge>}
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
                 <MetricCard title="Dataset 数据集" value={datasets.length} />
                 <MetricCard title="Regression Case" value={cases.length} />
                 <MetricCard title="Experiment 实验" value={experiments.length} />
-                <MetricCard title="Evaluator 评测器" value={evaluators.length} />
+                <MetricCard title="组件评测" value={componentRuns.length} />
             </div>
             <Panel title="闭环路径">
                 <div className="grid gap-3 p-4 md:grid-cols-5">
@@ -1096,16 +1730,39 @@ function DataFeedbackLoop({ datasets, cases, experiments, evaluators }: { datase
                     ))}
                 </div>
             </Panel>
+            <div className="grid gap-4 xl:grid-cols-3">
+                <Panel title="评测数据生成器">
+                    <div className="grid gap-3 p-4">
+                        <ExplainEmpty title="生成结果默认进入 draft" body="可以从人工输入、Trace、失败报告或文档目标生成候选 Case；审核通过后才进入 active 数据集。" />
+                        <Button tone="dark" onClick={generateDraftCase} disabled={busy}>生成示例 draft case</Button>
+                    </div>
+                </Panel>
+                <Panel title="Synthetic User 多轮评测">
+                    <div className="grid gap-3 p-4">
+                        <MiniFact label="场景数" value={simulationScenarios.length} />
+                        <Button tone="light" onClick={() => createSimulationScenario('deterministic')} disabled={busy}>创建并运行 smoke 场景</Button>
+                        <Button tone="dark" onClick={() => createSimulationScenario('live_agent')} disabled={busy}>运行真实 Agent 多轮模拟</Button>
+                    </div>
+                </Panel>
+                <Panel title="Judge 校准">
+                    <div className="grid gap-3 p-4">
+                        <MiniFact label="Agreement" value={fmtPct(judgeAgreement?.agreement_rate || 0)} />
+                        <MiniFact label="False Positive" value={fmtPct(judgeAgreement?.false_positive_rate || 0)} />
+                        <MiniFact label="False Negative" value={fmtPct(judgeAgreement?.false_negative_rate || 0)} />
+                    </div>
+                </Panel>
+            </div>
             <div className="grid gap-4 xl:grid-cols-2">
                 <Panel title="数据集">
                     <SimpleTable
-                        headers={['名称', '版本', '状态', 'Case 数']}
+                        headers={['名称', '版本', '状态', 'Case 数', '来源覆盖']}
                         empty="暂无数据集"
                         rows={datasets.map((item) => [
                             item.name || item.suite || 'n/a',
                             item.version || 'n/a',
                             <Badge tone="info">{item.status || 'active'}</Badge>,
                             item.total_cases || 0,
+                            displayValue(item.by_source || {}),
                         ])}
                     />
                 </Panel>
@@ -1120,6 +1777,87 @@ function DataFeedbackLoop({ datasets, cases, experiments, evaluators }: { datase
                     />
                 </Panel>
             </div>
+            <Panel title="组件级评测">
+                <div className="flex flex-wrap gap-2 p-4">
+                    {['router', 'tool', 'rag', 'schema', 'llm'].map((component) => (
+                        <Button key={component} tone="light" onClick={() => runComponent(component)} disabled={busy}>运行 {component}</Button>
+                    ))}
+                </div>
+                <SimpleTable
+                    headers={['组件', '报告', '通过率', '时间']}
+                    empty="暂无组件评测"
+                    rows={componentRuns.map((item) => [
+                        item.component || item.suite || 'component',
+                        <span className="font-mono text-sky-700">{item.report_name}</span>,
+                        <Badge tone={scoreTone(item.success_rate)}>{fmtPct(item.success_rate)}</Badge>,
+                        fmtTime(item.timestamp),
+                    ])}
+                />
+            </Panel>
+            <Panel title="Synthetic User 场景">
+                <SimpleTable
+                    headers={['场景', '状态', '目标', '成功标准']}
+                    empty="暂无模拟场景"
+                    rows={simulationScenarios.map((item) => [
+                        item.name,
+                        <Badge tone={item.status === 'active' ? 'good' : 'info'}>{item.status}</Badge>,
+                        compactValue(item.scenario?.goal || item.description, 80),
+                        compactValue(item.scenario?.success_criteria || [], 120),
+                    ])}
+                />
+            </Panel>
+        </div>
+    );
+}
+
+function OfflineCaseDetail({ detail }: { detail: any }) {
+    return (
+        <Panel title="Case 详情">
+            <div className="p-4">
+                <OfflineCaseInspector detail={detail} />
+            </div>
+        </Panel>
+    );
+}
+
+function OfflineCaseInspector({ detail }: { detail: any }) {
+    const caseData = detail.case || {};
+    const trials = Array.isArray(detail.trials) ? detail.trials : [];
+    const firstTrial = trials[0] || {};
+    return (
+        <div className="grid gap-4">
+            <ConclusionCard
+                title={caseData.task || caseData.case_id || '未命名 Case'}
+                body={`${sceneLabel(caseData.scene)} / ${caseData.category || 'n/a'} / ${caseData.priority || 'p1'}`}
+                tone={scoreTone(caseData.success_rate)}
+            />
+            <div className="grid grid-cols-2 gap-2">
+                <MiniFact label="Case" value={caseData.case_id || caseData.id || 'n/a'} />
+                <MiniFact label="优先级" value={caseData.priority || 'p1'} />
+                <MiniFact label="类别" value={caseData.category || 'n/a'} />
+                <MiniFact label="通过率" value={fmtPct(caseData.success_rate)} />
+            </div>
+            <ScoreBreakdown detail={{ metrics: caseData.avg_scores || firstTrial.scores || {}, run: { overall_quality: caseData.success_rate } }} />
+            <DeveloperDetails value={{ expectations: caseData.expectations || caseData.expected || {}, source: detail.source }} />
+            <SimpleTable
+                headers={['Trial', '加权分', '失败原因', '缺失指标', '阈值失败']}
+                empty="暂无 trial"
+                minWidth="680px"
+                rows={trials.map((trial: any) => [
+                    trial.trial_number ?? 0,
+                    <Badge tone={scoreTone(trial.weighted_score)}>{fmtPct(trial.weighted_score)}</Badge>,
+                    failureInfo(trial.failure_class).title,
+                    Array.isArray(trial.missing_metrics) ? trial.missing_metrics.join(', ') || '无' : '无',
+                    Array.isArray(trial.threshold_failures) ? trial.threshold_failures.length : 0,
+                ])}
+            />
+            {firstTrial.trace_timeline?.length > 0 && (
+                <div>
+                    <SectionTitle title="离线 Trace Timeline" hint="来自评测报告的 trial 轨迹。" />
+                    <Timeline items={buildExecutionTimelineView({ events: firstTrial.trace_timeline, run: { latency_ms: firstTrial.duration_ms } })} />
+                </div>
+            )}
+            <DeveloperDetails value={{ case: caseData, trials }} />
         </div>
     );
 }
@@ -1155,16 +1893,43 @@ function Timeline({ items }: { items: ReturnType<typeof buildExecutionTimelineVi
                         </div>
                         <div className="rounded-lg border border-slate-200 bg-white p-3">
                             <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-full bg-slate-950 px-2 py-1 font-mono text-[11px] font-black text-white">STEP {item.index + 1}</span>
                                 <span className="font-black text-slate-900">{item.title}</span>
                                 <Badge tone={item.tone}>{item.status}</Badge>
-                                <span className="ml-auto text-[12px] font-semibold text-slate-500">{fmtMs(item.duration)}</span>
+                                <span className="ml-auto text-[12px] font-semibold text-slate-500">
+                                    {item.duration ? fmtMs(item.duration) : '耗时未记录'}{item.durationEstimated ? ' · 估算' : ''}
+                                </span>
                             </div>
                             <div className="mt-1 text-[13px] font-semibold text-slate-600">{item.subtitle}</div>
-                            {item.detail && <div className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-[12px] font-semibold text-slate-600">{displayValue(item.detail)}</div>}
+                            <div className="mt-3 grid gap-2 md:grid-cols-3">
+                                <MiniFact label="开始" value={fmtStepTime(item.startedAt)} />
+                                <MiniFact label="结束" value={fmtStepTime(item.endedAt)} />
+                                <MiniFact label="耗时占比" value={item.durationRatio == null ? '未记录' : `${fmtPct(item.durationRatio)}${item.durationEstimated ? '（估算）' : ''}`} />
+                            </div>
+                            {(item.inputSummary || item.outputSummary || item.errorSummary) && (
+                                <div className="mt-3 grid gap-2">
+                                    {item.inputSummary && <StepSummary label="输入" value={item.inputSummary} />}
+                                    {item.outputSummary && <StepSummary label="输出" value={item.outputSummary} />}
+                                    {item.errorSummary && <StepSummary label="错误" value={item.errorSummary} tone="bad" />}
+                                </div>
+                            )}
+                            <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                <summary className="cursor-pointer text-[12px] font-black text-slate-600">展开参数、结果和 metadata</summary>
+                                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words text-[11px] font-semibold text-slate-600">{JSON.stringify(item.raw, null, 2)}</pre>
+                            </details>
                         </div>
                     </div>
                 );
             })}
+        </div>
+    );
+}
+
+function StepSummary({ label, value, tone = 'neutral' }: { label: string; value: React.ReactNode; tone?: Tone }) {
+    return (
+        <div className={`rounded-md border px-3 py-2 text-[12px] font-semibold ${tone === 'bad' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+            <span className="mr-2 font-black">{label}</span>
+            {value}
         </div>
     );
 }
@@ -1189,6 +1954,47 @@ function ToolList({ tools }: { tools: any[] }) {
                 </div>
                 );
             })}
+        </div>
+    );
+}
+
+function ScoreBreakdown({ detail }: { detail: any }) {
+    const rows = scoreMetricRows(detail);
+    if (!rows.length) {
+        return (
+            <div>
+                <SectionTitle title="评分明细" hint="当前记录还没有写入评分指标；新会话采集后会显示每个评分项。" />
+                <ExplainEmpty title="暂无评分明细" body="如果只看到质量百分比，说明这条数据可能来自旧采集链路或评分指标还没有持久化。" />
+            </div>
+        );
+    }
+    return (
+        <div>
+            <SectionTitle title="评分明细" hint="这些分数来自在线轻量评分器，用来解释为什么一段会话被判定为好或需要复核。" />
+            <div className="grid gap-2 md:grid-cols-2">
+                {rows.map((item) => {
+                    const pct = Math.max(0, Math.min(100, Math.round(Number(item.value || 0) * 100)));
+                    const dangerMetric = item.key.includes('error') || item.key.includes('fallback') || item.key === 'repeated_action_rate';
+                    return (
+                        <div key={item.key} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-sm font-black text-slate-900">{item.label}</div>
+                                    <div className="mt-0.5 font-mono text-[10px] font-semibold text-slate-400">{item.key}</div>
+                                </div>
+                                <Badge tone={item.tone}>{fmtPct(item.value)}</Badge>
+                            </div>
+                            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+                                <div
+                                    className={`h-full rounded-full ${item.tone === 'good' ? 'bg-emerald-500' : item.tone === 'warn' ? 'bg-amber-500' : item.tone === 'bad' ? 'bg-rose-500' : 'bg-slate-400'}`}
+                                    style={{ width: `${dangerMetric ? Math.max(2, pct) : pct}%` }}
+                                />
+                            </div>
+                            {dangerMetric && <div className="mt-1 text-[11px] font-semibold text-slate-500">该项越低越好</div>}
+                        </div>
+                    );
+                })}
+            </div>
         </div>
     );
 }
@@ -1238,6 +2044,71 @@ function DistributionMap({ title, values }: { title: string; values: Record<stri
     );
 }
 
+function EvaluationTabs({ value, onChange }: { value: BusinessView; onChange: (value: BusinessView) => void }) {
+    return (
+        <nav className="border-t border-slate-100 bg-white">
+            <div className="mx-auto flex max-w-[1480px] gap-1 overflow-x-auto px-4 py-2 md:px-6">
+                {NAV_ITEMS.map((item) => {
+                    const Icon = item.icon;
+                    const active = value === item.key;
+                    return (
+                        <button
+                            key={item.key}
+                            onClick={() => onChange(item.key)}
+                            className={`flex shrink-0 items-center gap-2 rounded-md border px-3 py-2 text-left transition ${
+                                active
+                                    ? 'border-slate-950 bg-slate-950 text-white shadow-sm'
+                                    : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                            <Icon size={15} />
+                            <span className="text-[13px] font-black">{item.title}</span>
+                        </button>
+                    );
+                })}
+            </div>
+        </nav>
+    );
+}
+
+function PageHeader({
+    title,
+    subtitle,
+    description,
+    badges,
+}: {
+    title: string;
+    subtitle: string;
+    description: string;
+    badges: Array<React.ReactNode | null>;
+}) {
+    return (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <h1 className="m-0 text-[28px] font-black leading-none tracking-normal text-slate-950">{title}</h1>
+                        <Badge tone="info">{subtitle}</Badge>
+                    </div>
+                    <p className="m-0 mt-2 text-sm font-semibold leading-relaxed text-slate-500">{description}</p>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                    {badges.filter(Boolean).map((item, index) => <React.Fragment key={index}>{item}</React.Fragment>)}
+                </div>
+            </div>
+        </section>
+    );
+}
+
+function PageIntro({ title, body }: { title: string; body: string }) {
+    return (
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="text-[15px] font-black text-slate-950">{title}</div>
+            <div className="mt-1 text-[13px] font-semibold leading-relaxed text-slate-500">{body}</div>
+        </section>
+    );
+}
+
 function MetricCard({ title, value, hint, tone = 'neutral' }: { title: string; value: React.ReactNode; hint?: string; tone?: Tone }) {
     return (
         <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
@@ -1245,6 +2116,21 @@ function MetricCard({ title, value, hint, tone = 'neutral' }: { title: string; v
             <div className={`mt-2 text-[26px] font-black leading-none ${tone === 'good' ? 'text-emerald-600' : tone === 'warn' ? 'text-amber-600' : tone === 'bad' ? 'text-rose-600' : 'text-slate-950'}`}>{value}</div>
             {hint && <div className="mt-2 truncate text-[12px] font-semibold text-slate-500">{hint}</div>}
         </div>
+    );
+}
+
+function DetailSection({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+    return (
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+            <header className="flex min-h-[56px] flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
+                <div>
+                    <h2 className="m-0 text-[13px] font-black uppercase text-slate-700">{title}</h2>
+                    <div className="mt-1 text-[12px] font-semibold text-slate-500">详情按当前页面场景展示，开发者信息默认折叠。</div>
+                </div>
+                {action}
+            </header>
+            {children}
+        </section>
     );
 }
 
@@ -1257,6 +2143,53 @@ function Panel({ title, action, children }: { title: string; action?: React.Reac
             </header>
             {children}
         </section>
+    );
+}
+
+function WorkspaceSplit({
+    listTitle,
+    listHint,
+    list,
+    detailTitle,
+    detailHint,
+    detailAction,
+    detail,
+}: {
+    listTitle: string;
+    listHint?: string;
+    list: React.ReactNode;
+    detailTitle: string;
+    detailHint?: string;
+    detailAction?: React.ReactNode;
+    detail: React.ReactNode;
+}) {
+    return (
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(420px,0.85fr)]">
+            <Panel title={listTitle}>
+                {listHint && <div className="border-b border-slate-100 bg-slate-50/60 px-4 py-3 text-[12px] font-semibold leading-relaxed text-slate-500">{listHint}</div>}
+                {list}
+            </Panel>
+            <InspectorPanel title={detailTitle} hint={detailHint} action={detailAction}>
+                {detail}
+            </InspectorPanel>
+        </section>
+    );
+}
+
+function InspectorPanel({ title, hint, action, children }: { title: string; hint?: string; action?: React.ReactNode; children: React.ReactNode }) {
+    return (
+        <aside className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)] xl:sticky xl:top-4 xl:max-h-[calc(100dvh-2rem)]">
+            <header className="flex min-h-[58px] flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-white px-4 py-3">
+                <div className="min-w-0">
+                    <h2 className="m-0 text-[13px] font-black text-slate-900">{title}</h2>
+                    {hint && <div className="mt-1 truncate text-[12px] font-semibold text-slate-500">{hint}</div>}
+                </div>
+                {action}
+            </header>
+            <div className="grid gap-4 p-4 xl:max-h-[calc(100dvh-5.75rem)] xl:overflow-y-auto xl:overscroll-contain">
+                {children}
+            </div>
+        </aside>
     );
 }
 
@@ -1294,10 +2227,10 @@ function MiniFact({ label, value }: { label: string; value: React.ReactNode }) {
     );
 }
 
-function SimpleTable({ headers, rows, empty }: { headers: string[]; rows: React.ReactNode[][]; empty?: string }) {
+function SimpleTable({ headers, rows, empty, minWidth = '860px' }: { headers: string[]; rows: React.ReactNode[][]; empty?: string; minWidth?: string }) {
     return (
         <div className="overflow-auto">
-            <table className="w-full min-w-[860px] border-collapse text-[12px]">
+            <table className="w-full border-collapse text-[12px]" style={{ minWidth }}>
                 <thead className="sticky top-0 z-10">
                     <tr className="border-b border-slate-200 bg-slate-50/95">
                         {headers.map((header) => <th key={header} className="px-3 py-2 text-left font-black text-slate-500">{header}</th>)}
@@ -1355,6 +2288,15 @@ function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
 
 function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
     return <select {...props} className={`h-9 rounded-md border border-slate-200 bg-white px-3 text-[13px] font-semibold text-slate-800 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100 ${props.className || ''}`} />;
+}
+
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
+    return (
+        <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <span>{label}</span>
+            <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+        </label>
+    );
 }
 
 function Button({ children, tone = 'dark', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'dark' | 'light' | 'danger' | 'green' }) {

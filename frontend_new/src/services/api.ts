@@ -877,6 +877,33 @@ export const appApi = {
     async createDatasetCaseFromTrace(dataset: string, payload: { run_id: string; version?: string; priority?: string; category?: string; owner?: string }) {
       return request<any>(`/eval-datasets/${encodeURIComponent(dataset)}/cases/from-trace`, { scope: 'internal', method: 'POST', body: payload });
     },
+    async generateDatasetCases(dataset: string, payload: Record<string, unknown>) {
+      return request<any>(`/eval-datasets/${encodeURIComponent(dataset)}/cases/generate`, { scope: 'internal', method: 'POST', body: payload });
+    },
+    async reviewDatasetCase(dataset: string, caseId: string, payload: Record<string, unknown>) {
+      return request<any>(`/eval-datasets/${encodeURIComponent(dataset)}/cases/${encodeURIComponent(caseId)}/review`, { scope: 'internal', method: 'PATCH', body: payload });
+    },
+    async activateDatasetVersion(dataset: string, version: string) {
+      return request<any>(`/eval-datasets/${encodeURIComponent(dataset)}/versions/${encodeURIComponent(version)}/activate`, { scope: 'internal', method: 'POST' });
+    },
+    async getEvalRunStability(runId: string) {
+      return request<any>(`/eval-runs/${encodeURIComponent(runId)}/stability`, { scope: 'internal' });
+    },
+    async listComponentRuns() {
+      return request<any>('/eval-component-runs', { scope: 'internal' });
+    },
+    async createComponentRun(payload: { component: string; dataset?: string }) {
+      return request<any>('/eval-component-runs', { scope: 'internal', method: 'POST', body: payload });
+    },
+    async listHubSimulationScenarios() {
+      return request<any>('/eval-hub/simulations/scenarios', { scope: 'internal' });
+    },
+    async createHubSimulationScenario(payload: Record<string, unknown>) {
+      return request<any>('/eval-hub/simulations/scenarios', { scope: 'internal', method: 'POST', body: payload });
+    },
+    async createHubSimulationRun(scenarioId: string, payload: Record<string, unknown> = {}) {
+      return request<any>(`/eval-hub/simulations/scenarios/${encodeURIComponent(scenarioId)}/runs`, { scope: 'internal', method: 'POST', body: payload });
+    },
     async updateEvalRunExperiment(runId: string, payload: Record<string, any>) {
       return request<any>(`/eval-runs/${encodeURIComponent(runId)}/experiment`, { scope: 'internal', method: 'PATCH', body: payload });
     }

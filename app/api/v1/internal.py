@@ -643,17 +643,66 @@ async def create_eval_hub_simulation_scenario(
 @router.post("/eval-hub/simulations/scenarios/{scenario_id}/runs")
 async def create_eval_hub_simulation_run(
     scenario_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
     _admin: dict[str, str | None] = Depends(require_eval_admin),
 ) -> dict[str, Any]:
     from app.agent.monitoring import create_simulation_run
     from app.infra.eval_db import eval_session
 
     async with eval_session() as session:
-        run = await create_simulation_run(session, scenario_id)
+        max_turns = payload.get("max_turns")
+        run = await create_simulation_run(
+            session,
+            scenario_id,
+            max_turns_override=int(max_turns) if max_turns not in (None, "") else None,
+            runner=str(payload.get("runner") or "deterministic"),
+        )
         if run is None:
             raise HTTPException(status_code=404, detail="scenario not found")
         await session.commit()
     return {"run": run}
+
+
+@router.get("/eval-hub/simulations/scenarios/{scenario_id}/runs/{run_id}")
+async def get_eval_hub_simulation_run(
+    scenario_id: str,
+    run_id: str,
+    _admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    from app.agent.monitoring import load_simulation_run
+    from app.infra.eval_db import eval_session
+
+    async with eval_session() as session:
+        run = await load_simulation_run(session, scenario_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="simulation run not found")
+    return {"run": run}
+
+
+@router.post("/eval-hub/simulations/scenarios/{scenario_id}/runs/{run_id}/to-dataset")
+async def convert_eval_hub_simulation_run_to_dataset(
+    scenario_id: str,
+    run_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    from app.agent.monitoring import simulation_run_to_dataset_case
+    from app.infra.eval_db import eval_session
+
+    async with eval_session() as session:
+        case = await simulation_run_to_dataset_case(
+            session,
+            scenario_id=scenario_id,
+            run_id=run_id,
+            dataset_name=str(payload.get("dataset") or "regression"),
+            version=str(payload.get("version") or "draft"),
+            owner=admin.get("user_id"),
+            priority=str(payload.get("priority") or "p1"),
+        )
+        if case is None:
+            raise HTTPException(status_code=404, detail="simulation run not found")
+        await session.commit()
+    return {"case": case}
 
 
 @router.get("/eval-hub/annotation/queue")
@@ -799,6 +848,117 @@ async def list_eval_reports(
         reports.append(_report_summary(path, data))
     reports.sort(key=lambda item: float(item.get("modified_at") or 0.0), reverse=True)
     return {"source": "json", "results_dir": str(base_dir), "reports": reports}
+
+
+@router.get("/eval-runs/{run_id}/stability")
+async def get_eval_run_stability(
+    run_id: str,
+    _admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    from app.infra.eval_db import eval_session
+    from app.infra.models.eval import EvalRun
+
+    store = await _eval_store()
+    if store is not None:
+        try:
+            report = await store.load_report(run_id)
+            if report is not None:
+                return {"run_id": run_id, "source": "db_report", "stability": _stability_from_report(report)}
+        except Exception:
+            pass
+        finally:
+            await store.close()
+
+    async with eval_session() as session:
+        row = await session.scalar(select(EvalRun).where((EvalRun.id == run_id) | (EvalRun.report_name == run_id)))
+    if row and isinstance(row.raw_report_json, dict):
+        return {"run_id": run_id, "source": "db_raw", "stability": _stability_from_report(row.raw_report_json)}
+
+    base_dir = _eval_results_dir()
+    try:
+        _, report = _load_report(base_dir, run_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="eval run not found")
+    return {"run_id": run_id, "source": "json", "stability": _stability_from_report(report)}
+
+
+def _component_eval_report(component: str, dataset: str, owner: str | None = None) -> dict[str, Any]:
+    from evals.component_eval import build_component_report
+
+    return build_component_report(component, dataset, owner=owner)
+
+
+@router.get("/eval-component-runs")
+async def list_eval_component_runs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    from app.infra.eval_db import eval_session
+    from app.infra.models.eval import EvalRun
+
+    async with eval_session() as session:
+        rows = (await session.execute(
+            select(EvalRun)
+            .where(EvalRun.runner == "component")
+            .order_by(desc(EvalRun.timestamp))
+            .offset(offset)
+            .limit(limit)
+        )).scalars().all()
+    return {
+        "total": len(rows),
+        "records": [
+            {
+                "id": row.id,
+                "report_name": row.report_name,
+                "component": (row.suite or "").replace("component:", ""),
+                "suite": row.suite,
+                "runner": row.runner,
+                "success_rate": row.overall_success_rate,
+                "total_cases": row.total_cases,
+                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+                "report": row.raw_report_json,
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.post("/eval-component-runs")
+async def create_eval_component_run(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    from uuid import uuid4
+
+    from app.infra.eval_db import eval_session
+    from app.infra.models.eval import EvalRun
+
+    component = str(payload.get("component") or "router")
+    if component not in {"router", "tool", "rag", "schema", "llm"}:
+        raise HTTPException(status_code=422, detail="invalid component")
+    dataset = str(payload.get("dataset") or "component-regression")
+    report = _component_eval_report(component, dataset, owner=admin.get("user_id"))
+    run_id = str(uuid4())
+    report_name = f"component_{component}_{run_id}.json"
+    async with eval_session() as session:
+        row = EvalRun(
+            id=run_id,
+            report_name=report_name,
+            timestamp=datetime.now(timezone.utc),
+            suite=f"component:{component}",
+            runner="component",
+            overall_success_rate=float(report.get("overall_success_rate") or 0.0),
+            total_cases=int(report.get("total_cases") or 0),
+            total_trials=int(report.get("total_trials") or 0),
+            duration_seconds=float(report.get("duration_seconds") or 0.0),
+            raw_report_json=report,
+            owner=admin.get("user_id"),
+            tags_json={"component": component, "dataset": dataset},
+        )
+        session.add(row)
+        await session.commit()
+    return {"run": {"id": run_id, "report_name": report_name, "component": component, "dataset": dataset, "report": report}}
 
 
 @router.get("/eval-report/case")
@@ -1052,6 +1212,79 @@ def _dataset_case_summary(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _trial_passed_for_stability(trial: dict[str, Any]) -> bool:
+    if trial.get("error") or trial.get("error_reason"):
+        return False
+    if trial.get("threshold_failures") or trial.get("missing_metrics"):
+        return False
+    try:
+        score = float(trial.get("weighted_score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    return score >= 0.7
+
+
+def _variance(values: list[float]) -> float:
+    if len(values) <= 1:
+        return 0.0
+    mean = sum(values) / len(values)
+    return round(sum((value - mean) ** 2 for value in values) / len(values), 6)
+
+
+def _stability_from_report(report: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(report.get("stability"), dict):
+        return report["stability"]
+    results = report.get("results") if isinstance(report.get("results"), list) else []
+    if not results:
+        return {"k": 0, "pass_at_k": 0.0, "pass_all_k": 0.0, "trial_variance": 0.0, "flaky_cases": [], "cases": []}
+    case_rows = []
+    flaky_cases = []
+    pass_at = 0
+    pass_all = 0
+    variances = []
+    k = 0
+    for result in results:
+        trials = result.get("trials") if isinstance(result.get("trials"), list) else []
+        passes = [_trial_passed_for_stability(trial) for trial in trials if isinstance(trial, dict)]
+        scores = []
+        for trial in trials:
+            if isinstance(trial, dict):
+                try:
+                    scores.append(float(trial.get("weighted_score") or 0.0))
+                except (TypeError, ValueError):
+                    scores.append(0.0)
+        k = max(k, len(trials))
+        passed_once = any(passes) if passes else False
+        passed_all = all(passes) if passes else False
+        pass_at += 1 if passed_once else 0
+        pass_all += 1 if passed_all else 0
+        variance = _variance(scores)
+        variances.append(variance)
+        flaky = bool(passes) and (any(passes) != all(passes) or variance >= 0.05)
+        row = {
+            "case_id": result.get("case_id"),
+            "trials": len(trials),
+            "pass_count": sum(1 for value in passes if value),
+            "pass_at_k": passed_once,
+            "pass_all_k": passed_all,
+            "scores": scores,
+            "variance": variance,
+            "flaky": flaky,
+        }
+        case_rows.append(row)
+        if flaky:
+            flaky_cases.append(row)
+    total = len(results)
+    return {
+        "k": k,
+        "pass_at_k": round(pass_at / total, 4) if total else 0.0,
+        "pass_all_k": round(pass_all / total, 4) if total else 0.0,
+        "trial_variance": round(sum(variances) / len(variances), 6) if variances else 0.0,
+        "flaky_cases": flaky_cases,
+        "cases": case_rows,
+    }
+
+
 @router.get("/eval-datasets")
 async def list_eval_datasets(
     _admin: dict[str, str | None] = Depends(require_eval_admin),
@@ -1132,7 +1365,7 @@ async def create_eval_dataset_version(
 
     version = str(payload.get("version") or "draft")
     status = str(payload.get("status") or "draft")
-    if status not in {"draft", "active", "archived"}:
+    if status not in {"draft", "reviewing", "active", "archived"}:
         raise HTTPException(status_code=422, detail="invalid dataset status")
     async with eval_session() as session:
         item = await create_dataset_version(
@@ -1142,6 +1375,23 @@ async def create_eval_dataset_version(
             status=status,
             created_by=admin.get("user_id"),
         )
+        await session.commit()
+    return {"dataset": item}
+
+
+@router.post("/eval-datasets/{dataset}/versions/{version}/activate")
+async def activate_eval_dataset_version(
+    dataset: str,
+    version: str,
+    _admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    from app.agent.monitoring import activate_dataset_version
+    from app.infra.eval_db import eval_session
+
+    async with eval_session() as session:
+        item = await activate_dataset_version(session, dataset_name=dataset, version=version)
+        if item is None:
+            raise HTTPException(status_code=404, detail="dataset version not found")
         await session.commit()
     return {"dataset": item}
 
@@ -1171,6 +1421,56 @@ async def create_eval_case_from_trace(
         )
         if item is None:
             raise HTTPException(status_code=404, detail="trace not found")
+        await session.commit()
+    return {"case": item}
+
+
+@router.post("/eval-datasets/{dataset}/cases/generate")
+async def generate_eval_dataset_cases(
+    dataset: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    from app.agent.monitoring import generate_dataset_cases
+    from app.infra.eval_db import eval_session
+
+    source = str(payload.get("source") or "manual")
+    version = str(payload.get("version") or "draft")
+    async with eval_session() as session:
+        cases = await generate_dataset_cases(
+            session,
+            dataset_name=dataset,
+            source=source,
+            payload=payload,
+            version=version,
+            owner=admin.get("user_id"),
+        )
+        await session.commit()
+    return {"dataset": dataset, "version": version, "source": source, "generated": len(cases), "cases": cases}
+
+
+@router.patch("/eval-datasets/{dataset}/cases/{case_id}/review")
+async def review_eval_dataset_case(
+    dataset: str,
+    case_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    from app.agent.monitoring import review_dataset_case
+    from app.infra.eval_db import eval_session
+
+    async with eval_session() as session:
+        item = await review_dataset_case(
+            session,
+            dataset_name=dataset,
+            case_id=case_id,
+            version=payload.get("version"),
+            decision=str(payload.get("decision") or "reviewing"),
+            reviewer=admin.get("user_id"),
+            notes=payload.get("notes"),
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="dataset case not found")
         await session.commit()
     return {"case": item}
 
@@ -1493,6 +1793,20 @@ async def get_eval_run_judge_results(
     if run and isinstance(run.raw_report_json, dict):
         return {"run_id": run_id, "source": "report", "judge_results": _extract_judge_from_report(run.raw_report_json)}
     raise HTTPException(status_code=404, detail="eval run not found")
+
+
+@router.get("/eval-runs/judge-agreement")
+async def get_global_judge_human_agreement(
+    window: str = Query("30d", description="Time window for agreement calculation"),
+    _admin: dict[str, str | None] = Depends(require_eval_admin),
+) -> dict[str, Any]:
+    """Calculate global agreement between LLM Judge and Human Review."""
+    from app.agent.monitoring import calculate_judge_human_agreement, parse_window_start
+    from app.infra.eval_db import eval_session
+
+    since = parse_window_start(window)
+    async with eval_session() as session:
+        return await calculate_judge_human_agreement(session, since=since, run_id=None)
 
 
 @router.get("/eval-runs/{run_id}/judge-agreement")

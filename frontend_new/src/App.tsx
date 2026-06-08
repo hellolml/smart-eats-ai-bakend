@@ -861,7 +861,7 @@ export default function App() {
           </Page>
 
           <Page active={screen === 'home'}>
-            <HomeScreen openCreateTravel={openCreateTravel} startEat={() => void startEat()} openProfile={() => go('profile')} />
+            <HomeScreen openCreateTravel={openCreateTravel} openProfile={() => go('profile')} />
           </Page>
 
           <Page active={screen === 'createTravel'}>

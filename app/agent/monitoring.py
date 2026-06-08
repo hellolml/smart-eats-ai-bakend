@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import logging
+import time
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -42,6 +44,7 @@ WINDOW_HOURS = {
     "1h": 1,
     "24h": 24,
     "7d": 24 * 7,
+    "30d": 24 * 30,
 }
 
 logger = logging.getLogger("app.agent.monitoring")
@@ -397,6 +400,12 @@ def _span_input_for_event(event_type: str, data: dict[str, Any]) -> dict[str, An
         return data.get("args") if isinstance(data.get("args"), dict) else {}
     if event_type in {"model_usage", "usage"}:
         return {"provider": data.get("provider"), "model": data.get("model") or data.get("model_name")}
+    if event_type == "context":
+        return {
+            "scene": data.get("scene"),
+            "worker": data.get("worker") or data.get("agent_id"),
+            "plan_type": data.get("plan_type"),
+        }
     return {}
 
 
@@ -409,6 +418,13 @@ def _span_output_for_event(event_type: str, data: dict[str, Any]) -> dict[str, A
         }
     if event_type in {"model_usage", "usage"}:
         return {"usage": data.get("usage") if isinstance(data.get("usage"), dict) else data}
+    if event_type == "context":
+        return {
+            "active_skills": data.get("active_skills"),
+            "allowed_tools": data.get("allowed_tools"),
+            "context_budget": data.get("context_budget"),
+            "retrieved_memory_count": data.get("retrieved_memory_count"),
+        }
     if event_type == "final":
         return data
     return {}
@@ -433,6 +449,10 @@ def _trace_span_from_event(
             started_at = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
         except (OSError, ValueError):
             started_at = fallback_started_at
+    numeric_duration = float(duration_ms) if isinstance(duration_ms, (int, float)) else None
+    ended_at = None
+    if started_at is not None and numeric_duration is not None:
+        ended_at = started_at + timedelta(milliseconds=max(0.0, numeric_duration))
     status = _span_status_for_event(event_type, data)
     return TraceSpan(
         id=str(uuid4()),
@@ -444,14 +464,70 @@ def _trace_span_from_event(
         name=_span_name_for_event(event_type, data, index),
         status=status,
         started_at=started_at,
-        ended_at=None,
-        duration_ms=float(duration_ms) if isinstance(duration_ms, (int, float)) else None,
+        ended_at=ended_at,
+        duration_ms=numeric_duration,
         input_json=_span_input_for_event(event_type, data),
         output_json=_span_output_for_event(event_type, data),
         metadata_json={"event_type": event_type, "data": data},
         score_json=None,
         error=str(data.get("error") or data.get("error_reason") or data.get("message") or "") if status == "error" else None,
     )
+
+
+def _normalize_event_timing(
+    events: list[dict[str, Any]],
+    *,
+    started_at: datetime | None,
+    ended_at: datetime | None,
+    total_duration_ms: float,
+) -> list[dict[str, Any]]:
+    """Backfill event timestamps/durations without changing the public event shape."""
+    if not events:
+        return []
+    start_ts = started_at.timestamp() if started_at else None
+    end_ts = ended_at.timestamp() if ended_at else None
+    synthetic_step_ms = total_duration_ms / max(len(events), 1) if total_duration_ms > 0 else 0.0
+    normalized: list[dict[str, Any]] = []
+    for index, event in enumerate(events):
+        item = dict(event)
+        data = dict(_event_data(item))
+        if not isinstance(item.get("data"), dict):
+            item["data"] = data
+        timestamp = data.get("timestamp")
+        if not isinstance(timestamp, (int, float)) and start_ts is not None:
+            data["timestamp"] = start_ts + (synthetic_step_ms * index / 1000.0)
+        if "elapsed_ms" not in data and synthetic_step_ms > 0:
+            data["elapsed_ms"] = synthetic_step_ms * index
+        item["data"] = data
+        normalized.append(item)
+
+    # Pair tool_call -> tool_result and use the observed interval as duration
+    # when the runtime did not emit a tool latency.
+    pending_by_name: dict[str, int] = {}
+    for index, event in enumerate(normalized):
+        data = _event_data(event)
+        event_type = str(event.get("event") or "")
+        tool_name = data.get("name")
+        if event_type == "tool_call" and tool_name:
+            pending_by_name[str(tool_name)] = index
+        elif event_type == "tool_result" and tool_name and str(tool_name) in pending_by_name:
+            call_index = pending_by_name.pop(str(tool_name))
+            call_data = _event_data(normalized[call_index])
+            call_ts = call_data.get("timestamp")
+            result_ts = data.get("timestamp")
+            if isinstance(call_ts, (int, float)) and isinstance(result_ts, (int, float)):
+                duration_ms = max(0.0, (float(result_ts) - float(call_ts)) * 1000.0)
+                if duration_ms > 0:
+                    data.setdefault("duration_ms", duration_ms)
+                    call_data.setdefault("duration_ms", duration_ms)
+    if end_ts is not None:
+        for index, event in enumerate(normalized):
+            data = _event_data(event)
+            if index == len(normalized) - 1 and "duration_ms" not in data:
+                ts = data.get("timestamp")
+                if isinstance(ts, (int, float)):
+                    data["duration_ms"] = max(0.0, (end_ts - float(ts)) * 1000.0)
+    return normalized
 
 
 async def persist_realtime_conversation(
@@ -547,6 +623,13 @@ async def persist_realtime_conversation(
     # Ensure the parent row exists before child rows without ORM relationships
     # are autoflushed by later queries/inserts.
     await session.flush()
+
+    events = _normalize_event_timing(
+        events,
+        started_at=started_at,
+        ended_at=ended_at,
+        total_duration_ms=latency_ms,
+    )
 
     tool_calls: list[ConversationToolCall] = []
     result_by_name: dict[str, dict[str, Any]] = {}
@@ -1087,6 +1170,185 @@ async def create_dataset_version(
         created_by=created_by,
     )
     return dataset_summary(dataset, [])
+
+
+def _generated_case_json(payload: dict[str, Any], *, source: str, case_id: str, owner: str | None) -> dict[str, Any]:
+    expectations = payload.get("expectations") if isinstance(payload.get("expectations"), dict) else {}
+    scoring = payload.get("scoring") if isinstance(payload.get("scoring"), dict) else {}
+    task = str(payload.get("task") or payload.get("input") or payload.get("goal") or "待补充评测任务")
+    return {
+        "id": case_id,
+        "category": str(payload.get("category") or source or "regression"),
+        "scene": str(payload.get("scene") or "chat"),
+        "task": task,
+        "initial_context": payload.get("initial_context") if isinstance(payload.get("initial_context"), dict) else {},
+        "expectations": {
+            "expected_scene": payload.get("expected_scene"),
+            "expected_tools": payload.get("expected_tools") or [],
+            "must_include": payload.get("must_include") or [],
+            "must_not_include": payload.get("must_not_include") or [],
+            **expectations,
+        },
+        "scoring": scoring or {
+            "task_completion": 0.35,
+            "schema_compliance": 0.2,
+            "tool_correctness": 0.2,
+            "safety": 0.15,
+            "efficiency": 0.1,
+        },
+        "tags": [source, *(payload.get("tags") if isinstance(payload.get("tags"), list) else [])],
+        "priority": str(payload.get("priority") or "p1"),
+        "difficulty": str(payload.get("difficulty") or "medium"),
+        "owner": owner,
+        "generator": {
+            "source": source,
+            "notes": payload.get("notes"),
+            "created_from": payload.get("created_from"),
+        },
+    }
+
+
+async def generate_dataset_cases(
+    session: AsyncSession,
+    *,
+    dataset_name: str,
+    source: str,
+    payload: dict[str, Any],
+    version: str = "draft",
+    owner: str | None = None,
+) -> list[dict[str, Any]]:
+    """Generate draft dataset cases from trace/manual/document/report style inputs."""
+    source = source if source in {"trace", "manual", "document", "report", "failure_report", "simulation"} else "manual"
+    if source == "trace":
+        run_id = str(payload.get("run_id") or payload.get("trace_id") or "")
+        if not run_id:
+            return []
+        run = await session.scalar(
+            select(ConversationRun).where((ConversationRun.id == run_id) | (ConversationRun.trace_id == run_id))
+        )
+        if not run:
+            return []
+        case = await create_dataset_case_from_trace(
+            session,
+            run_id=run.id,
+            dataset_name=dataset_name,
+            version=version,
+            priority=str(payload.get("priority") or "p1"),
+            category=str(payload.get("category") or "regression"),
+            owner=owner,
+            review_status="draft",
+        )
+        return [case] if case else []
+
+    raw_cases = payload.get("cases") if isinstance(payload.get("cases"), list) else [payload]
+    dataset = await ensure_eval_dataset(
+        session,
+        name=dataset_name,
+        version=version,
+        suite=dataset_name,
+        status="draft",
+        created_by=owner,
+    )
+    generated: list[dict[str, Any]] = []
+    for index, raw_case in enumerate(raw_cases):
+        case_payload = raw_case if isinstance(raw_case, dict) else {"task": str(raw_case)}
+        prefix = "report" if source == "failure_report" else source
+        case_id = str(case_payload.get("id") or case_payload.get("case_id") or f"{prefix}-{uuid4().hex[:10]}")
+        case_json = _generated_case_json(case_payload, source=source, case_id=case_id, owner=owner)
+        existing = await session.scalar(
+            select(EvalDatasetCase).where(EvalDatasetCase.dataset_id == dataset.id, EvalDatasetCase.case_id == case_id)
+        )
+        if existing:
+            existing.source = source
+            existing.case_json = case_json
+            existing.scene = case_json.get("scene")
+            existing.category = case_json.get("category")
+            existing.priority = case_json.get("priority")
+            existing.owner = owner
+            existing.review_status = "draft"
+            item = existing
+        else:
+            item = EvalDatasetCase(
+                id=str(uuid4()),
+                dataset_id=dataset.id,
+                case_id=case_id,
+                source=source,
+                case_json=case_json,
+                scene=case_json.get("scene"),
+                category=case_json.get("category"),
+                priority=case_json.get("priority"),
+                owner=owner,
+                review_status="draft",
+            )
+            session.add(item)
+            await session.flush()
+        if source in {"report", "failure_report"}:
+            session.add(EvalCaseLineage(
+                id=str(uuid4()),
+                source_run_id=str(payload.get("run_id") or "") or None,
+                source_trace_id=str(payload.get("trace_id") or "") or None,
+                target_case_id=case_id,
+                dataset_case_id=item.id,
+            ))
+        generated.append(dataset_case_summary(dataset, item))
+    return generated
+
+
+async def review_dataset_case(
+    session: AsyncSession,
+    *,
+    dataset_name: str,
+    case_id: str,
+    decision: str,
+    reviewer: str | None,
+    notes: str | None = None,
+    version: str | None = None,
+) -> dict[str, Any] | None:
+    allowed = {"draft", "reviewing", "approved", "rejected", "needs_changes", "active", "archived"}
+    if decision not in allowed:
+        decision = "reviewing"
+    query = select(EvalDataset).where(EvalDataset.name == dataset_name)
+    if version:
+        query = query.where(EvalDataset.version == version)
+    else:
+        query = query.order_by(desc(EvalDataset.created_at))
+    dataset = await session.scalar(query)
+    if not dataset:
+        return None
+    case = await session.scalar(
+        select(EvalDatasetCase).where(EvalDatasetCase.dataset_id == dataset.id, EvalDatasetCase.case_id == case_id)
+    )
+    if not case:
+        return None
+    case.review_status = decision
+    case.owner = reviewer or case.owner
+    case_json = case.case_json if isinstance(case.case_json, dict) else {}
+    case_json["review"] = {
+        "decision": decision,
+        "reviewer": reviewer,
+        "notes": notes,
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    case.case_json = case_json
+    return dataset_case_summary(dataset, case)
+
+
+async def activate_dataset_version(
+    session: AsyncSession,
+    *,
+    dataset_name: str,
+    version: str,
+) -> dict[str, Any] | None:
+    datasets = (await session.execute(select(EvalDataset).where(EvalDataset.name == dataset_name))).scalars().all()
+    target = next((dataset for dataset in datasets if dataset.version == version), None)
+    if not target:
+        return None
+    for dataset in datasets:
+        dataset.status = "active" if dataset.id == target.id else ("archived" if dataset.status == "active" else dataset.status)
+    cases = (await session.execute(
+        select(EvalDatasetCase).where(EvalDatasetCase.dataset_id == target.id)
+    )).scalars().all()
+    return dataset_summary(target, list(cases))
 
 
 def alert_summary(alert: EvaluationAlert) -> dict[str, Any]:
@@ -1717,19 +1979,278 @@ async def create_simulation_scenario(session: AsyncSession, payload: dict[str, A
     return simulation_scenario_summary(item)
 
 
-async def create_simulation_run(session: AsyncSession, scenario_id: str) -> dict[str, Any] | None:
+async def create_simulation_run(
+    session: AsyncSession,
+    scenario_id: str,
+    *,
+    max_turns_override: int | None = None,
+    runner: str = "deterministic",
+) -> dict[str, Any] | None:
     scenario = await session.scalar(select(SimulationScenario).where(SimulationScenario.id == scenario_id))
     if not scenario:
         return None
+    if runner in {"live_agent", "agent"}:
+        return await _create_live_agent_simulation_run(
+            session,
+            scenario,
+            max_turns_override=max_turns_override,
+        )
+    scenario_json = scenario.scenario_json if isinstance(scenario.scenario_json, dict) else {}
+    max_turns = int(max_turns_override or scenario_json.get("max_turns") or 5)
+    max_turns = max(1, min(max_turns, 12))
+    profile = scenario_json.get("simulated_user_profile") or scenario_json.get("persona") or "普通用户"
+    goal = scenario_json.get("goal") or scenario_json.get("task") or scenario.description or scenario.name
+    success_criteria = scenario_json.get("success_criteria") if isinstance(scenario_json.get("success_criteria"), list) else []
+    transcript: list[dict[str, Any]] = []
+    for turn in range(1, max_turns + 1):
+        if turn == 1:
+            user_text = str(scenario_json.get("initial_user_message") or f"我是{profile}，我想完成：{goal}")
+        else:
+            user_text = f"第 {turn} 轮追问：请继续帮我推进目标，并确认是否满足关键条件。"
+        agent_text = (
+            "Synthetic Agent 检查了用户目标、约束和已知上下文。"
+            if turn < min(max_turns, 2)
+            else "Synthetic Agent 给出总结，并声明已满足可验证成功标准。"
+        )
+        transcript.append({
+            "turn": turn,
+            "user": user_text,
+            "agent": agent_text,
+            "trace": {
+                "steps": [
+                    {"type": "understand_goal", "status": "ok", "summary": goal},
+                    {"type": "check_constraints", "status": "ok", "summary": success_criteria},
+                    {"type": "respond", "status": "ok"},
+                ],
+            },
+        })
+        if turn >= 2 and success_criteria:
+            break
+    termination_reason = "goal_reached" if success_criteria else ("max_turns" if len(transcript) >= max_turns else "completed")
+    scores = {
+        "task_success_proxy": 1.0 if termination_reason == "goal_reached" else 0.7,
+        "partial_success_proxy": 1.0 if transcript else 0.0,
+        "constraint_satisfaction_rule": 1.0 if success_criteria else 0.6,
+        "conversation_turns": len(transcript),
+        "invalid_loop_rate": 0.0,
+    }
     item = SimulationRun(
         id=str(uuid4()),
         scenario_id=scenario_id,
-        status="queued",
-        result_json={"message": "Simulation runner is queued for future worker execution."},
-        scores_json={},
+        status="succeeded",
+        result_json={
+            "runner": "synthetic_user_v1_deterministic",
+            "goal": goal,
+            "persona": profile,
+            "success_criteria": success_criteria,
+            "termination_reason": termination_reason,
+            "transcript": transcript,
+            "can_convert_to_dataset": True,
+        },
+        scores_json=scores,
+        finished_at=datetime.now(timezone.utc),
     )
     session.add(item)
     await session.flush()
+    return simulation_run_summary(item)
+
+
+class _SimulationRequest:
+    def __init__(self, trace_id: str):
+        self.state = type("State", (), {"trace_id": trace_id})()
+        self.headers: dict[str, str] = {}
+        self.client = type("Client", (), {"host": "synthetic-user"})()
+
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+class _SimulationRedis:
+    async def delete(self, *_keys: str) -> int:
+        return 0
+
+    async def get(self, _key: str) -> None:
+        return None
+
+    async def set(self, *_args: Any, **_kwargs: Any) -> bool:
+        return True
+
+    async def lpop(self, _key: str) -> None:
+        return None
+
+
+def _synthetic_user_message(
+    *,
+    turn: int,
+    goal: str,
+    persona: str,
+    success_criteria: list[Any],
+    previous_final: dict[str, Any] | None,
+) -> str:
+    if turn == 1:
+        return f"我是{persona}，我想完成：{goal}"
+    if previous_final:
+        missing = "、".join(str(item) for item in success_criteria[:3]) or "关键条件"
+        return f"你刚才的回答我看到了。请继续确认是否满足这些条件：{missing}，并给我明确下一步。"
+    return "请继续推进，不要重复上一轮，并说明下一步该做什么。"
+
+
+def _final_json_from_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if event.get("event") != "final":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        answer = data.get("answer")
+        if isinstance(answer, dict):
+            return answer
+        final = data.get("final")
+        if isinstance(final, dict):
+            return final
+    return None
+
+
+def _json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return str(value)
+
+
+async def _create_live_agent_simulation_run(
+    session: AsyncSession,
+    scenario: SimulationScenario,
+    *,
+    max_turns_override: int | None = None,
+) -> dict[str, Any]:
+    from app.agent.graph import run_chat_stream
+    from app.agent.state import ChatState
+    from app.infra.db import AsyncSessionLocal
+    from app.infra.models.chat import ChatSession
+
+    scenario_json = scenario.scenario_json if isinstance(scenario.scenario_json, dict) else {}
+    max_turns = max(1, min(int(max_turns_override or scenario_json.get("max_turns") or 5), 12))
+    profile = str(scenario_json.get("simulated_user_profile") or scenario_json.get("persona") or "普通用户")
+    goal = str(scenario_json.get("goal") or scenario_json.get("task") or scenario.description or scenario.name)
+    success_criteria = scenario_json.get("success_criteria") if isinstance(scenario_json.get("success_criteria"), list) else []
+    scene = str(scenario_json.get("scene") or "chat")
+    user_id = str(scenario_json.get("user_id") or "synthetic-user")
+    session_id = str(uuid4())
+    trace_root = str(uuid4())
+    transcript: list[dict[str, Any]] = []
+    previous_final: dict[str, Any] | None = None
+    started = datetime.now(timezone.utc)
+    status = "succeeded"
+    error: str | None = None
+
+    async with AsyncSessionLocal() as app_db:
+        app_db.add(ChatSession(
+            id=session_id,
+            user_id=user_id,
+            scene=scene,
+            title=f"Simulation: {scenario.name}"[:255],
+        ))
+        await app_db.commit()
+        redis_client = _SimulationRedis()
+        for turn in range(1, max_turns + 1):
+            message = _synthetic_user_message(
+                turn=turn,
+                goal=goal,
+                persona=profile,
+                success_criteria=success_criteria,
+                previous_final=previous_final,
+            )
+            trace_id = f"{trace_root}-{turn}"
+            state = ChatState(
+                session_id=session_id,
+                user_id=user_id,
+                message=message,
+                trace_id=trace_id,
+                scene=scene,
+                context_overrides={
+                    "intent": scenario_json.get("intent"),
+                    "ui_scene": scene,
+                    "simulation": {
+                        "scenario_id": scenario.id,
+                        "turn": turn,
+                        "goal": goal,
+                        "success_criteria": success_criteria,
+                    },
+                },
+                client_ip="synthetic-user",
+            )
+            events: list[dict[str, Any]] = []
+            turn_started = time.monotonic()
+            try:
+                async for item in run_chat_stream(_SimulationRequest(trace_id), app_db, redis_client, state):
+                    events.append(item)
+            except Exception as exc:
+                status = "failed"
+                error = str(exc)
+                transcript.append({
+                    "turn": turn,
+                    "user": message,
+                    "agent": "",
+                    "trace_id": trace_id,
+                    "status": "failed",
+                    "error": error,
+                    "events": _json_safe(events),
+                    "latency_ms": round((time.monotonic() - turn_started) * 1000, 2),
+                })
+                break
+            previous_final = _final_json_from_events(events)
+            agent_text = ""
+            for event in events:
+                if event.get("event") == "delta":
+                    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                    agent_text += str(data.get("token") or "")
+            transcript.append({
+                "turn": turn,
+                "user": message,
+                "agent": agent_text,
+                "trace_id": trace_id,
+                "status": "completed",
+                "final": _json_safe(previous_final or {}),
+                "events": _json_safe(events),
+                "latency_ms": round((time.monotonic() - turn_started) * 1000, 2),
+            })
+            if success_criteria and previous_final and turn >= 2:
+                break
+
+    termination_reason = "agent_failed" if status == "failed" else ("goal_reached" if success_criteria and previous_final else "max_turns")
+    scores = {
+        "task_success_proxy": 1.0 if termination_reason == "goal_reached" else 0.0 if status == "failed" else 0.6,
+        "partial_success_proxy": 1.0 if transcript else 0.0,
+        "constraint_satisfaction_rule": 1.0 if previous_final else 0.0,
+        "conversation_turns": len(transcript),
+        "invalid_loop_rate": 0.0,
+    }
+    item = SimulationRun(
+        id=str(uuid4()),
+        scenario_id=scenario.id,
+        status=status,
+        result_json={
+            "runner": "live_agent",
+            "session_id": session_id,
+            "trace_root": trace_root,
+            "goal": goal,
+            "persona": profile,
+            "scene": scene,
+            "success_criteria": success_criteria,
+            "termination_reason": termination_reason,
+            "transcript": transcript,
+            "can_convert_to_dataset": True,
+            "started_at": started.isoformat(),
+        },
+        scores_json=scores,
+        error=error,
+        finished_at=datetime.now(timezone.utc),
+    )
+    session.add(item)
+    await session.flush()
+    return simulation_run_summary(item)
+
+
+def simulation_run_summary(item: SimulationRun) -> dict[str, Any]:
     return {
         "id": item.id,
         "scenario_id": item.scenario_id,
@@ -1739,6 +2260,67 @@ async def create_simulation_run(session: AsyncSession, scenario_id: str) -> dict
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "finished_at": item.finished_at.isoformat() if item.finished_at else None,
     }
+
+
+async def load_simulation_run(session: AsyncSession, scenario_id: str, run_id: str) -> dict[str, Any] | None:
+    item = await session.scalar(
+        select(SimulationRun).where(SimulationRun.scenario_id == scenario_id, SimulationRun.id == run_id)
+    )
+    return simulation_run_summary(item) if item else None
+
+
+async def simulation_run_to_dataset_case(
+    session: AsyncSession,
+    *,
+    scenario_id: str,
+    run_id: str,
+    dataset_name: str,
+    version: str = "draft",
+    owner: str | None = None,
+    priority: str = "p1",
+) -> dict[str, Any] | None:
+    scenario = await session.scalar(select(SimulationScenario).where(SimulationScenario.id == scenario_id))
+    run = await session.scalar(
+        select(SimulationRun).where(SimulationRun.scenario_id == scenario_id, SimulationRun.id == run_id)
+    )
+    if not scenario or not run:
+        return None
+    result = run.result_json if isinstance(run.result_json, dict) else {}
+    scores = run.scores_json if isinstance(run.scores_json, dict) else {}
+    generated = await generate_dataset_cases(
+        session,
+        dataset_name=dataset_name,
+        source="simulation",
+        version=version,
+        owner=owner,
+        payload={
+            "id": f"sim-{run.id}",
+            "task": result.get("goal") or scenario.name,
+            "scene": (scenario.scenario_json or {}).get("scene") if isinstance(scenario.scenario_json, dict) else "chat",
+            "category": "simulation",
+            "priority": priority,
+            "expectations": {
+                "success_criteria": result.get("success_criteria") or [],
+                "termination_reason": result.get("termination_reason"),
+            },
+            "scoring": {
+                "task_success_proxy": scores.get("task_success_proxy", 0.0),
+                "constraint_satisfaction_rule": scores.get("constraint_satisfaction_rule", 0.0),
+            },
+            "created_from": {"simulation_scenario_id": scenario_id, "simulation_run_id": run_id},
+            "tags": ["synthetic_user", "multi_turn"],
+        },
+    )
+    case = generated[0] if generated else None
+    if case:
+        session.add(EvalCaseLineage(
+            id=str(uuid4()),
+            source_run_id=run.id,
+            source_trace_id=None,
+            target_case_id=str(case.get("case_id") or ""),
+            dataset_case_id=None,
+        ))
+    return case
 
 
 def conversation_run_summary(run: ConversationRun, *, session_title: str | None = None) -> dict[str, Any]:

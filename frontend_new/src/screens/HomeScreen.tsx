@@ -3,7 +3,7 @@ import { ChevronRight, MoreHorizontal, Plane, User, type LucideIcon } from 'luci
 import { ScreenScroll } from '../components/Layout';
 import { cn } from '../lib/utils';
 
-export function HomeScreen({ openCreateTravel, startEat, openProfile }: { openCreateTravel: () => void; startEat: () => void; openProfile: () => void }) {
+export function HomeScreen({ openCreateTravel, openProfile }: { openCreateTravel: () => void; openProfile: () => void }) {
   return (
     <ScreenScroll>
       <div className="flex items-center justify-between">
@@ -15,15 +15,6 @@ export function HomeScreen({ openCreateTravel, startEat, openProfile }: { openCr
           <button onClick={openProfile} className="flex h-9 w-9 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-gray-100" aria-label="个人"><User size={18} /></button>
         </div>
       </div>
-
-      <h2 className="mb-3 mt-8 text-sm font-black">快速入口</h2>
-      <button onClick={startEat} className="flex w-full items-center justify-between rounded-2xl bg-orange-50 p-4 text-left">
-        <span>
-          <span className="flex items-center gap-2 text-sm font-black"><span className="h-5 w-5 rounded-full bg-orange-400 ring-4 ring-orange-100" />快决策 · 吃什么</span>
-          <span className="mt-2 block text-xs text-gray-400">不知道吃什么？来问问我</span>
-        </span>
-        <span className="grid h-14 w-16 place-items-center rounded-full bg-gradient-to-br from-orange-200 to-orange-400 text-2xl">🍛</span>
-      </button>
 
       <h2 className="mb-3 mt-8 text-sm font-black">更多计划</h2>
       <div className="space-y-3">

@@ -34,6 +34,34 @@ const FAILURE_COPY: Record<string, { title: string; action: string; tone: Tone }
   none: { title: '未发现明确失败', action: '无需处理。', tone: 'good' },
 };
 
+const METRIC_COPY: Record<string, string> = {
+  overall_quality: '综合质量',
+  task_success_proxy: '任务完成',
+  partial_success_proxy: '部分完成',
+  schema_compliance: '结构合规',
+  constraint_satisfaction_rule: '约束满足',
+  tool_call_accuracy_proxy: '工具准确',
+  no_leak: '无泄露',
+  recovery_rate: '恢复能力',
+  repeated_action_rate: '重复动作',
+  tool_error_rate: '工具失败',
+  provider_error_rate: '模型失败',
+};
+
+const SCORE_METRICS = [
+  'overall_quality',
+  'task_success_proxy',
+  'partial_success_proxy',
+  'schema_compliance',
+  'constraint_satisfaction_rule',
+  'tool_call_accuracy_proxy',
+  'no_leak',
+  'recovery_rate',
+  'repeated_action_rate',
+  'tool_error_rate',
+  'provider_error_rate',
+];
+
 const displayValue = (value: unknown, fallback = 'n/a') => {
   if (value === null || value === undefined || value === '') return fallback;
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -63,6 +91,19 @@ function sessionTitle(value: any) {
     || '未命名会话';
 }
 
+function originalSessionHref(value: any) {
+  const run = value?.run || value?.latest || value || {};
+  const sessionId = run.session_id || value?.session_id || value?.sessionId;
+  if (!sessionId) return '';
+  const route = run.scene === 'travel_planner' || value?.scene === 'travel_planner' ? '/travel-planner' : '/ai-chat';
+  return `#${route}?session_id=${encodeURIComponent(String(sessionId))}`;
+}
+
+function openOriginalSession(value: any) {
+  const href = originalSessionHref(value);
+  if (href) window.open(href, '_blank', 'noopener,noreferrer');
+}
+
 function modelLabel(value: any) {
   const config = value?.model_config || {};
   return config.provider_value
@@ -70,6 +111,34 @@ function modelLabel(value: any) {
     || config.model_writer
     || value?.model_name
     || '未知模型';
+}
+
+function scoreMetricRows(detail: any) {
+  const run = detail?.run || detail?.latest || detail || {};
+  const metrics = detail?.metrics && typeof detail.metrics === 'object' ? detail.metrics : {};
+  return SCORE_METRICS
+    .map((key) => {
+      const value = metrics[key] ?? run[key];
+      if (value === undefined || value === null || value === '') return null;
+      return {
+        key,
+        label: METRIC_COPY[key] || key,
+        value: Number(value),
+        tone: metricTone(key, value),
+      };
+    })
+    .filter(Boolean) as Array<{ key: string; label: string; value: number; tone: Tone }>;
+}
+
+function metricTone(key: string, value: any): Tone {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'neutral';
+  if (key.includes('error') || key.includes('fallback') || key === 'repeated_action_rate') {
+    if (n <= 0.02) return 'good';
+    if (n <= 0.15) return 'warn';
+    return 'bad';
+  }
+  return scoreTone(n);
 }
 
 function toolLabel(name?: string | null) {
@@ -173,20 +242,33 @@ export function EvalWorkbenchScreen({ onBack }: { onBack: () => void }) {
     <>
       <Header title="质检运营台" subtitle="AgentEval Hub / Quality Ops" onBack={onBack} />
 
-      <div className="border-b border-gray-100 bg-white px-4 py-3">
-        <div className="grid grid-cols-2 rounded-xl bg-gray-100 p-1">
+      <div className="border-b border-gray-100 bg-white px-4 py-4">
+        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-lg font-black text-gray-950">{quality.success >= 0.8 ? '整体质量稳定' : '质量需要关注'}</div>
+              <div className="mt-1 text-xs font-bold leading-relaxed text-gray-500">
+                默认看结论、原因和下一步；专家视图里保留 Trace 和原始指标。
+              </div>
+            </div>
+            <span className={`rounded-full px-3 py-1 text-xs font-black ${quality.success >= 0.8 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+              {pct(quality.success)}
+            </span>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-2 rounded-xl bg-gray-100 p-1">
           <button onClick={() => setExpertMode(false)} className={`rounded-lg py-2 text-xs font-black ${!expertMode ? 'bg-white text-gray-950 shadow-sm' : 'text-gray-500'}`}>业务视图</button>
           <button onClick={() => setExpertMode(true)} className={`rounded-lg py-2 text-xs font-black ${expertMode ? 'bg-white text-gray-950 shadow-sm' : 'text-gray-500'}`}>专家视图</button>
         </div>
       </div>
 
-      <div className="flex overflow-x-auto border-b border-gray-200 bg-white px-2">
+      <div className="flex gap-2 overflow-x-auto border-b border-gray-200 bg-white px-3 py-2">
         {TABS.map(({ key, label }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`min-w-[72px] flex-1 py-3 text-xs font-black ${
-              tab === key ? 'border-b-2 border-gray-950 text-gray-950' : 'text-gray-400'
+            className={`min-w-[74px] shrink-0 rounded-full px-3 py-2 text-xs font-black ${
+              tab === key ? 'bg-gray-950 text-white shadow-sm' : 'bg-gray-50 text-gray-500'
             }`}
           >
             {label}
@@ -207,7 +289,7 @@ export function EvalWorkbenchScreen({ onBack }: { onBack: () => void }) {
         {!loading && !error && tab === 'cost' && <CostTab data={cost} />}
         {!loading && !error && tab === 'safety' && <SafetyTab data={safety} />}
         {!loading && !error && tab === 'reviews' && <ReviewsTab data={reviews} onRefresh={loadAll} onOpenTrace={openTrace} />}
-        {!loading && !error && tab === 'offline' && <OfflineTab reports={reports} jobs={jobs} datasets={datasets} />}
+        {!loading && !error && tab === 'offline' && <OfflineTab reports={reports} jobs={jobs} datasets={datasets} onRefresh={loadAll} />}
       </ScreenScroll>
     </>
   );
@@ -301,6 +383,9 @@ function SessionsTab({ sessions, selectedTrace, expertMode, onOpenTrace }: { ses
                 </div>
               )}
               <div className="mt-1 text-xs font-semibold text-gray-500">{session.runs.length} 轮 · {ms(run.latency_ms || run.total_duration_ms)} · {modelLabel(run)}</div>
+              <div className="mt-3">
+                <span onClick={(event) => { event.stopPropagation(); openOriginalSession(run); }} className="inline-flex rounded-full bg-gray-100 px-3 py-2 text-xs font-black text-gray-700">原始会话</span>
+              </div>
             </button>
           );
         })}
@@ -324,6 +409,7 @@ function TraceDetailMobile({ detail, expertMode }: { detail: any; expertMode: bo
         body={`${sessionTitle(run)} · ${sceneLabel(run.scene)} · ${modelLabel(run)} · ${ms(run.latency_ms)}`}
         tone={run.environment_failure ? 'warn' : scoreTone(run.overall_quality)}
       />
+      <button onClick={() => openOriginalSession(run)} className="w-full rounded-xl bg-gray-950 py-3 text-sm font-black text-white">打开原始会话</button>
       {failureKey(run) !== 'none' && (
         <div className="rounded-xl bg-white p-3 shadow-sm">
           <div className="flex items-center justify-between gap-2">
@@ -336,6 +422,7 @@ function TraceDetailMobile({ detail, expertMode }: { detail: any; expertMode: bo
           )}
         </div>
       )}
+      <ScoreBreakdownMobile detail={detail} />
       <div className="space-y-2">
         {events.map((event: any, index: number) => (
           <div key={event.id || index} className="rounded-xl border border-gray-100 bg-white p-3">
@@ -346,6 +433,12 @@ function TraceDetailMobile({ detail, expertMode }: { detail: any; expertMode: bo
                 <div className="truncate text-xs font-semibold text-gray-500">{event.name || event.tool_name || event.event_type || event.span_type}</div>
               </div>
               <span className="text-xs font-bold text-gray-400">{ms(event.duration_ms)}</span>
+            </div>
+            <div className="mt-2 grid gap-1 text-xs font-semibold text-gray-500">
+              {event.input && <div>输入：{displayValue(event.input)}</div>}
+              {event.output && <div>输出：{displayValue(event.output)}</div>}
+              {event.data && <div>内容：{displayValue(event.data)}</div>}
+              {event.error && <div className="text-red-600">错误：{displayValue(event.error)}</div>}
             </div>
           </div>
         ))}
@@ -383,13 +476,16 @@ function FailuresTab({ items, records, onOpenTrace }: { items: any[]; records: a
       </Section>
       <Section title="需要复核的执行">
         {records.filter((run) => run.status !== 'completed' || run.environment_failure || run.agent_fallback || Number(run.overall_quality || 1) < 0.8).slice(0, 8).map((run) => (
-          <button key={run.id} onClick={() => onOpenTrace(run.id)} className="w-full rounded-xl bg-white p-3 text-left shadow-sm">
+          <div key={run.id} className="w-full rounded-xl bg-white p-3 text-left shadow-sm">
+            <button onClick={() => onOpenTrace(run.id)} className="w-full text-left">
             <div className="flex items-center justify-between">
               <span className="font-mono text-xs font-black text-blue-700">{run.id}</span>
               <Badge tone={scoreTone(run.overall_quality)}>{pct(run.overall_quality)}</Badge>
             </div>
             <div className="mt-1 text-xs font-semibold text-gray-500">{sceneLabel(run.scene)} · {run.status} · {failureInfo(failureKey(run)).title}</div>
-          </button>
+            </button>
+            <button onClick={() => openOriginalSession(run)} className="mt-3 rounded-full bg-gray-100 px-3 py-2 text-xs font-black text-gray-700">原始会话</button>
+          </div>
         ))}
       </Section>
     </div>
@@ -445,6 +541,7 @@ function ReviewsTab({ data, onRefresh, onOpenTrace }: { data: any; onRefresh: ()
               <button onClick={() => appApi.evaluations.submitMonitoringReview(run.id, { decision: 'rejected', reason: 'manual_reject' }).then(onRefresh)} className="rounded-full bg-red-50 py-2 text-xs font-black text-red-600">拒绝</button>
               <button onClick={() => appApi.evaluations.submitMonitoringReview(run.id, { decision: 'converted_to_case', reason: 'converted_to_case' }).then(onRefresh)} className="rounded-full bg-blue-50 py-2 text-xs font-black text-blue-700">转 Case</button>
               <button onClick={() => onOpenTrace(run.id)} className="rounded-full bg-gray-100 py-2 text-xs font-black text-gray-700">看过程</button>
+              <button onClick={() => openOriginalSession(run)} className="rounded-full bg-gray-100 py-2 text-xs font-black text-gray-700">原始会话</button>
             </div>
           </div>
         );
@@ -454,7 +551,26 @@ function ReviewsTab({ data, onRefresh, onOpenTrace }: { data: any; onRefresh: ()
   );
 }
 
-function OfflineTab({ reports, jobs, datasets }: { reports: any[]; jobs: any[]; datasets: any[] }) {
+function OfflineTab({ reports, jobs, datasets, onRefresh }: { reports: any[]; jobs: any[]; datasets: any[]; onRefresh: () => Promise<void> }) {
+  const [running, setRunning] = useState(false);
+  const startQuick = async () => {
+    setRunning(true);
+    try {
+      await appApi.evaluations.createEvalJob({
+        runner: 'fixture',
+        suite: 'quick',
+        num_trials: 1,
+        base_url: 'http://127.0.0.1:8000',
+        include_llm_judge: false,
+        outcome_verify: false,
+        persist_db: true,
+        require_db_persist: false,
+      });
+      await onRefresh();
+    } finally {
+      setRunning(false);
+    }
+  };
   return (
     <div className="space-y-4 px-4 pb-8">
       <div className="grid grid-cols-2 gap-2">
@@ -463,6 +579,20 @@ function OfflineTab({ reports, jobs, datasets }: { reports: any[]; jobs: any[]; 
         <Kpi label="数据集" value={datasets.length} />
         <Kpi label="最新通过率" value={reports[0] ? pct(reports[0].overall_success_rate) : 'n/a'} />
       </div>
+      <button disabled={running || jobs.some((item) => ['queued', 'running'].includes(item.status))} onClick={startQuick} className="w-full rounded-xl bg-gray-950 py-3 text-sm font-black text-white disabled:bg-gray-300">
+        {running ? '创建中...' : jobs.some((item) => ['queued', 'running'].includes(item.status)) ? '已有评测任务运行中' : '一键运行 fixture quick'}
+      </button>
+      <Section title="最近任务">
+        {jobs.slice(0, 5).map((job) => (
+          <div key={job.id} className="rounded-xl bg-white p-3 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate font-mono text-xs font-black text-blue-700">{job.id}</span>
+              <Badge tone={job.status === 'succeeded' ? 'good' : job.status === 'failed' ? 'bad' : 'warn'}>{job.status}</Badge>
+            </div>
+            <div className="mt-1 text-xs font-semibold text-gray-500">{job.runner || 'n/a'} / {job.suite || 'n/a'} · {job.report_name || '暂无报告'}</div>
+          </div>
+        ))}
+      </Section>
       <Section title="最近报告">
         {reports.slice(0, 8).map((report) => (
           <div key={report.name} className="rounded-xl bg-white p-3 shadow-sm">
@@ -471,6 +601,14 @@ function OfflineTab({ reports, jobs, datasets }: { reports: any[]; jobs: any[]; 
           </div>
         ))}
         {!reports.length && <Empty title="暂无离线报告" body="运行 quick/full 评测后会在这里展示。" />}
+      </Section>
+      <Section title="数据集">
+        {datasets.slice(0, 6).map((dataset) => (
+          <div key={dataset.name || dataset.suite} className="rounded-xl bg-white p-3 shadow-sm">
+            <div className="text-sm font-black text-gray-900">{dataset.name || dataset.suite}</div>
+            <div className="mt-1 text-xs font-semibold text-gray-500">{dataset.version || 'file'} · Case {dataset.total_cases || 0}</div>
+          </div>
+        ))}
       </Section>
     </div>
   );
@@ -490,6 +628,7 @@ function RunCard({ run }: { run: any }) {
           <Badge tone={run.environment_failure ? 'warn' : failureInfo(failureKey(run)).tone}>{failureInfo(failureKey(run)).title}</Badge>
         </div>
       )}
+      <button onClick={() => openOriginalSession(run)} className="mt-3 rounded-full bg-gray-100 px-3 py-2 text-xs font-black text-gray-700">原始会话</button>
     </div>
   );
 }
@@ -547,6 +686,40 @@ function Kpi({ label, value, tone = 'neutral' }: { label: string; value: React.R
     <div className="rounded-xl bg-white p-3 shadow-sm">
       <div className="text-[11px] font-black text-gray-400">{label}</div>
       <div className={`mt-1 text-xl font-black ${tone === 'good' ? 'text-emerald-600' : tone === 'warn' ? 'text-amber-600' : tone === 'bad' ? 'text-red-600' : 'text-gray-950'}`}>{value}</div>
+    </div>
+  );
+}
+
+function ScoreBreakdownMobile({ detail }: { detail: any }) {
+  const rows = scoreMetricRows(detail);
+  return (
+    <div className="rounded-xl bg-white p-3 shadow-sm">
+      <div className="text-xs font-black text-gray-500">评分明细</div>
+      {!rows.length ? (
+        <div className="mt-2 text-xs font-semibold leading-relaxed text-gray-500">这条记录还没有写入评分指标，新采集的会话会显示各项评分。</div>
+      ) : (
+        <div className="mt-3 space-y-3">
+          {rows.map((item) => {
+            const width = Math.max(2, Math.min(100, Math.round(Number(item.value || 0) * 100)));
+            const inverse = item.key.includes('error') || item.key.includes('fallback') || item.key === 'repeated_action_rate';
+            return (
+              <div key={item.key}>
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-black text-gray-900">{item.label}</div>
+                    <div className="font-mono text-[10px] font-semibold text-gray-400">{item.key}</div>
+                  </div>
+                  <Badge tone={item.tone}>{pct(item.value)}</Badge>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100">
+                  <div className={`h-full rounded-full ${item.tone === 'good' ? 'bg-emerald-500' : item.tone === 'warn' ? 'bg-amber-500' : item.tone === 'bad' ? 'bg-red-500' : 'bg-gray-400'}`} style={{ width: `${width}%` }} />
+                </div>
+                {inverse && <div className="mt-1 text-[10px] font-semibold text-gray-400">该项越低越好</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

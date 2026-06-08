@@ -156,9 +156,84 @@ class JsonReporter:
             "category_breakdown": report.category_breakdown,
             "scene_breakdown": report.scene_breakdown,
             "failure_summary": report.failure_summary,
+            "stability": self._stability_summary(results),
             "duration_seconds": report.duration_seconds,
             "results": results,
         }
+
+    def _stability_summary(self, results: list[dict[str, Any]]) -> dict[str, Any]:
+        """Calculate pass@k/pass^k style stability metrics from serialized trials."""
+        if not results:
+            return {
+                "k": 0,
+                "pass_at_k": 0.0,
+                "pass_all_k": 0.0,
+                "trial_variance": 0.0,
+                "flaky_cases": [],
+                "cases": [],
+            }
+
+        case_rows: list[dict[str, Any]] = []
+        flaky_cases: list[dict[str, Any]] = []
+        pass_at_count = 0
+        pass_all_count = 0
+        variances: list[float] = []
+        max_k = 0
+
+        for result in results:
+            trials = result.get("trials") if isinstance(result.get("trials"), list) else []
+            scores = [float(t.get("weighted_score") or 0.0) for t in trials if isinstance(t, dict)]
+            passes = [
+                self._trial_passed(t)
+                for t in trials
+                if isinstance(t, dict)
+            ]
+            max_k = max(max_k, len(trials))
+            passed_once = any(passes) if passes else False
+            passed_all = all(passes) if passes else False
+            if passed_once:
+                pass_at_count += 1
+            if passed_all:
+                pass_all_count += 1
+            variance = self._variance(scores)
+            variances.append(variance)
+            is_flaky = bool(passes) and (any(passes) != all(passes) or variance >= 0.05)
+            row = {
+                "case_id": result.get("case_id"),
+                "trials": len(trials),
+                "pass_count": sum(1 for value in passes if value),
+                "pass_at_k": passed_once,
+                "pass_all_k": passed_all,
+                "scores": scores,
+                "variance": variance,
+                "flaky": is_flaky,
+            }
+            case_rows.append(row)
+            if is_flaky:
+                flaky_cases.append(row)
+
+        total = len(results)
+        return {
+            "k": max_k,
+            "pass_at_k": round(pass_at_count / total, 4) if total else 0.0,
+            "pass_all_k": round(pass_all_count / total, 4) if total else 0.0,
+            "trial_variance": round(sum(variances) / len(variances), 6) if variances else 0.0,
+            "flaky_cases": flaky_cases,
+            "cases": case_rows,
+        }
+
+    def _trial_passed(self, trial: dict[str, Any]) -> bool:
+        if trial.get("error") or trial.get("error_reason"):
+            return False
+        if trial.get("threshold_failures") or trial.get("missing_metrics"):
+            return False
+        return float(trial.get("weighted_score") or 0.0) >= 0.7
+
+    def _variance(self, values: list[float]) -> float:
+        if len(values) <= 1:
+            return 0.0
+        mean = sum(values) / len(values)
+        return round(sum((value - mean) ** 2 for value in values) / len(values), 6)
 
     def _metadata(self) -> dict[str, Any]:
         data: dict[str, Any] = {

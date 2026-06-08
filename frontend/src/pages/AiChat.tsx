@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
     ChevronLeft,
     Send,
@@ -338,6 +338,7 @@ const AiChat = ({
     starterPrompts = []
 }: AiChatProps) => {
     const navigate = useNavigate();
+    const location = useLocation();
     const [sessions, setSessions] = useState<AppChatSession[]>([]);
     const [sessionId, setSessionId] = useState('');
     const [messages, setMessages] = useState<ChatMessageUi[]>([]);
@@ -377,6 +378,10 @@ const AiChat = ({
     const scrollRafRef = React.useRef<number | null>(null);
     const recognitionRef = React.useRef<any>(null);
     const lastAutoScrollAtRef = React.useRef(0);
+    const requestedSessionId = useMemo(() => {
+        const params = new URLSearchParams(location.search || '');
+        return params.get('session_id') || params.get('sessionId') || '';
+    }, [location.search]);
 
     const scheduleAutoScrollToBottom = React.useCallback((force = false) => {
         if (!messagesScrollRef.current) return;
@@ -654,7 +659,13 @@ const AiChat = ({
                 ]);
                 const currentScene = scene || 'chat';
                 const scopedSessions = sessionList.filter((item) => (item.scene || 'chat') === currentScene);
-                setSessions(scopedSessions);
+                const requestedSession = requestedSessionId
+                    ? sessionList.find((item) => getSessionId(item) === requestedSessionId)
+                    : undefined;
+                const visibleSessions = requestedSession && !scopedSessions.some((item) => getSessionId(item) === requestedSessionId)
+                    ? [requestedSession, ...scopedSessions]
+                    : scopedSessions;
+                setSessions(visibleSessions);
 
                 const options = Array.isArray(modelMeta.models) ? modelMeta.models : [];
                 setModelOptions(options);
@@ -675,8 +686,10 @@ const AiChat = ({
                 }
 
                 // If sessions exist, load the most recent one
-                if (scopedSessions.length > 0) {
-                    const latest = scopedSessions[0];
+                if (requestedSessionId) {
+                    await loadSession(requestedSessionId);
+                } else if (visibleSessions.length > 0) {
+                    const latest = visibleSessions[0];
                     const sid = getSessionId(latest);
                     if (sid) {
                         await loadSession(sid);
@@ -694,7 +707,7 @@ const AiChat = ({
         };
 
         void bootstrap();
-    }, [navigate, scene]);
+    }, [navigate, scene, requestedSessionId]);
 
     const loadSession = async (sid: string) => {
         setSessionId(sid);
