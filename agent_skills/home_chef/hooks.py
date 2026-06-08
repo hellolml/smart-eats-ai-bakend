@@ -13,6 +13,12 @@ HOME_CHEF_ALLOWED_TOOLS = {
 
 
 class HomeChefHooks(BaseSkillHooks):
+    def short_circuit_final(self, state: Any) -> dict[str, Any] | None:
+        message = str(getattr(state, "message", "") or "")
+        if _is_leftover_rice_safety_question(message):
+            return _leftover_rice_safety_final()
+        return None
+
     def filter_allowed_tools(self, state: Any, allowed_tools: list[str]) -> list[str] | None:
         context = getattr(state, "context", None)
         intent = context.get("intent") if isinstance(context, dict) else None
@@ -37,12 +43,15 @@ class HomeChefHooks(BaseSkillHooks):
             )
 
         for item in reversed(getattr(state, "observations", []) or []):
-            if not isinstance(item, dict) or item.get("tool") != "rag_search_recipes":
+            if not isinstance(item, dict) or item.get("tool") not in {"rag_search_recipes", "search_recipes"}:
                 continue
             result = item.get("result")
-            if not isinstance(result, dict):
-                continue
-            recipes = result.get("items")
+            if isinstance(result, dict):
+                recipes = result.get("items")
+            elif isinstance(result, list):
+                recipes = result
+            else:
+                recipes = None
             if not isinstance(recipes, list) or not recipes:
                 continue
             recommendations: list[dict[str, Any]] = []
@@ -52,12 +61,16 @@ class HomeChefHooks(BaseSkillHooks):
                 title = str(recipe.get("title") or "").strip()
                 if not title:
                     continue
-                snippet = str(recipe.get("snippet") or "").strip()
+                snippet = str(recipe.get("snippet") or recipe.get("reason") or "").strip()
+                time = recipe.get("cook_time_min") or recipe.get("time")
+                tags = recipe.get("tags")
                 recommendations.append(
                     {
                         "type": "recipe",
                         "title": title,
-                        "reason": snippet[:80] if snippet else "基于知识库检索",
+                        "reason": snippet[:80] if snippet else "基于菜谱搜索和当前食材匹配",
+                        **({"time": time} if time not in (None, "", [], {}) else {}),
+                        **({"tags": tags} if isinstance(tags, list) and tags else {}),
                     }
                 )
             if recommendations:
@@ -124,6 +137,34 @@ def _note_final(title: str, reason: str, followups: list[str]) -> dict[str, Any]
         "recommendations": [{"type": "note", "title": title, "reason": reason}],
         "followups": followups,
         "warnings": [],
+    }
+
+
+def _is_leftover_rice_safety_question(message: str) -> bool:
+    return any(token in message for token in ("剩饭", "剩米饭", "隔夜饭", "昨天剩")) and any(
+        token in message for token in ("安全", "提醒", "能吃", "加热", "冷藏", "隔夜")
+    )
+
+
+def _leftover_rice_safety_final() -> dict[str, Any]:
+    return {
+        "scene": "home_chef",
+        "agent_id": "home_chef",
+        "recommendations": [
+            {
+                "type": "note",
+                "title": "隔夜剩饭可以用，但先确认保存条件。",
+                "reason": "米饭煮熟后 2 小时内冷藏、冷藏不超过 24 小时、没有酸味或发黏，才建议继续做炒饭。",
+            }
+        ],
+        "followups": [
+            "加热时要彻底炒透，中心温度尽量到 75℃ 以上。",
+            "如果昨晚室温放了一夜，建议直接丢弃，不要为了省一点米饭冒风险。",
+        ],
+        "warnings": [
+            "剩饭常见风险是蜡样芽孢杆菌，室温放太久会增加食物中毒风险。",
+            "冷藏后的隔夜米饭只适合再加热一次，不建议反复加热。",
+        ],
     }
 
 

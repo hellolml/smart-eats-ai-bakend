@@ -18,6 +18,7 @@ const TABS: Array<{ key: Tab; label: string }> = [
 
 const FAILURE_COPY: Record<string, { title: string; action: string; tone: Tone }> = {
   provider_auth: { title: '模型鉴权失败', action: '检查 API Key 和账号权限。', tone: 'bad' },
+  provider_billing_unavailable: { title: '模型余额不可用', action: '充值、更新套餐或切换可用模型。', tone: 'bad' },
   provider_timeout: { title: '模型响应超时', action: '检查模型服务或降低任务复杂度。', tone: 'warn' },
   provider_rate_limit: { title: '模型限流', action: '降低并发或切换模型。', tone: 'warn' },
   provider_model_error: { title: '模型服务异常', action: '检查模型名和 provider 状态。', tone: 'bad' },
@@ -217,6 +218,10 @@ function buildQualityView(overview: any, reviews: any) {
     total: overview?.total_runs || 0,
     success: overview?.task_success_proxy || 0,
     toolError: overview?.tool_error_rate || 0,
+    providerError: overview?.provider_error_rate || 0,
+    agentFallback: overview?.agent_fallback_rate ?? overview?.fallback_rate ?? 0,
+    environmentFailure: overview?.environment_failure_rate || 0,
+    userVisibleFallback: overview?.user_visible_fallback_rate ?? overview?.fallback_rate ?? 0,
     latencyP95: overview?.latency_p95_ms || 0,
     cost: overview?.total_cost || overview?.token_cost || 0,
     pending: reviews?.total || reviews?.records?.length || 0,
@@ -253,6 +258,8 @@ function OverviewTab({ quality, records, failures, onGo }: { quality: any; recor
         <Kpi label="对话数" value={quality.total} />
         <Kpi label="完成率" value={pct(quality.success)} tone={scoreTone(quality.success)} />
         <Kpi label="工具失败" value={pct(quality.toolError)} tone={quality.toolError > 0 ? 'bad' : 'good'} />
+        <Kpi label="Agent 兜底" value={pct(quality.agentFallback)} tone={quality.agentFallback > 0 ? 'bad' : 'good'} />
+        <Kpi label="环境失败" value={pct(quality.environmentFailure)} tone={quality.environmentFailure > 0 ? 'warn' : 'good'} />
         <Kpi label="待审核" value={quality.pending} tone={quality.pending ? 'warn' : 'good'} />
         <Kpi label="P95 耗时" value={ms(quality.latencyP95)} />
         <Kpi label="成本" value={money(quality.cost)} />
@@ -288,6 +295,11 @@ function SessionsTab({ sessions, selectedTrace, expertMode, onOpenTrace }: { ses
               </div>
               <div className="mt-1 truncate font-mono text-[10px] font-semibold text-gray-400">{session.sessionId}</div>
               <div className="mt-2 text-sm font-black text-gray-900">{sceneLabel(run.scene)} · {run.status === 'completed' ? '已完成' : '异常'}</div>
+              {failureKey(run) !== 'none' && (
+                <div className="mt-2">
+                  <Badge tone={run.environment_failure ? 'warn' : failureInfo(failureKey(run)).tone}>{failureInfo(failureKey(run)).title}</Badge>
+                </div>
+              )}
               <div className="mt-1 text-xs font-semibold text-gray-500">{session.runs.length} 轮 · {ms(run.latency_ms || run.total_duration_ms)} · {modelLabel(run)}</div>
             </button>
           );
@@ -307,7 +319,23 @@ function TraceDetailMobile({ detail, expertMode }: { detail: any; expertMode: bo
   const toolSummaries = summarizeTools(tools);
   return (
     <Section title="执行过程">
-      <Conclusion title={run.status === 'completed' ? '这轮执行完成了' : '这轮执行异常'} body={`${sessionTitle(run)} · ${sceneLabel(run.scene)} · ${modelLabel(run)} · ${ms(run.latency_ms)}`} tone={scoreTone(run.overall_quality)} />
+      <Conclusion
+        title={traceConclusionTitle(run)}
+        body={`${sessionTitle(run)} · ${sceneLabel(run.scene)} · ${modelLabel(run)} · ${ms(run.latency_ms)}`}
+        tone={run.environment_failure ? 'warn' : scoreTone(run.overall_quality)}
+      />
+      {failureKey(run) !== 'none' && (
+        <div className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-black text-gray-900">根因：{failureInfo(failureKey(run)).title}</div>
+            <Badge tone={run.environment_failure ? 'warn' : failureInfo(failureKey(run)).tone}>{run.environment_failure ? '环境' : 'Agent'}</Badge>
+          </div>
+          <div className="mt-1 text-xs font-semibold leading-relaxed text-gray-500">{failureInfo(failureKey(run)).action}</div>
+          {run.failure_class && run.failure_class !== run.root_failure_class && (
+            <div className="mt-1 font-mono text-[10px] font-semibold text-gray-400">raw {run.failure_class} / root {run.root_failure_class}</div>
+          )}
+        </div>
+      )}
       <div className="space-y-2">
         {events.map((event: any, index: number) => (
           <div key={event.id || index} className="rounded-xl border border-gray-100 bg-white p-3">
@@ -354,13 +382,13 @@ function FailuresTab({ items, records, onOpenTrace }: { items: any[]; records: a
         {!items.length && <Empty title="没有明显问题" body="当前窗口内没有可聚合的失败类型。" />}
       </Section>
       <Section title="需要复核的执行">
-        {records.filter((run) => run.status !== 'completed' || Number(run.overall_quality || 1) < 0.8).slice(0, 8).map((run) => (
+        {records.filter((run) => run.status !== 'completed' || run.environment_failure || run.agent_fallback || Number(run.overall_quality || 1) < 0.8).slice(0, 8).map((run) => (
           <button key={run.id} onClick={() => onOpenTrace(run.id)} className="w-full rounded-xl bg-white p-3 text-left shadow-sm">
             <div className="flex items-center justify-between">
               <span className="font-mono text-xs font-black text-blue-700">{run.id}</span>
               <Badge tone={scoreTone(run.overall_quality)}>{pct(run.overall_quality)}</Badge>
             </div>
-            <div className="mt-1 text-xs font-semibold text-gray-500">{sceneLabel(run.scene)} · {run.status}</div>
+            <div className="mt-1 text-xs font-semibold text-gray-500">{sceneLabel(run.scene)} · {run.status} · {failureInfo(failureKey(run)).title}</div>
           </button>
         ))}
       </Section>
@@ -378,6 +406,9 @@ function CostTab({ data }: { data: any }) {
         <Kpi label="P95 耗时" value={ms(data?.latency_p95_ms)} />
         <Kpi label="输入 Token" value={data?.token_input || 0} />
         <Kpi label="输出 Token" value={data?.token_output || 0} />
+        <Kpi label="缓存命中" value={data?.cached_tokens || 0} />
+        <Kpi label="缓存未命中" value={data?.cache_miss_tokens || 0} />
+        <Kpi label="缓存命中率" value={pct(data?.cache_hit_rate)} />
       </div>
       <Conclusion title="成本怎么看" body="优先看总成本和 P95 耗时；如果成本突然升高，再看模型和工具调用分布。" tone="info" />
     </div>
@@ -454,6 +485,11 @@ function RunCard({ run }: { run: any }) {
       </div>
       <div className="mt-1 truncate font-mono text-[10px] font-semibold text-gray-400">{run.session_id || run.id}</div>
       <div className="mt-1 text-xs font-semibold text-gray-500">{sceneLabel(run.scene)} · {run.status || 'completed'} · {ms(run.latency_ms || run.total_duration_ms)}</div>
+      {failureKey(run) !== 'none' && (
+        <div className="mt-2">
+          <Badge tone={run.environment_failure ? 'warn' : failureInfo(failureKey(run)).tone}>{failureInfo(failureKey(run)).title}</Badge>
+        </div>
+      )}
     </div>
   );
 }
@@ -517,6 +553,20 @@ function Kpi({ label, value, tone = 'neutral' }: { label: string; value: React.R
 
 function Badge({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: Tone }) {
   return <span className={`rounded-full px-2 py-1 text-[10px] font-black ${toneClass(tone)}`}>{children}</span>;
+}
+
+function failureKey(run: any) {
+  return String(run?.root_failure_class || run?.failure_class || 'none');
+}
+
+function failureInfo(value?: string | null) {
+  return FAILURE_COPY[value || 'none'] || { title: value || '未知问题', action: '查看执行过程定位原因。', tone: 'warn' as Tone };
+}
+
+function traceConclusionTitle(run: any) {
+  if (run.environment_failure) return '环境或模型服务导致失败';
+  if (run.agent_fallback) return 'Agent 兜底需要复核';
+  return run.status === 'completed' ? '这轮执行完成了' : '这轮执行异常';
 }
 
 function Empty({ title, body }: { title: string; body: string }) {

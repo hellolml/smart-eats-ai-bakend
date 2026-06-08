@@ -140,6 +140,23 @@ def test_skill_resolver_keeps_forced_skill_ahead_of_priority(tmp_path):
     assert "forced" in active.activation_reasons["forced_low"]
 
 
+def test_skill_resolver_respects_allowed_skill_ids_as_worker_boundary(tmp_path):
+    from app.agent.skills.loader import load_skills_from_path
+    from app.agent.skills.resolver import SkillResolver
+
+    _write_skill(tmp_path, "route_planner", keywords=["路线"], tools=["plan_route"])
+    _write_skill(tmp_path, "food_assistant", keywords=["餐厅"], tools=["search_restaurants"])
+    skills = load_skills_from_path(tmp_path)
+    state = AgentRuntimeState(session_id="s1", message="回到刚才那家餐厅，给我路线", scene="route")
+
+    active = SkillResolver(skills).resolve(
+        state,
+        {"forced_skill_ids": ["route_planner"], "allowed_skill_ids": ["route_planner"]},
+    )
+
+    assert [skill.id for skill in active.skills] == ["route_planner"]
+
+
 def test_skill_prompt_composer_orders_by_priority_and_limits_chars(tmp_path):
     from app.agent.skills.loader import load_skills_from_path
     from app.agent.skills.prompt import SkillPromptComposer
@@ -167,6 +184,30 @@ def test_skill_prompt_composer_orders_by_priority_and_limits_chars(tmp_path):
     assert prompt.index("Skill: high_priority@1.0.0") < prompt.index("Skill: low_priority@1.0.0")
     assert len(prompt) <= 170
     assert "## Active Skills" in prompt
+
+
+def test_skill_prompt_composer_keeps_activation_reasons_out_of_cache_prefix(tmp_path):
+    from app.agent.skills.loader import load_skills_from_path
+    from app.agent.skills.prompt import SkillPromptComposer
+    from app.agent.skills.resolver import SkillResolver
+
+    _write_skill(
+        tmp_path,
+        "home_chef",
+        keywords=["冰箱"],
+        tools=["get_fridge_items"],
+        instructions="Use fridge ingredients.",
+    )
+    active = SkillResolver(load_skills_from_path(tmp_path)).resolve(
+        AgentRuntimeState(session_id="s1", message="冰箱里有鸡蛋", scene="chat"),
+        {},
+    )
+
+    prompt = SkillPromptComposer(max_prompt_chars=1000).compose(active)
+
+    assert "Use fridge ingredients." in prompt
+    assert "Activation reasons" not in prompt
+    assert "keyword:冰箱" not in prompt
 
 
 def test_skill_tool_composer_merges_and_denies_unknown_tools(tmp_path):
@@ -268,11 +309,7 @@ async def test_runtime_skill_diagnostics_reflect_filtered_travel_tools():
         get_agent_runtime_config(),
     )
 
-    assert context["allowed_tools"] == [
-        "travel_fetch_url_content",
-        "travel_search_poi",
-        "travel_search_nearby_poi",
-    ]
+    assert context["allowed_tools"] == ["travel_search_poi"]
     assert context["skill_allowed_tools"] == context["allowed_tools"]
     tool_sources = context["skill_diagnostics"]["tool_sources"]
     assert "memory_search" not in tool_sources
@@ -326,3 +363,4 @@ def test_skill_system_prompt_includes_skill_addendum():
 
     assert "### Skill: home_chef@1.0.0" in prompt
     assert "Runtime Context" in prompt
+    assert "冰箱里有什么" not in prompt

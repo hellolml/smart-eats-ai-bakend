@@ -4,8 +4,9 @@ from app.agent.skills.models import ActiveSkillSet
 
 
 class SkillPromptComposer:
-    def __init__(self, *, max_prompt_chars: int = 6000) -> None:
+    def __init__(self, *, max_prompt_chars: int = 6000, include_activation_reasons: bool = False) -> None:
         self.max_prompt_chars = max_prompt_chars
+        self.include_activation_reasons = include_activation_reasons
 
     def compose(self, active: ActiveSkillSet) -> str:
         if not active.prompt_blocks:
@@ -29,13 +30,17 @@ class SkillPromptComposer:
                     "",
                     f"### Skill: {block.skill_id}@{block.version}",
                     "",
-                    "Activation reasons:",
-                    *[f"- {reason}" for reason in block.reasons],
-                    "",
                     "Instructions:",
                     block.content.strip(),
                 ]
             )
+            if self.include_activation_reasons and block.reasons:
+                insert_at = len(sections) - 2
+                sections[insert_at:insert_at] = [
+                    "",
+                    "Activation reasons:",
+                    *[f"- {reason}" for reason in block.reasons],
+                ]
 
         prompt = "\n".join(sections).strip()
         if self.max_prompt_chars > 0 and len(prompt) > self.max_prompt_chars:
@@ -63,11 +68,10 @@ class SkillPromptComposer:
                 [
                     "",
                     f"### Skill: {block.skill_id}@{block.version}",
-                    "",
-                    "Activation reasons:",
-                    *[f"- {reason}" for reason in block.reasons],
                 ]
             )
+            if self.include_activation_reasons and block.reasons:
+                sections.extend(["", "Activation reasons:", *[f"- {reason}" for reason in block.reasons]])
         return "\n".join(sections).strip()
 
     def _compose_headers_only(self, blocks) -> str:

@@ -46,6 +46,15 @@ WINDOW_HOURS = {
 
 logger = logging.getLogger("app.agent.monitoring")
 
+PROVIDER_FAILURE_CLASSES = {
+    "provider_auth",
+    "provider_billing_unavailable",
+    "provider_model_error",
+    "provider_rate_limit",
+    "provider_timeout",
+}
+ENVIRONMENT_FAILURE_CLASSES = PROVIDER_FAILURE_CLASSES | {"upstream_error"}
+
 
 def parse_window_start(window: str = "24h") -> datetime:
     hours = WINDOW_HOURS.get(window, WINDOW_HOURS["24h"])
@@ -90,6 +99,8 @@ def classify_failure(
     """Classify failures into the long-term monitoring taxonomy."""
     text = " ".join(str(part) for part in (error_reason, error, event_type, tool_name) if part).lower()
     metric_values = metrics or {}
+    if any(token in text for token in ("insufficient balance", "payment required", "billing", "余额不足", "402")):
+        return "provider_billing_unavailable"
     if any(token in text for token in ("unauthorized", "invalid api key", "api key", "401", "403", "auth")):
         return "provider_auth"
     if any(token in text for token in ("rate limit", "429", "quota")):
@@ -123,6 +134,74 @@ def classify_failure(
     return "none"
 
 
+def _provider_failure_from_payload(payload: dict[str, Any] | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    status = payload.get("http_status") or payload.get("status_code")
+    try:
+        jsonish = str(payload)
+    except Exception:
+        jsonish = ""
+    message = payload.get("message") or payload.get("user_message") or payload.get("error") or payload.get("code")
+    text = f"{status or ''} {message or ''} {jsonish}".lower()
+    if any(token in text for token in ("insufficient balance", "payment required", "billing", "余额不足", "402")):
+        return "provider_billing_unavailable"
+    if any(token in text for token in ("401", "403", "unauthorized", "invalid api key", "api key", "auth")):
+        return "provider_auth"
+    if any(token in text for token in ("429", "rate limit", "quota")):
+        return "provider_rate_limit"
+    if any(token in text for token in ("timeout", "read timeout")):
+        return "provider_timeout"
+    if status and str(status).startswith("5"):
+        return "provider_model_error"
+    return None
+
+
+def _extract_provider_failure_from_agent_result(agent_result: dict[str, Any] | None) -> str | None:
+    if not isinstance(agent_result, dict):
+        return None
+    diagnostics = agent_result.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        for key in ("provider_issue", "provider_error", "upstream_error"):
+            failure = _provider_failure_from_payload(diagnostics.get(key) if isinstance(diagnostics.get(key), dict) else None)
+            if failure:
+                return failure
+        failure = _provider_failure_from_payload(diagnostics)
+        if failure:
+            return failure
+    final = agent_result.get("final")
+    if isinstance(final, dict):
+        failure = _provider_failure_from_payload(final)
+        if failure:
+            return failure
+    return None
+
+
+def _is_environment_failure_class(failure_class: str | None) -> bool:
+    return isinstance(failure_class, str) and failure_class in ENVIRONMENT_FAILURE_CLASSES
+
+
+def _root_failure_class(
+    *,
+    raw_failure_class: str | None,
+    agent_result: dict[str, Any] | None = None,
+    error: str | None = None,
+    error_reason: str | None = None,
+    metrics: dict[str, float] | None = None,
+) -> str:
+    provider_failure = _extract_provider_failure_from_agent_result(agent_result)
+    if provider_failure:
+        return provider_failure
+    classified = classify_failure(error=error, error_reason=error_reason, metrics=metrics)
+    if classified.startswith("provider_"):
+        return classified
+    if isinstance(raw_failure_class, str) and raw_failure_class:
+        if raw_failure_class == "upstream_error":
+            return classified if classified != "none" else "provider_model_error"
+        return raw_failure_class
+    return classified
+
+
 def _extract_model_usage(
     *,
     events: list[dict[str, Any]],
@@ -134,6 +213,7 @@ def _extract_model_usage(
         "input_tokens": 0,
         "output_tokens": 0,
         "cached_tokens": 0,
+        "cache_miss_tokens": 0,
         "reasoning_tokens": 0,
         "total_tokens": 0,
     }
@@ -171,6 +251,12 @@ def _extract_model_usage(
         "pricing": pricing["pricing"],
         "cost_estimated": pricing["cost_estimated"],
     }
+
+
+def _cache_hit_rate(*, input_tokens: int, cached_tokens: int) -> float:
+    if input_tokens <= 0:
+        return 0.0
+    return round(max(0, min(cached_tokens, input_tokens)) / input_tokens, 4)
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -411,6 +497,17 @@ async def persist_realtime_conversation(
     )
     agent_result = final_event_payload.get("agent_result") if isinstance(final_event_payload.get("agent_result"), dict) else {}
     agent_failure_class = agent_result.get("failure_class") or final_event_payload.get("failure_class")
+    root_failure_class = _root_failure_class(
+        raw_failure_class=agent_failure_class if isinstance(agent_failure_class, str) else None,
+        agent_result=agent_result,
+        error=result.error,
+        error_reason=result.error_reason,
+    )
+    environment_failure = _is_environment_failure_class(root_failure_class) or _is_environment_failure_class(
+        agent_failure_class if isinstance(agent_failure_class, str) else None
+    )
+    user_visible_fallback = bool(result.is_fallback or agent_failure_class)
+    agent_fallback = bool(user_visible_fallback and not environment_failure)
     status = "error" if result.error else "completed"
     raw = result.to_dict()
     model_config = _extract_runtime_model_config({"agent_result": agent_result, "model_provider": model_provider, "model_name": model_name})
@@ -424,6 +521,10 @@ async def persist_realtime_conversation(
         "final_state": final_state,
         "agent_result": agent_result,
         "failure_class": agent_failure_class,
+        "root_failure_class": root_failure_class,
+        "environment_failure": environment_failure,
+        "user_visible_fallback": user_visible_fallback,
+        "agent_fallback": agent_fallback,
     })
     run = ConversationRun(
         id=run_id,
@@ -439,7 +540,7 @@ async def persist_realtime_conversation(
         ended_at=ended_at,
         latency_ms=latency_ms,
         final_state=str(final_state) if final_state is not None else None,
-        is_fallback=bool(result.is_fallback or agent_failure_class),
+        is_fallback=user_visible_fallback,
         raw_json=raw,
     )
     session.add(run)
@@ -503,7 +604,7 @@ async def persist_realtime_conversation(
         tool_error_rate = failures / len(tool_calls)
     recovery_events = [event for event in events if event.get("event") == "recovery"]
     recovery_rate = 1.0 if recovery_events and not result.error else 0.0
-    provider_failure_class = classify_failure(error=result.error, error_reason=result.error_reason)
+    provider_failure_class = root_failure_class if root_failure_class in PROVIDER_FAILURE_CLASSES else classify_failure(error=result.error, error_reason=result.error_reason)
     provider_error_rate = 1.0 if provider_failure_class.startswith("provider_") else 0.0
     tool_timeout_rate = 0.0
     if tool_calls:
@@ -512,7 +613,7 @@ async def persist_realtime_conversation(
     tool_call_accuracy_proxy = 1.0 - tool_error_rate
     metrics = {
         "overall_quality": float(result.overall_quality or 0.0),
-        "task_success_proxy": 1.0 if result.has_content and not result.is_fallback and not result.error else 0.0,
+        "task_success_proxy": 1.0 if result.has_content and not user_visible_fallback and not result.error else 0.0,
         "partial_success_proxy": 1.0 if result.has_content else 0.0,
         "schema_compliance": float(result.schema_compliance or 0.0),
         "constraint_satisfaction_rule": 1.0,
@@ -521,7 +622,10 @@ async def persist_realtime_conversation(
         "recovery_rate": recovery_rate,
         "tool_error_rate": tool_error_rate,
         "avg_steps": float(len(events)),
-        "fallback_rate": 1.0 if result.is_fallback else 0.0,
+        "fallback_rate": 1.0 if user_visible_fallback else 0.0,
+        "user_visible_fallback_rate": 1.0 if user_visible_fallback else 0.0,
+        "agent_fallback_rate": 1.0 if agent_fallback else 0.0,
+        "environment_failure_rate": 1.0 if environment_failure else 0.0,
         "secret_leak_rate": 1.0 if float(result.no_leak or 1.0) < 1.0 else 0.0,
         "policy_violation_rate": 0.0,
         "human_escalation_rate": 0.0,
@@ -536,6 +640,10 @@ async def persist_realtime_conversation(
         raw=raw,
         provider=model_provider,
         model=model_name,
+    )
+    metrics["cache_hit_rate"] = _cache_hit_rate(
+        input_tokens=int(model_usage.get("input_tokens") or 0),
+        cached_tokens=int(model_usage.get("cached_tokens") or 0),
     )
     metrics["model_call_count"] = float(model_usage.get("model_usage_event_count") or 0)
     metrics["token_total"] = float(model_usage.get("total_tokens") or 0)
@@ -1638,6 +1746,18 @@ def conversation_run_summary(run: ConversationRun, *, session_title: str | None 
     failure_class = raw.get("failure_class")
     if not isinstance(failure_class, str) or not failure_class:
         failure_class = classify_failure(error=raw.get("error"), error_reason=raw.get("error_reason"))
+    agent_result = raw.get("agent_result") if isinstance(raw.get("agent_result"), dict) else {}
+    root_failure_class = raw.get("root_failure_class")
+    if not isinstance(root_failure_class, str) or not root_failure_class:
+        root_failure_class = _root_failure_class(
+            raw_failure_class=failure_class if failure_class != "none" else None,
+            agent_result=agent_result,
+            error=raw.get("error"),
+            error_reason=raw.get("error_reason"),
+        )
+    environment_failure = bool(raw.get("environment_failure") or _is_environment_failure_class(root_failure_class))
+    user_visible_fallback = bool(raw.get("user_visible_fallback") if "user_visible_fallback" in raw else run.is_fallback)
+    agent_fallback = bool(raw.get("agent_fallback") if "agent_fallback" in raw else (user_visible_fallback and not environment_failure))
     title = _conversation_session_title(run, session_title)
     model_config = _extract_runtime_model_config(raw)
     return {
@@ -1661,6 +1781,9 @@ def conversation_run_summary(run: ConversationRun, *, session_title: str | None 
         "total_duration_ms": run.latency_ms,
         "final_state": run.final_state,
         "is_fallback": run.is_fallback,
+        "user_visible_fallback": user_visible_fallback,
+        "agent_fallback": agent_fallback,
+        "environment_failure": environment_failure,
         "overall_quality": float(raw.get("overall_quality") or 0.0),
         "efficiency": float(raw.get("efficiency") or 0.0),
         "schema_compliance": float(raw.get("schema_compliance") or 0.0),
@@ -1674,6 +1797,7 @@ def conversation_run_summary(run: ConversationRun, *, session_title: str | None 
         "error": raw.get("error"),
         "error_reason": raw.get("error_reason"),
         "failure_class": failure_class,
+        "root_failure_class": root_failure_class,
     }
 
 
@@ -1719,10 +1843,13 @@ def human_review_summary(review: ConversationHumanReview) -> dict[str, Any]:
 
 
 def cost_summary(cost: ConversationCost) -> dict[str, Any]:
+    token_input = int(cost.token_input or 0)
+    cached_tokens = int(cost.cached_tokens or 0)
     return {
-        "token_input": int(cost.token_input or 0),
+        "token_input": token_input,
         "token_output": int(cost.token_output or 0),
-        "cached_tokens": int(cost.cached_tokens or 0),
+        "cached_tokens": cached_tokens,
+        "cache_miss_tokens": max(0, token_input - cached_tokens),
         "reasoning_tokens": int(cost.reasoning_tokens or 0),
         "total_tokens": int(cost.total_tokens or 0),
         "provider": cost.provider,
@@ -1755,6 +1882,9 @@ async def aggregate_monitoring_overview(session: AsyncSession, *, since: datetim
         "total_runs": len(runs),
         "task_success_proxy": _avg(by_metric.get("task_success_proxy", [])),
         "fallback_rate": _avg(by_metric.get("fallback_rate", [])),
+        "user_visible_fallback_rate": _avg(by_metric.get("user_visible_fallback_rate", by_metric.get("fallback_rate", []))),
+        "agent_fallback_rate": _avg(by_metric.get("agent_fallback_rate", [])),
+        "environment_failure_rate": _avg(by_metric.get("environment_failure_rate", [])),
         "tool_error_rate": _avg(by_metric.get("tool_error_rate", [])),
         "provider_error_rate": _avg(by_metric.get("provider_error_rate", [])),
         "tool_timeout_rate": _avg(by_metric.get("tool_timeout_rate", [])),
@@ -1793,6 +1923,7 @@ async def aggregate_failures(session: AsyncSession, *, since: datetime) -> dict[
         "provider_timeout": 0,
         "provider_rate_limit": 0,
         "provider_model_error": 0,
+        "provider_billing_unavailable": 0,
         "tool_api_error": 0,
         "tool_timeout": 0,
         "tool_empty_result": 0,
@@ -1823,6 +1954,14 @@ async def aggregate_failures(session: AsyncSession, *, since: datetime) -> dict[
                 error_reason=raw.get("error_reason"),
                 metrics=metrics_for_run,
             )
+        agent_result = raw.get("agent_result") if isinstance(raw.get("agent_result"), dict) else {}
+        failure_class = raw.get("root_failure_class") or _root_failure_class(
+            raw_failure_class=failure_class if failure_class != "none" else None,
+            agent_result=agent_result,
+            error=raw.get("error"),
+            error_reason=raw.get("error_reason"),
+            metrics=metrics_for_run,
+        )
         if failure_class != "none":
             by_failure_class[failure_class] = by_failure_class.get(failure_class, 0) + 1
             if run.scene:
@@ -1864,15 +2003,18 @@ async def aggregate_cost_latency(session: AsyncSession, *, since: datetime) -> d
     for metric in metrics:
         by_metric.setdefault(metric.metric_name, []).append(_safe_float(metric.metric_value))
     latencies = [_safe_float(run.latency_ms) for run in runs]
+    token_input = sum(int(cost.token_input or 0) for cost in costs)
+    cached_tokens = sum(int(cost.cached_tokens or 0) for cost in costs)
     return {
         "total_runs": len(runs),
         "latency_p50_ms": round(percentile(latencies, 0.50), 0),
         "latency_p95_ms": round(percentile(latencies, 0.95), 0),
         "latency_p99_ms": round(percentile(latencies, 0.99), 0),
         "latency_avg_ms": round(_avg(latencies), 0),
-        "token_input": sum(int(cost.token_input or 0) for cost in costs),
+        "token_input": token_input,
         "token_output": sum(int(cost.token_output or 0) for cost in costs),
-        "cached_tokens": sum(int(cost.cached_tokens or 0) for cost in costs),
+        "cached_tokens": cached_tokens,
+        "cache_miss_tokens": max(0, token_input - cached_tokens),
         "reasoning_tokens": sum(int(cost.reasoning_tokens or 0) for cost in costs),
         "total_tokens": sum(int(cost.total_tokens or 0) for cost in costs),
         "token_cost": round(sum(_safe_float(cost.token_cost) for cost in costs), 4),
@@ -1894,6 +2036,8 @@ def _cost_group(costs: list[ConversationCost], *, key) -> dict[str, dict[str, An
                 "runs": 0,
                 "token_input": 0,
                 "token_output": 0,
+                "cached_tokens": 0,
+                "cache_miss_tokens": 0,
                 "total_tokens": 0,
                 "token_cost": 0.0,
                 "tool_cost": 0.0,
@@ -1903,6 +2047,8 @@ def _cost_group(costs: list[ConversationCost], *, key) -> dict[str, dict[str, An
         item["runs"] += 1
         item["token_input"] += int(cost.token_input or 0)
         item["token_output"] += int(cost.token_output or 0)
+        item["cached_tokens"] += int(cost.cached_tokens or 0)
+        item["cache_miss_tokens"] = max(0, int(item["token_input"]) - int(item["cached_tokens"]))
         item["total_tokens"] += int(cost.total_tokens or 0)
         item["token_cost"] = round(float(item["token_cost"]) + _safe_float(cost.token_cost), 6)
         item["tool_cost"] = round(float(item["tool_cost"]) + _safe_float(cost.tool_cost), 6)

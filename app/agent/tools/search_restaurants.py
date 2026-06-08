@@ -131,6 +131,23 @@ async def _search_restaurants(
         sort,
         city,
     )
+    if not results and query not in {"餐厅", "美食", "附近餐厅"}:
+        fallback_query = tag or "餐厅"
+        logger.info(
+            "restaurant_search_retry_broad session_id=%s query=%s fallback_query=%s",
+            session_id,
+            query,
+            fallback_query,
+        )
+        results = await RestaurantService.search(
+            redis_client,
+            fallback_query,
+            tag,
+            lat,
+            lng,
+            sort,
+            city,
+        )
     
     # 缓存结果（用于后续路线规划）
     await cache_restaurants(redis_client, session_id, results)

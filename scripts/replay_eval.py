@@ -45,6 +45,13 @@ BAD_VISIBLE_PHRASES = (
     "旅行旅行",
     "地图地图",
 )
+BAD_PROMPT_ARTIFACT_POI_PHRASES = (
+    "这样我可以",
+    "您有什么特别想去",
+    "高德验证POI",
+    "请补充",
+    "上传攻略截图",
+)
 
 
 def load_cases(path: Path) -> list[dict[str, Any]]:
@@ -152,6 +159,46 @@ def evaluate_result(
         if missing_titles:
             violations.append(f"missing_recommendation_titles:{','.join(missing_titles)}")
 
+    trip_meta_expect = expect.get("trip_meta")
+    if isinstance(trip_meta_expect, dict):
+        trip_meta = _travel_trip_meta(result)
+        for key, value in trip_meta_expect.items():
+            if trip_meta.get(key) != value:
+                violations.append(f"trip_meta:{key}:{trip_meta.get(key)}!=expected:{value}")
+
+    min_itinerary_days = expect.get("min_itinerary_days")
+    if isinstance(min_itinerary_days, int):
+        day_count = _itinerary_day_count(result)
+        if day_count < min_itinerary_days:
+            violations.append(f"itinerary_days:{day_count}<{min_itinerary_days}")
+
+    if expect.get("no_prompt_artifact_pois") is True:
+        bad_names = _prompt_artifact_poi_names(result)
+        if bad_names:
+            violations.append(f"prompt_artifact_pois:{','.join(bad_names[:3])}")
+
+    candidate_expected_any = expect.get("candidate_expected_any")
+    if isinstance(candidate_expected_any, list):
+        names = _travel_active_place_names(result)
+        missing_any = [
+            item
+            for item in candidate_expected_any
+            if isinstance(item, str) and item and not any(item in name for name in names)
+        ]
+        if missing_any:
+            violations.append(f"candidate_missing_any:{','.join(missing_any)}")
+
+    candidate_unexpected_any = expect.get("candidate_unexpected_any")
+    if isinstance(candidate_unexpected_any, list):
+        names = _travel_active_place_names(result)
+        unexpected = [
+            item
+            for item in candidate_unexpected_any
+            if isinstance(item, str) and item and any(item in name for name in names)
+        ]
+        if unexpected:
+            violations.append(f"candidate_unexpected_any:{','.join(unexpected)}")
+
     return {"passed": not violations, "violations": violations}
 
 
@@ -244,6 +291,89 @@ def _recommendation_titles(result: dict[str, Any]) -> list[str]:
         if isinstance(item, dict) and isinstance(item.get("title"), str):
             titles.append(item["title"])
     return titles
+
+
+def _final_payload(result: dict[str, Any]) -> dict[str, Any]:
+    agent_result = result.get("agent_result")
+    if isinstance(agent_result, dict) and isinstance(agent_result.get("final"), dict):
+        return agent_result["final"]
+    answer = result.get("answer")
+    return answer if isinstance(answer, dict) else {}
+
+
+def _travel_trip_meta(result: dict[str, Any]) -> dict[str, Any]:
+    final = _final_payload(result)
+    trip_meta = final.get("trip_meta")
+    return trip_meta if isinstance(trip_meta, dict) else {}
+
+
+def _itinerary_day_count(result: dict[str, Any]) -> int:
+    final = _final_payload(result)
+    itinerary = final.get("itinerary")
+    days = itinerary.get("days") if isinstance(itinerary, dict) else None
+    return len(days) if isinstance(days, list) else 0
+
+
+def _prompt_artifact_poi_names(result: dict[str, Any]) -> list[str]:
+    final = _final_payload(result)
+    names: list[str] = []
+
+    def add_name(value: Any) -> None:
+        if not isinstance(value, str) or not value.strip():
+            return
+        if any(phrase in value for phrase in BAD_PROMPT_ARTIFACT_POI_PHRASES):
+            names.append(value.strip())
+
+    for key in ("places", "candidates"):
+        items = final.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict):
+                add_name(item.get("name") or item.get("source_name") or item.get("verified_name"))
+
+    itinerary = final.get("itinerary")
+    days = itinerary.get("days") if isinstance(itinerary, dict) else None
+    if isinstance(days, list):
+        for day in days:
+            items = day.get("items") if isinstance(day, dict) else None
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict):
+                    add_name(item.get("place_name") or item.get("name"))
+
+    return list(dict.fromkeys(names))
+
+
+def _travel_active_place_names(result: dict[str, Any]) -> list[str]:
+    final = _final_payload(result)
+    names: list[str] = []
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            names.append(value.strip())
+
+    for key in ("places", "candidates", "failed_places"):
+        items = final.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict):
+                add(item.get("name") or item.get("source_name") or item.get("verified_name"))
+
+    itinerary = final.get("itinerary")
+    days = itinerary.get("days") if isinstance(itinerary, dict) else None
+    if isinstance(days, list):
+        for day in days:
+            items = day.get("items") if isinstance(day, dict) else None
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict):
+                    add(item.get("place_name") or item.get("name"))
+
+    return list(dict.fromkeys(names))
 
 
 def run_case(

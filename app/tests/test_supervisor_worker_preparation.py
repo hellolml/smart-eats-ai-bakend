@@ -96,6 +96,41 @@ async def test_travel_worker_infers_confirm_candidates_action_from_message():
 
 
 @pytest.mark.asyncio
+async def test_travel_worker_rebuilds_payload_when_user_revises_destination_and_places():
+    payload = await _prepare_worker_payload(
+        _spec("travel_planner"),
+        {
+            "session_id": "s1",
+            "user_id": "u1",
+            "message": "临时改成杭州 1 天，不去拙政园，只保留西湖和灵隐寺，别太赶。",
+            "scene": "travel_planner",
+            "context_overrides": {
+                "latest_travel_final_json": {
+                    "state": "candidates_ready",
+                    "trip_meta": {"destination": "苏州", "days": 2},
+                    "candidates": [{"name": "拙政园"}, {"name": "苏州博物馆"}],
+                    "failed_places": [{"name": "七里山塘"}],
+                    "itinerary": {"days": [{"day_number": 1}]},
+                    "map": {"qr_code_url": "old"},
+                }
+            },
+        },
+    )
+
+    travel_payload = payload["travel_payload"]
+    assert payload.get("travel_action") != "confirm_candidates"
+    assert travel_payload["state"] == "ingesting_content"
+    assert travel_payload["trip_meta"]["destination"] == "杭州"
+    assert travel_payload["trip_meta"]["days"] == 1
+    assert [item["name"] for item in travel_payload["extracted_places"]] == ["西湖", "灵隐寺"]
+    assert [item["name"] for item in travel_payload["excluded_places"]] == ["拙政园"]
+    assert "candidates" not in travel_payload
+    assert "itinerary" not in travel_payload
+    assert "map" not in travel_payload
+    assert travel_payload["previous_candidates"] == [{"name": "拙政园"}, {"name": "苏州博物馆"}]
+
+
+@pytest.mark.asyncio
 async def test_food_worker_injects_food_decision_contract():
     payload = await _prepare_worker_payload(
         _spec("food_advisor"),

@@ -69,6 +69,7 @@ const NAV_ITEMS: Array<{ key: BusinessView; title: string; subtitle: string; ico
 
 const FAILURE_COPY: Record<string, { title: string; action: string; tone: Tone }> = {
     provider_auth: { title: '模型服务鉴权失败', action: '检查模型 API Key、账号权限和后端环境变量。', tone: 'bad' },
+    provider_billing_unavailable: { title: '模型余额不可用', action: '充值、更新套餐或切换可用模型后再跑真实对话探针。', tone: 'bad' },
     provider_timeout: { title: '模型响应超时', action: '检查模型服务状态，必要时降低任务复杂度或调大超时时间。', tone: 'warn' },
     provider_rate_limit: { title: '模型限流', action: '降低并发、切换模型或增加额度。', tone: 'warn' },
     provider_model_error: { title: '模型服务异常', action: '查看 provider 返回错误，确认模型名和服务可用性。', tone: 'bad' },
@@ -99,6 +100,9 @@ const METRIC_COPY: Record<string, string> = {
     overall_quality: '综合质量',
     tool_error_rate: '工具失败率',
     provider_error_rate: '模型服务失败率',
+    user_visible_fallback_rate: '用户可见兜底率',
+    agent_fallback_rate: 'Agent 兜底率',
+    environment_failure_rate: '环境失败率',
     schema_compliance: '结构合规',
     no_leak: '无敏感泄露',
     repeated_action_rate: '重复动作率',
@@ -136,6 +140,8 @@ const failureInfo = (value?: string | null) => FAILURE_COPY[value || 'none'] || 
     action: '查看执行过程和开发者详情定位原因。',
     tone: 'warn' as Tone,
 };
+
+const failureKey = (value: any) => String(value?.root_failure_class || value?.failure_class || 'none');
 
 const spanInfo = (value?: string | null) => SPAN_COPY[value || ''] || {
     title: value || '执行事件',
@@ -269,6 +275,10 @@ function buildQualityOverviewView(overview: any) {
         failedRuns: Math.max(0, Math.round((monitoring.total_runs || 0) * (1 - Number(monitoring.task_success_proxy || 0)))),
         pendingReviews: overview?.pending_reviews || 0,
         toolErrorRate: monitoring.tool_error_rate || 0,
+        providerErrorRate: monitoring.provider_error_rate || 0,
+        userVisibleFallbackRate: monitoring.user_visible_fallback_rate ?? monitoring.fallback_rate ?? 0,
+        agentFallbackRate: monitoring.agent_fallback_rate ?? monitoring.fallback_rate ?? 0,
+        environmentFailureRate: monitoring.environment_failure_rate || 0,
         latencyP95: monitoring.latency_p95_ms || 0,
         totalCost: monitoring.total_cost || overview?.cost_latency?.total_cost || 0,
         safetyRisk: Math.max(Number(safety.secret_leak_rate || 0), Number(safety.policy_violation_rate || 0)),
@@ -285,7 +295,9 @@ function buildSessionInspectionView(session: any) {
     const tools = Array.isArray(latestTurn.tool_calls) ? latestTurn.tool_calls : [];
     const failedTools = tools.filter((tool: any) => !tool.success);
     const quality = latest.overall_quality ?? latest.score ?? 0;
-    const failure = failureInfo(latest.failure_class);
+    const failure = failureInfo(failureKey(latest));
+    const environmentFailure = Boolean(latest.environment_failure);
+    const agentFallback = Boolean(latest.agent_fallback);
     return {
         sessionId: session?.session_id,
         title: sessionTitle(session),
@@ -299,7 +311,7 @@ function buildSessionInspectionView(session: any) {
         failedTools,
         totalTokens: cost.total_tokens || 0,
         totalCost: cost.total_cost || 0,
-        conclusion: latest.status === 'completed' && Number(quality) >= 0.8 ? '这段会话完成得不错' : '这段会话需要复核',
+        conclusion: environmentFailure ? '这段会话被环境问题打断' : agentFallback ? '这段会话出现 Agent 兜底' : latest.status === 'completed' && Number(quality) >= 0.8 ? '这段会话完成得不错' : '这段会话需要复核',
         reason: failedTools.length ? `有 ${failedTools.length} 个工具调用失败` : failure.title,
         nextAction: failedTools.length ? '查看工具失败原因，必要时转人工审核。' : failure.action,
         turns,
@@ -362,6 +374,9 @@ function buildCostPerformanceView(cost: any) {
         latencyP99: cost?.latency_p99_ms || 0,
         inputTokens: cost?.token_input || 0,
         outputTokens: cost?.token_output || 0,
+        cachedTokens: cost?.cached_tokens || 0,
+        cacheMissTokens: cost?.cache_miss_tokens || 0,
+        cacheHitRate: cost?.cache_hit_rate || 0,
         tokenCost: cost?.token_cost || 0,
         toolCost: cost?.tool_cost || 0,
         totalCost: cost?.total_cost || 0,
@@ -692,12 +707,14 @@ function QualityOverview({
     const insights = buildFailureInsightView(failures);
     return (
         <div className="grid gap-4">
-            <div className="grid grid-cols-2 gap-3 xl:grid-cols-8">
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-10">
                 <MetricCard title="对话数" value={quality.totalRuns} hint="已采集会话轮次" />
                 <MetricCard title="完成率" value={fmtPct(quality.successRate)} tone={scoreTone(quality.successRate)} hint="任务成功 proxy" />
                 <MetricCard title="失败会话" value={quality.failedRuns} tone={quality.failedRuns ? 'warn' : 'good'} />
                 <MetricCard title="待人工审核" value={quality.pendingReviews} tone={quality.pendingReviews ? 'warn' : 'good'} />
                 <MetricCard title="工具失败" value={fmtPct(quality.toolErrorRate)} tone={Number(quality.toolErrorRate) > 0 ? 'bad' : 'good'} />
+                <MetricCard title="Agent 兜底" value={fmtPct(quality.agentFallbackRate)} tone={Number(quality.agentFallbackRate) > 0 ? 'bad' : 'good'} />
+                <MetricCard title="环境失败" value={fmtPct(quality.environmentFailureRate)} tone={Number(quality.environmentFailureRate) > 0 ? 'warn' : 'good'} />
                 <MetricCard title="P95 耗时" value={fmtMs(quality.latencyP95)} tone={Number(quality.latencyP95) > 10000 ? 'warn' : 'neutral'} />
                 <MetricCard title="总成本" value={fmtMoney(quality.totalCost)} />
                 <MetricCard title="安全风险" value={fmtPct(quality.safetyRisk)} tone={Number(quality.safetyRisk) > 0 ? 'bad' : 'good'} />
@@ -777,7 +794,7 @@ function SessionInspection({
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_460px]">
             <Panel title="会话列表">
                 <SimpleTable
-                    headers={['会话', '最近场景', '结果', '质量', '轮次', '耗时', '模型']}
+                    headers={['会话', '最近场景', '结果', '根因', '质量', '轮次', '耗时', '模型']}
                     empty="暂无线上会话"
                     rows={sessions.map((item) => [
                         <button className="text-left underline-offset-2 hover:underline" onClick={() => onOpenSession(item.session_id)}>
@@ -786,6 +803,7 @@ function SessionInspection({
                         </button>,
                         sceneLabel(item.scene),
                         <Badge tone={item.status === 'completed' ? 'good' : 'bad'}>{item.status === 'completed' ? '已完成' : '异常'}</Badge>,
+                        <Badge tone={item.environment_failure ? 'warn' : failureInfo(failureKey(item)).tone}>{failureInfo(failureKey(item)).title}</Badge>,
                         <Badge tone={scoreTone(item.latest_score)}>{fmtPct(item.latest_score)}</Badge>,
                         item.turn_count || 0,
                         fmtMs(item.latency_ms),
@@ -819,6 +837,7 @@ function SessionInspection({
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <Badge tone="info">第 {index + 1} 轮</Badge>
                                                 <Badge tone={run.status === 'completed' ? 'good' : 'bad'}>{run.status === 'completed' ? '完成' : '异常'}</Badge>
+                                                {failureKey(run) !== 'none' && <Badge tone={run.environment_failure ? 'warn' : failureInfo(failureKey(run)).tone}>{failureInfo(failureKey(run)).title}</Badge>}
                                                 <Badge tone={scoreTone(run.overall_quality)}>{fmtPct(run.overall_quality)}</Badge>
                                                 <span className="ml-auto text-[12px] font-semibold text-slate-500">{fmtMs(run.latency_ms)}</span>
                                             </div>
@@ -869,7 +888,7 @@ function ExecutionProcess({
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_520px]">
             <Panel title="执行轨迹列表">
                 <SimpleTable
-                    headers={['Trace 执行轨迹', '会话', '场景', '结果', '质量', '步骤', '耗时']}
+                    headers={['Trace 执行轨迹', '会话', '场景', '结果', '根因', '质量', '步骤', '耗时']}
                     empty="暂无执行轨迹"
                     rows={traces.map((item) => [
                         <button className="font-mono text-sky-700 underline-offset-2 hover:underline" onClick={() => onOpenTrace(item.trace_id || item.id)}>{item.trace_id || item.id}</button>,
@@ -879,6 +898,7 @@ function ExecutionProcess({
                         </span>,
                         sceneLabel(item.scene),
                         <Badge tone={item.status === 'completed' ? 'good' : 'bad'}>{item.status === 'completed' ? '完成' : '异常'}</Badge>,
+                        <Badge tone={item.environment_failure ? 'warn' : failureInfo(failureKey(item)).tone}>{failureInfo(failureKey(item)).title}</Badge>,
                         <Badge tone={scoreTone(item.score)}>{fmtPct(item.score)}</Badge>,
                         item.span_count ?? 0,
                         fmtMs(item.latency_ms),
@@ -899,9 +919,9 @@ function ExecutionProcess({
                 ) : (
                     <div className="grid max-h-[calc(100dvh-280px)] gap-4 overflow-auto p-4">
                         <ConclusionCard
-                            title={run.status === 'completed' && Number(run.overall_quality || 0) >= 0.8 ? '这次执行完成了任务' : '这次执行需要复核'}
-                            body={`${sessionTitle(run)} / ${sceneLabel(run.scene)} / ${run.worker || run.agent_id || '未知执行器'} / ${modelLabel(run)} / ${fmtMs(run.latency_ms)}`}
-                            tone={scoreTone(run.overall_quality)}
+                            title={run.environment_failure ? '环境或模型服务导致失败' : run.agent_fallback ? 'Agent 兜底需要复核' : run.status === 'completed' && Number(run.overall_quality || 0) >= 0.8 ? '这次执行完成了任务' : '这次执行需要复核'}
+                            body={`${sessionTitle(run)} / ${sceneLabel(run.scene)} / ${run.worker || run.agent_id || '未知执行器'} / ${modelLabel(run)} / ${failureInfo(failureKey(run)).title} / ${fmtMs(run.latency_ms)}`}
+                            tone={run.environment_failure ? 'warn' : scoreTone(run.overall_quality)}
                         />
                         <Timeline items={timeline} />
                         {selected.tool_calls?.length > 0 && (
@@ -927,13 +947,13 @@ function FailureInsights({ failures, traces, onOpenTrace }: { failures: any; tra
             </Panel>
             <Panel title="低分或异常执行">
                 <div className="grid gap-2 p-4">
-                    {traces.filter((item) => item.status !== 'completed' || Number(item.score || item.overall_quality || 1) < 0.8).slice(0, 8).map((item) => (
+                    {traces.filter((item) => item.status !== 'completed' || item.environment_failure || item.agent_fallback || Number(item.score || item.overall_quality || 1) < 0.8).slice(0, 8).map((item) => (
                         <button key={item.id || item.trace_id} onClick={() => onOpenTrace(item.trace_id || item.id)} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left hover:bg-white">
                             <div className="flex items-center justify-between gap-2">
                                 <span className="truncate font-mono text-[12px] font-black text-sky-700">{item.trace_id || item.id}</span>
                                 <Badge tone={scoreTone(item.score || item.overall_quality)}>{fmtPct(item.score || item.overall_quality)}</Badge>
                             </div>
-                            <div className="mt-2 text-[12px] font-semibold text-slate-600">{sceneLabel(item.scene)} · {item.status || 'unknown'} · {fmtMs(item.latency_ms)}</div>
+                            <div className="mt-2 text-[12px] font-semibold text-slate-600">{sceneLabel(item.scene)} · {item.status || 'unknown'} · {failureInfo(failureKey(item)).title} · {fmtMs(item.latency_ms)}</div>
                         </button>
                     ))}
                     {!traces.length && <ExplainEmpty title="暂无 Trace" body="完成线上对话采集后，这里会列出需要复核的低分执行。" />}
@@ -953,6 +973,11 @@ function CostPerformance({ data }: { data: ReturnType<typeof buildCostPerformanc
                 <MetricCard title="输入 Token" value={data.inputTokens} />
                 <MetricCard title="输出 Token" value={data.outputTokens} />
                 <MetricCard title="总成本" value={fmtMoney(data.totalCost)} />
+            </div>
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+                <MetricCard title="缓存命中" value={data.cachedTokens} tone="good" />
+                <MetricCard title="缓存未命中" value={data.cacheMissTokens} tone={Number(data.cacheMissTokens) > Number(data.cachedTokens) ? 'warn' : 'neutral'} />
+                <MetricCard title="缓存命中率" value={fmtPct(data.cacheHitRate)} tone={Number(data.cacheHitRate) < 0.5 ? 'warn' : 'good'} />
             </div>
             <Panel title="成本来源">
                 <div className="grid gap-3 p-4 md:grid-cols-3">

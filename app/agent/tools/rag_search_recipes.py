@@ -54,8 +54,18 @@ def _load_index() -> tuple[bool, str | None]:
     meta_path = recipe_index.default_meta_path()
     bm25_path = recipe_index.default_bm25_path()
     
-    # Load FAISS index
-    _INDEX = rag.load_faiss_index(index_path)
+    # Load FAISS index. Missing optional vector dependencies should degrade to
+    # an empty RAG result instead of aborting the whole agent turn.
+    try:
+        _INDEX = rag.load_faiss_index(index_path)
+    except ModuleNotFoundError as exc:
+        error = f"RAG vector index unavailable: {exc.name}"
+        logger.warning(error)
+        return False, error
+    except ImportError as exc:
+        error = f"RAG vector index unavailable: {exc}"
+        logger.warning(error)
+        return False, error
     if _INDEX is None:
         error = f"FAISS index not found: {index_path}"
         logger.warning(error)

@@ -81,9 +81,12 @@ async def init_eval_db() -> None:
 
     database_url = eval_database_url()
     if database_url == settings.DATABASE_URL:
+        from app.infra.db import engine as app_engine
         from app.infra.db import init_db
 
         await init_db()
+        async with app_engine.begin() as conn:
+            await _ensure_eval_schema_columns(conn, database_url)
         _initialized_urls.add(database_url)
         return
 
@@ -91,6 +94,7 @@ async def init_eval_db() -> None:
     engine = _engine_cache[database_url]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_eval_schema_columns(conn, database_url)
     _initialized_urls.add(database_url)
 
 
@@ -100,3 +104,105 @@ async def close_eval_db() -> None:
     _engine_cache.clear()
     _session_factory_cache.clear()
     _initialized_urls.clear()
+
+
+def _dialect(database_url: str) -> str:
+    if database_url.startswith("postgresql"):
+        return "postgresql"
+    if database_url.startswith("sqlite+aiosqlite"):
+        return "sqlite"
+    return ""
+
+
+def _json_type(dialect: str) -> str:
+    return "JSONB" if dialect == "postgresql" else "JSON"
+
+
+def _bool_type(dialect: str, *, default: bool | None = None) -> str:
+    if default is None:
+        return "BOOLEAN"
+    if default is False:
+        return "BOOLEAN DEFAULT FALSE" if dialect == "postgresql" else "BOOLEAN DEFAULT 0"
+    return "BOOLEAN DEFAULT TRUE" if dialect == "postgresql" else "BOOLEAN DEFAULT 1"
+
+
+def _timestamp_type(dialect: str) -> str:
+    return "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+
+
+def _eval_column_plan(dialect: str) -> dict[str, list[tuple[str, str]]]:
+    json_type = _json_type(dialect)
+    timestamp_type = _timestamp_type(dialect)
+    return {
+        "eval_runs": [
+            ("baseline_pin", "VARCHAR(255)"),
+            ("tags_json", json_type),
+            ("notes", "TEXT"),
+            ("owner", "VARCHAR(255)"),
+            ("release_marker", "VARCHAR(64)"),
+        ],
+        "conversation_human_reviews": [
+            ("failure_reason", "VARCHAR(255)"),
+            ("failure_tags_json", json_type),
+            ("corrected_answer", "TEXT"),
+            ("expected_behavior", "TEXT"),
+            ("review_confidence", "FLOAT"),
+            ("dataset_candidate", _bool_type(dialect, default=False)),
+        ],
+        "conversation_costs": [
+            ("cached_tokens", "INTEGER DEFAULT 0"),
+            ("reasoning_tokens", "INTEGER DEFAULT 0"),
+            ("total_tokens", "INTEGER DEFAULT 0"),
+            ("provider", "VARCHAR(128)"),
+            ("model_name", "VARCHAR(255)"),
+            ("cost_estimated", _bool_type(dialect, default=False)),
+            ("pricing_json", json_type),
+        ],
+        "evaluation_alerts": [
+            ("notification_sent", _bool_type(dialect, default=False)),
+            ("notification_sent_at", timestamp_type),
+            ("notification_error", "VARCHAR(512)"),
+        ],
+    }
+
+
+async def _ensure_eval_schema_columns(conn, database_url: str) -> None:
+    dialect = _dialect(database_url)
+    if dialect not in {"postgresql", "sqlite"}:
+        return
+    for table, columns in _eval_column_plan(dialect).items():
+        if not await _table_exists(conn, dialect, table):
+            continue
+        existing = await _table_columns(conn, dialect, table)
+        for column, column_type in columns:
+            if column in existing:
+                continue
+            sql = (
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {column_type}"
+                if dialect == "postgresql"
+                else f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"
+            )
+            await conn.exec_driver_sql(sql)
+
+
+async def _table_exists(conn, dialect: str, table: str) -> bool:
+    if dialect == "postgresql":
+        result = await conn.exec_driver_sql(f"SELECT to_regclass('{table}')")
+        return result.scalar() is not None
+    result = await conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+    return result.scalar() is not None
+
+
+async def _table_columns(conn, dialect: str, table: str) -> set[str]:
+    if dialect == "postgresql":
+        result = await conn.exec_driver_sql(
+            f"""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = '{table}'
+            """
+        )
+        return {str(row[0]) for row in result.fetchall()}
+    result = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+    return {str(row[1]) for row in result.fetchall()}

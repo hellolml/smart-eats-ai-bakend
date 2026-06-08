@@ -397,6 +397,22 @@ def test_classify_llm_upstream_issue_maps_subscription_expired():
     assert issue["http_status"] == 403
 
 
+def test_classify_llm_upstream_issue_maps_provider_billing_unavailable():
+    exc = RuntimeError(
+        "Error code: 402 - {'error': {'message': 'Insufficient Balance', "
+        "'type': 'unknown_error', 'param': None, 'code': 'invalid_request_error'}}"
+    )
+
+    issue = _classify_llm_upstream_issue(exc)
+
+    assert issue["category"] == "provider_billing_unavailable"
+    assert issue["code"] == "provider_billing_unavailable"
+    assert issue["http_status"] == 402
+    assert "余额不足" in issue["user_message"]
+    assert "Insufficient Balance" not in issue["user_message"]
+    assert issue["action"] == "recharge_provider_or_switch_model"
+
+
 def test_normalize_llm_upstream_error_message_maps_invalid_image_payload():
     exc = RuntimeError(
         "Error code: 400 - {'error': {'message': '<400> InternalError.Algo.InvalidParameter: "

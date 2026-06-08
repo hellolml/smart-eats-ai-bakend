@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     QWEN_MODEL_PLANNER: str = "qwen3.5-flash"
     QWEN_MODEL_WRITER: str = "qwen3.5-flash"
     LLM_REQUEST_LOG: str = "none"
+    LLM_PROMPT_CACHE_ENABLED: bool = True
     LLM_PLANNER_REQUEST_TIMEOUT_SECONDS: int = 90
     LLM_INTENT_REQUEST_TIMEOUT_SECONDS: int = 20
     LLM_CONFIG_ENCRYPTION_KEY: str | None = None

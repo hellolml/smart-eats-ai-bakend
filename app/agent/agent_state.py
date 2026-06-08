@@ -12,6 +12,7 @@ class AgentContext(BaseModel):
     agent_id: str | None = None
     plan_type: str | None = None
     forced_skill_ids: list[str] = Field(default_factory=list)
+    allowed_skill_ids: list[str] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=list)
     ui_scene: str | None = None
     user_preference_md: dict[str, Any] | None = None

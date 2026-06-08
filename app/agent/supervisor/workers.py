@@ -37,6 +37,7 @@ class WorkerSpec:
     plan_type: str | None = None
     intent: str | None = None
     forced_skill_ids: tuple[str, ...] = ()
+    allowed_skill_ids: tuple[str, ...] = ()
     description: str = ""
 
 
@@ -47,12 +48,14 @@ WORKER_SPECS: tuple[WorkerSpec, ...] = (
         agent_id="travel_plan",
         plan_type="travel",
         forced_skill_ids=("travel_plan_new",),
+        allowed_skill_ids=("travel_plan_new",),
         description="旅行规划、攻略截图、POI 候选、行程和高德地图。",
     ),
     WorkerSpec(
         name="food_advisor",
         scene="eat",
         agent_id="food_decision",
+        allowed_skill_ids=("food_assistant", "food_decision", "restaurant_finder"),
         description="外出吃饭、附近餐厅、今天吃什么。",
     ),
     WorkerSpec(
@@ -60,6 +63,7 @@ WORKER_SPECS: tuple[WorkerSpec, ...] = (
         scene="route",
         intent="route",
         forced_skill_ids=("route_planner",),
+        allowed_skill_ids=("route_planner",),
         description="路线、导航、怎么去某个目的地。",
     ),
     WorkerSpec(
@@ -67,11 +71,13 @@ WORKER_SPECS: tuple[WorkerSpec, ...] = (
         scene="home_chef",
         intent="cook_home",
         forced_skill_ids=("home_chef",),
+        allowed_skill_ids=("home_chef",),
         description="在家做饭、冰箱食材、菜谱。",
     ),
     WorkerSpec(
         name="general_chat",
         scene="chat",
+        allowed_skill_ids=("__none__",),
         description="普通聊天、记忆读写和不需要业务工具的回答。",
     ),
 )
@@ -253,6 +259,15 @@ async def _prepare_travel_worker_payload(
         merged_payload.update(travel_payload)
     if isinstance(plan_payload, dict):
         merged_payload.update(plan_payload)
+    merged_payload = TravelSourceIngestionService.ingest_text_request(
+        str(next_payload.get("message") or ""),
+        merged_payload,
+    )
+    merged_payload = TravelCandidateService.apply_revision_from_message(
+        str(next_payload.get("message") or ""),
+        merged_payload,
+        latest=latest_final_json,
+    )
     if not action:
         action = TravelCandidateService.infer_action_from_message(
             str(next_payload.get("message") or ""),
@@ -376,6 +391,8 @@ def _worker_context(spec: WorkerSpec, state: dict[str, Any]) -> AgentContext:
         overrides["plan_type"] = spec.plan_type
     if spec.forced_skill_ids:
         overrides["forced_skill_ids"] = list(spec.forced_skill_ids)
+    if spec.allowed_skill_ids:
+        overrides["allowed_skill_ids"] = list(spec.allowed_skill_ids)
     if spec.name == "general_chat":
         overrides["allowed_tools"] = [
             "memory_search",

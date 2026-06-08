@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
@@ -171,6 +172,10 @@ def _extract_llm_error_parts(exc: Exception) -> dict[str, str | int | None]:
     status_code = getattr(response, "status_code", None)
     if not isinstance(status_code, int):
         status_code = getattr(exc, "status_code", None)
+    if not isinstance(status_code, int):
+        match = re.search(r"(?:error code|status code|http status)\D+(\d{3})", raw_message, flags=re.IGNORECASE)
+        if match:
+            status_code = int(match.group(1))
     return {
         "error_type": error_type,
         "error_code": error_code,
@@ -208,6 +213,16 @@ def _classify_llm_upstream_issue(exc: Exception) -> dict[str, Any]:
             "provider_error_code": error_code or error_type,
             "user_message": "当前模型订阅已过期，请在模型管理中切换到可用模型，或更新后端 LLM_PROVIDER / 模型配置后重试。",
             "action": "switch_model_or_refresh_provider_subscription",
+        }
+
+    if status_code == 402 or any(token in combined_lower for token in ("insufficient balance", "payment required", "billing", "余额不足")):
+        return {
+            "category": "provider_billing_unavailable",
+            "code": "provider_billing_unavailable",
+            "http_status": status_code,
+            "provider_error_code": error_code or error_type,
+            "user_message": "模型服务余额不足或账单不可用，请充值、更新套餐，或切换到可用模型后重试。",
+            "action": "recharge_provider_or_switch_model",
         }
 
     if "request timed out" in combined_lower or "timed out" in combined_lower:

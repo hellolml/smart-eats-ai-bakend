@@ -35,7 +35,7 @@ class TravelPlanNewHooks(BaseSkillHooks):
         map_payload = _latest_map_payload(state)
         itinerary = _payload_itinerary(overrides)
         trip_meta = _trip_meta(state, context, overrides)
-        excluded_places = _payload_excluded_places(overrides)
+        excluded_places = _excluded_place_names(state)
         user_added_places = _payload_user_added_places(overrides)
         extracted_places = _collect_extracted_places(state)
         food_items = _collect_food_items(state)
@@ -211,6 +211,10 @@ class TravelPlanNewHooks(BaseSkillHooks):
             return None
         overrides = _context_overrides(state)
         action = _travel_action(overrides)
+        if _is_travel_summary_request(_last_user_message(state)):
+            summary = _travel_summary_final(state)
+            if summary:
+                return summary
         candidates = _collect_verified_candidates(state)
         pending_places = _pending_verifiable_places(state)
         if action == "confirm_candidates" and candidates:
@@ -289,6 +293,16 @@ def _context_overrides(state: Any) -> dict[str, Any]:
     return overrides if isinstance(overrides, dict) else {}
 
 
+def _travel_payload_from_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
+    payload = overrides.get("travel_payload")
+    if isinstance(payload, dict) and payload:
+        return payload
+    latest = overrides.get("latest_travel_final_json")
+    if isinstance(latest, dict):
+        return latest
+    return {}
+
+
 def _preference_context(overrides: dict[str, Any]) -> dict[str, Any]:
     value = overrides.get("user_preference_md")
     return value if isinstance(value, dict) else {}
@@ -338,21 +352,187 @@ def _state_has_image_inputs(state: Any) -> bool:
 
 
 def _trip_meta(state: Any, context: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    payload = overrides.get("travel_payload")
-    payload = payload if isinstance(payload, dict) else {}
+    payload = _travel_payload_from_overrides(overrides)
     meta = payload.get("trip_meta") if isinstance(payload.get("trip_meta"), dict) else {}
     basic = payload.get("basic_info") if isinstance(payload.get("basic_info"), dict) else {}
+    parsed = _trip_meta_from_message(_last_user_message(state))
+    is_revision = _is_trip_revision_message(_last_user_message(state))
+    parsed_destination = parsed.get("destination") if is_revision else None
+    parsed_days = parsed.get("days") if is_revision else None
     return {
-        "destination": meta.get("destination") or basic.get("destination") or payload.get("destination"),
-        "start_date": meta.get("start_date") or basic.get("start_date") or payload.get("start_date"),
+        "destination": parsed_destination or meta.get("destination") or basic.get("destination") or payload.get("destination") or parsed.get("destination"),
+        "start_date": meta.get("start_date") or basic.get("start_date") or payload.get("start_date") or parsed.get("start_date"),
         "end_date": meta.get("end_date") or basic.get("end_date") or payload.get("end_date"),
-        "days": meta.get("days") or basic.get("days") or payload.get("days"),
-        "travelers_count": meta.get("travelers_count") or basic.get("travelers_count") or payload.get("travelers_count"),
+        "days": parsed_days or meta.get("days") or basic.get("days") or payload.get("days") or parsed.get("days"),
+        "travelers_count": meta.get("travelers_count") or basic.get("travelers_count") or payload.get("travelers_count") or parsed.get("travelers_count"),
         "preferences": meta.get("preferences") or basic.get("preferences") or payload.get("preferences") or [],
         "budget": meta.get("budget") or basic.get("budget") or payload.get("budget"),
         "start_point": meta.get("start_point") or payload.get("start_point"),
         "end_point": meta.get("end_point") or payload.get("end_point"),
     }
+
+
+def _is_trip_revision_message(message: str) -> bool:
+    text = str(message or "")
+    return any(token in text for token in ("改成", "调整为", "换成", "变成", "压缩到", "缩短到"))
+
+
+def _last_user_message(state: Any) -> str:
+    for key in ("message", "last_user_message"):
+        value = getattr(state, key, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    history = getattr(state, "history", None)
+    if isinstance(history, list):
+        for item in reversed(history):
+            if not isinstance(item, dict) or item.get("role") != "user":
+                continue
+            content = item.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+    return ""
+
+
+def _trip_meta_from_message(message: str) -> dict[str, Any]:
+    text = str(message or "")
+    if not text.strip():
+        return {}
+    meta: dict[str, Any] = {}
+    destination = _match_structured_field(text, ("目的地", "城市", "旅行地", "旅游地", "去哪"))
+    destination = destination or _infer_destination_from_message(text)
+    if destination:
+        meta["destination"] = destination
+    start_date = _match_structured_field(text, ("出行时间", "出发时间", "开始时间", "日期"))
+    if start_date:
+        date_match = re.search(r"\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}", start_date)
+        if date_match:
+            meta["start_date"] = (
+                date_match.group(0)
+                .replace("年", "-")
+                .replace("月", "-")
+                .replace("/", "-")
+                .replace(".", "-")
+                .rstrip("日")
+            )
+    days_text = _match_structured_field(text, ("出行天数", "旅行天数", "游玩天数", "天数"))
+    days = _parse_day_count(days_text or text)
+    if days:
+        meta["days"] = days
+    travelers_text = _match_structured_field(text, ("出行人数", "旅行人数", "人数"))
+    travelers = _parse_int_or_chinese_number(travelers_text or "")
+    if travelers:
+        meta["travelers_count"] = travelers
+    return meta
+
+
+def _infer_destination_from_message(message: str) -> str | None:
+    text = str(message or "")
+    explicit = _infer_destination_from_trip_phrase(text)
+    if explicit:
+        return explicit
+    for city in (
+        "广州",
+        "深圳",
+        "杭州",
+        "成都",
+        "重庆",
+        "长沙",
+        "南京",
+        "苏州",
+        "西安",
+        "武汉",
+        "厦门",
+        "青岛",
+        "大理",
+        "丽江",
+        "东京",
+        "大阪",
+        "京都",
+        "曼谷",
+        "首尔",
+        "上海",
+        "北京",
+    ):
+        if _city_mention_is_destination(text, city):
+            return city
+    return None
+
+
+def _infer_destination_from_trip_phrase(text: str) -> str | None:
+    patterns = (
+        r"(?:临时)?(?:改成|调整为|换成|变成)\s*([\u4e00-\u9fa5]{2,8})\s*(?:\d+|[一二两三四五六七八九十]+)\s*天",
+        r"(?:帮我|请|麻烦)?(?:做|规划|安排|生成)(?:一个|一份)?\s*([\u4e00-\u9fa5]{2,8})\s*(?:\d+|[一二两三四五六七八九十]+)\s*天(?:旅行|旅游|行程|攻略|计划)?",
+        r"(?:去|到)\s*([\u4e00-\u9fa5]{2,8})\s*(?:玩|旅行|旅游|出游)?\s*(?:\d+|[一二两三四五六七八九十]+)\s*天",
+        r"([\u4e00-\u9fa5]{2,8})\s*(?:\d+|[一二两三四五六七八九十]+)\s*天(?:旅行|旅游|行程|攻略|计划)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        value = _clean_destination_candidate(match.group(1))
+        if value:
+            return value
+    return None
+
+
+def _clean_destination_candidate(value: Any) -> str | None:
+    text = str(value or "").strip(" \t，。；:：、")
+    text = re.sub(r"^(?:帮我|请|麻烦|做|规划|安排|一个|一份|去|到)", "", text).strip()
+    text = re.sub(r"(?:旅行|旅游|行程|攻略|计划)$", "", text).strip()
+    return text or None
+
+
+def _city_mention_is_destination(text: str, city: str) -> bool:
+    for match in re.finditer(re.escape(city), text):
+        start, end = match.span()
+        suffix = text[end : end + 1]
+        prefix = text[max(0, start - 1) : start]
+        if suffix in {"路", "街", "巷", "道", "站", "店", "馆", "坊", "桥", "广场"}:
+            continue
+        if prefix in {"不", "去"} and text[max(0, start - 2) : end + 1].startswith("不去"):
+            continue
+        return True
+    return False
+
+
+def _match_structured_field(text: str, labels: tuple[str, ...]) -> str | None:
+    for label in labels:
+        match = re.search(rf"{re.escape(label)}\s*[:：]\s*([^\n\r]+)", text)
+        if match:
+            value = match.group(1).strip(" \t,，。；;")
+            value = re.split(r"\s+(?:出行|旅行|游玩|人数|请|希望)", value, maxsplit=1)[0].strip()
+            return value or None
+    return None
+
+
+def _parse_day_count(value: str) -> int | None:
+    text = str(value or "")
+    match = re.search(r"(\d+)\s*天", text)
+    if match:
+        return int(match.group(1))
+    chinese_match = re.search(r"([一二两三四五六七八九十]+)\s*天", text)
+    if chinese_match:
+        return _parse_int_or_chinese_number(chinese_match.group(1))
+    return None
+
+
+def _parse_int_or_chinese_number(value: str) -> int | None:
+    text = str(value or "")
+    digit = re.search(r"\d+", text)
+    if digit:
+        return int(digit.group(0))
+    numerals = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if text == "十":
+        return 10
+    if text.startswith("十") and len(text) == 2:
+        return 10 + numerals.get(text[1], 0)
+    if "十" in text:
+        left, right = text.split("十", 1)
+        return numerals.get(left, 1) * 10 + numerals.get(right, 0)
+    for char in text:
+        if char in numerals:
+            return numerals[char]
+    return None
 
 
 def _phase(
@@ -669,16 +849,14 @@ def _collect_verified_candidates(state: Any) -> list[dict[str, Any]]:
                 }
             )
         )
-    excluded = _payload_excluded_places(_context_overrides(state))
+    excluded = _excluded_place_names(state)
     if excluded:
         candidates = [item for item in candidates if not _matches_excluded(item, excluded)]
     return candidates
 
 
 def _payload_candidates(overrides: dict[str, Any]) -> list[dict[str, Any]]:
-    payload = overrides.get("travel_payload")
-    if not isinstance(payload, dict):
-        return []
+    payload = _travel_payload_from_overrides(overrides)
     raw_candidates = payload.get("candidates") or payload.get("confirmed_candidates")
     if not isinstance(raw_candidates, list):
         return []
@@ -738,7 +916,7 @@ def _payload_candidates(overrides: dict[str, Any]) -> list[dict[str, Any]]:
                 },
             })
         )
-    excluded = _payload_excluded_places(overrides)
+    excluded = _excluded_place_names_from_overrides(overrides)
     if excluded:
         candidates = [item for item in candidates if not _matches_excluded(item, excluded)]
     return candidates
@@ -822,6 +1000,19 @@ def _payload_excluded_places(overrides: dict[str, Any]) -> list[str]:
     return names
 
 
+def _excluded_place_names(state: Any) -> list[str]:
+    names = _payload_excluded_places(_context_overrides(state))
+    for item in _extract_excluded_places_from_user_message(_last_user_message(state)):
+        name = str(item.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _excluded_place_names_from_overrides(overrides: dict[str, Any]) -> list[str]:
+    return _payload_excluded_places(overrides)
+
+
 def _candidate_key(item: dict[str, Any]) -> str:
     poi = item.get("poi") if isinstance(item.get("poi"), dict) else {}
     return str(item.get("candidate_id") or poi.get("poi_id") or item.get("poi_id") or item.get("name") or "").strip()
@@ -830,13 +1021,22 @@ def _candidate_key(item: dict[str, Any]) -> str:
 def _matches_excluded(item: dict[str, Any], excluded: list[str]) -> bool:
     key = _candidate_key(item)
     name = str(item.get("name") or "").strip()
-    return any(value and (value == key or value == name) for value in excluded)
+    normalized_key = _normalize_name_key(key)
+    normalized_name = _normalize_name_key(name)
+    return any(
+        value
+        and (
+            value == key
+            or value == name
+            or (_normalize_name_key(value) and _normalize_name_key(value) in {normalized_key, normalized_name})
+            or (_normalize_name_key(value) and _normalize_name_key(value) in normalized_name)
+        )
+        for value in excluded
+    )
 
 
 def _payload_itinerary(overrides: dict[str, Any]) -> dict[str, Any]:
-    payload = overrides.get("travel_payload")
-    if not isinstance(payload, dict):
-        return {"days": []}
+    payload = _travel_payload_from_overrides(overrides)
     itinerary = payload.get("itinerary")
     if isinstance(itinerary, dict):
         days = itinerary.get("days")
@@ -852,6 +1052,7 @@ def _collect_extracted_places(state: Any) -> list[dict[str, Any]]:
     payload = overrides.get("travel_payload") if isinstance(overrides.get("travel_payload"), dict) else {}
     raw_places = payload.get("extracted_places") or payload.get("places") or []
     places = _normalize_extracted_places(raw_places)
+    places.extend(_extract_places_from_user_message(_last_user_message(state)))
     content = _last_ai_message_content(state)
     if _state_has_image_inputs(state):
         fallback_places = _mark_llm_text_fallback(_extract_places_from_ai_content(content))
@@ -871,6 +1072,30 @@ def _collect_extracted_places(state: Any) -> list[dict[str, Any]]:
         if item.get("category") in {"restaurant", "cafe", "nightlife"}
     )
     return _dedupe_places([item for item in places if not _is_non_place_text(item.get("name"))])
+
+
+def _extract_places_from_user_message(message: str) -> list[dict[str, Any]]:
+    text = str(message or "")
+    segments: list[str] = []
+    for pattern in (
+        r"(?:我想去|想去|地点|景点)\s*[:：]\s*([^\n\r]+)",
+        r"(?:旅行计划|旅行攻略|旅游计划|旅游攻略|行程)\s*[:：]\s*([^\n\r。]+)",
+    ):
+        match = re.search(pattern, text)
+        if match:
+            segments.append(match.group(1))
+    for match in re.findall(r"改成([^，。！？；;\n\r]{2,24})", text):
+        segments.append(match)
+    if not segments:
+        return []
+    places: list[dict[str, Any]] = []
+    for segment in segments:
+        segment = re.split(r"\s*(?:偏好|请|要求|备注|第二晚|晚上|下午|上午)\s*[:：]?", segment, maxsplit=1)[0]
+        for part in re.split(r"[、,，;；]", segment):
+            name = _clean_extracted_name(part)
+            if name and not _is_non_place_text(name):
+                places.append({"name": name, "category": _category_from_text(name), "source": "user_structured_text"})
+    return places
 
 
 def _collect_food_items(state: Any) -> list[dict[str, Any]]:
@@ -1376,8 +1601,9 @@ def _section_between(content: str, starts: tuple[str, ...], ends: tuple[str, ...
 def _clean_extracted_name(value: Any) -> str:
     text = str(value or "").strip()
     text = re.sub(r"^[#>\s\-*`]+", "", text)
+    text = re.sub(r"^(?:的是|是|的)", "", text)
     text = re.sub(r"[🐼🏛️🛍️🌳🏯🌙🌿✅❌⚠️]+", "", text).strip()
-    text = text.strip("*`：:-— ")
+    text = text.strip("*`：:-— ，,。.!！?？；; ")
     text = re.sub(r"\s+", "", text)
     return text[:40]
 
@@ -1396,12 +1622,31 @@ def _dedupe_places(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _normalize_name_key(value: str) -> str:
-    return re.sub(r"[\s（）()【】\\[\\]·•、,，。:：;；\\-_/]+", "", str(value or "").lower())
+    return re.sub(r"[\s\u3000（）()【】\[\]·•、,，。.!！?？:：;；\-_\/]+", "", str(value or "").lower())
 
 
 STRUCTURAL_PLACE_NAMES = {
     "阶段",
+    "阶段一",
+    "阶段二",
+    "阶段三",
     "步骤",
+    "目的地",
+    "出行时间",
+    "时间",
+    "出行天数",
+    "天数",
+    "人数",
+    "出行人数",
+    "想去的地方",
+    "地点",
+    "地点。",
+    "菜品偏好",
+    "用户提到的地点",
+    "偏好",
+    "行程摘要",
+    "已识别行程概要",
+    "已确认调整",
     "候选地点",
     "候选地点筛选结果",
     "验证结果",
@@ -1422,12 +1667,22 @@ STRUCTURAL_PLACE_NAMES = {
     "住宿类",
     "交通类",
     "其他候选",
+    "现在我来验证这些地点的poi信息",
+    "现在我先搜索验证这几个核心地点",
 }
 
 
 def _is_non_place_text(value: Any) -> bool:
     text = str(value or "").strip()
     if not text:
+        return True
+    if re.fullmatch(r"(?:\d+|[一二两三四五六七八九十]+)\s*(?:天|日|晚|小时|分钟)", text):
+        return True
+    if re.fullmatch(r"(?:想)?(?:轻松|松弛|慢|慢一点|轻松一点|别太赶|不要太赶|不赶|悠闲)(?:一点|些)?", text):
+        return True
+    if re.fullmatch(r"[\u4e00-\u9fa5]{2,8}\s*(?:\d+|[一二两三四五六七八九十]+)\s*(?:天|日|晚)", text):
+        return True
+    if len(text) > 28 and any(token in text for token in ("我可以", "您可以", "你可以", "请告诉", "请补充", "有什么特别想去", "直接告诉我")):
         return True
     compact = _normalize_name_key(text)
     if not compact:
@@ -1438,7 +1693,30 @@ def _is_non_place_text(value: Any) -> bool:
         return True
     if re.match(r"^day\d+$", compact, flags=re.IGNORECASE):
         return True
-    if any(token in compact for token in ("现在调用高德", "调用高德", "开始验证", "请确认删除或补充", "确认后我再生成")):
+    if any(
+        token in compact
+        for token in (
+            "现在调用高德",
+            "调用高德",
+            "开始验证",
+            "现在我来验证",
+            "现在我先搜索验证",
+            "逐一搜索验证",
+            "验证这些地点",
+            "已识别行程概要",
+            "想轻松一点",
+            "别太赶",
+            "不要太赶",
+            "轻松一点",
+            "用户提到的地点",
+            "请确认删除或补充",
+            "确认后我再生成",
+            "这样我可以",
+            "有什么特别想去的地方",
+            "请补充可在高德检索",
+            "上传攻略截图",
+        )
+    ):
         return True
     return False
 
@@ -1541,7 +1819,22 @@ def _collect_excluded_places(state: Any) -> list[dict[str, Any]]:
                 "exclude_reason": place.get("exclude_reason") or place.get("recommended_reason") or "攻略中标记为不推荐或排除",
             }
         )
+    excluded.extend(_extract_excluded_places_from_user_message(_last_user_message(state)))
     return _dedupe_places(excluded)
+
+
+def _extract_excluded_places_from_user_message(message: str) -> list[dict[str, Any]]:
+    text = str(message or "")
+    excluded: list[dict[str, Any]] = []
+    for match in re.findall(r"([^，。！？；;\n\r]{2,20})不去了", text):
+        name = _clean_extracted_name(match)
+        if name and not _is_non_place_text(name):
+            excluded.append({"name": name, "source_name": name, "exclude_reason": "用户明确说不去了"})
+    for match in re.findall(r"不去(?:的是|的是：|的是:|的是\s*|的|是)?\s*([^，。！？；;\n\r]{2,20})", text):
+        name = _clean_extracted_name(match)
+        if name and not _is_non_place_text(name):
+            excluded.append({"name": name, "source_name": name, "exclude_reason": "用户明确说不去"})
+    return excluded
 
 
 def _match_failure_reason(match_status: Any, rejected_pois: list[Any]) -> str:
@@ -1908,6 +2201,58 @@ def _itinerary_markdown(days: list[dict[str, Any]]) -> str:
                     lines.append(f"   - 下一段路线：{summary}")
     lines.append("\n确认这版行程后，我会生成高德地图二维码。")
     return "\n".join(lines).strip()
+
+
+def _is_travel_summary_request(message: str) -> bool:
+    text = str(message or "")
+    return any(token in text for token in ("总结", "概括", "重点", "每天")) and any(
+        token in text for token in ("上午", "晚上", "每日", "每天", "三天", "两天", "行程")
+    )
+
+
+def _travel_summary_final(state: Any) -> dict[str, Any] | None:
+    overrides = _context_overrides(state)
+    trip_meta = _trip_meta(state, {}, overrides)
+    days = _payload_itinerary(overrides).get("days")
+    if not isinstance(days, list) or not days:
+        candidates = _collect_verified_candidates(state)
+        days = _build_rough_itinerary(candidates, trip_meta).get("days", []) if candidates else []
+    if not days:
+        return None
+    raw_text = _itinerary_summary_markdown(days)
+    latest = _travel_payload_from_overrides(overrides)
+    return {
+        "state": latest.get("state") or "itinerary_generated",
+        "await_confirmation": bool(latest.get("await_confirmation", False)),
+        "trip_meta": trip_meta,
+        "sources": _sources(state),
+        "places": latest.get("places") if isinstance(latest.get("places"), list) else [],
+        "candidates": _collect_verified_candidates(state),
+        "itinerary": {"days": days},
+        "map": latest.get("map") if isinstance(latest.get("map"), dict) else {"qr_code_url": None, "schema_url": None},
+        "raw_text": raw_text,
+        "recommendations": [{"type": "note", "title": "行程重点摘要", "reason": raw_text}],
+        "followups": ["需要的话，我可以继续按轻松程度、餐饮或交通顺序调整。"],
+        "warnings": [],
+    }
+
+
+def _itinerary_summary_markdown(days: list[dict[str, Any]]) -> str:
+    lines = ["## 行程重点摘要"]
+    for index, day in enumerate(days, start=1):
+        if not isinstance(day, dict):
+            continue
+        day_no = day.get("day_number") or index
+        items = day.get("items") if isinstance(day.get("items"), list) else []
+        names = [
+            str(item.get("place_name") or item.get("name") or item.get("title") or "").strip()
+            for item in items
+            if isinstance(item, dict) and str(item.get("place_name") or item.get("name") or item.get("title") or "").strip()
+        ]
+        morning = "、".join(names[:2]) if names else "保留轻松游览"
+        evening = "、".join(names[-2:]) if len(names) >= 2 else (names[0] if names else "安排晚餐和休息")
+        lines.append(f"- Day {day_no} / 第{day_no}天：上午重点：{morning}；晚上重点：{evening}。")
+    return "\n".join(lines)
 
 
 def _map_markdown(result: dict[str, Any], days: list[dict[str, Any]], route_preview: list[dict[str, Any]]) -> str:
@@ -2360,6 +2705,14 @@ def _build_rough_itinerary(candidates: list[dict[str, Any]], trip_meta: dict[str
         end = start + per_day if day_index < day_count - 1 else len(candidates)
         day_candidates = candidates[start:end]
         items = []
+        if not day_candidates:
+            items.append(
+                {
+                    "place_name": "轻松留白",
+                    "name": "轻松留白",
+                    "notes": "候选地点少于旅行天数，保留半天到一天作为休息、餐饮或临时补充安排。",
+                }
+            )
         for item in day_candidates:
             poi = item.get("poi") if isinstance(item.get("poi"), dict) else {}
             transport_to_next = None
@@ -2400,8 +2753,7 @@ def _map_title(trip_meta: dict[str, Any]) -> str:
 
 
 def _line_list_from_payload(overrides: dict[str, Any]) -> list[dict[str, Any]]:
-    payload = overrides.get("travel_payload")
-    payload = payload if isinstance(payload, dict) else {}
+    payload = _travel_payload_from_overrides(overrides)
     raw_line_list = payload.get("line_list")
     if isinstance(raw_line_list, list) and raw_line_list:
         return [item for item in raw_line_list if isinstance(item, dict)]
@@ -2513,7 +2865,22 @@ def _rough_days_from_candidates(candidates: list[dict[str, Any]], trip_meta: dic
     day_count = max(1, min(day_count, 15))
     days: list[dict[str, Any]] = []
     for index in range(day_count):
-        items = candidates[index::day_count] or candidates[:1]
+        items = candidates[index::day_count]
+        if not items:
+            days.append(
+                {
+                    "day_number": index + 1,
+                    "theme": f"Day {index + 1}",
+                    "items": [
+                        {
+                            "place_name": "轻松留白",
+                            "name": "轻松留白",
+                            "notes": "候选地点少于旅行天数，保留半天到一天作为休息、餐饮或临时补充安排。",
+                        }
+                    ],
+                }
+            )
+            continue
         days.append(
             {
                 "day_number": index + 1,

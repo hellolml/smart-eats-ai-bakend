@@ -2,12 +2,14 @@ import pytest
 import asyncio
 from datetime import datetime, timezone
 
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from app.agent.metrics import record_agent_metric, reset_agent_metrics
 from app.agent.monitoring import persist_realtime_conversation
 from app.agent.realtime_eval import RealtimeEvalResult
 from app.common.security import create_access_token
 from app.infra.db import AsyncSessionLocal
-from app.infra.eval_db import eval_session, init_eval_db
+from app.infra.eval_db import close_eval_db, eval_session, init_eval_db
 from app.infra.models.chat import ChatSession
 from app.infra.models.eval import EvalRunJob
 from evals.persistence.postgres import EvalPersistenceStore
@@ -104,6 +106,51 @@ def _auth_headers(user_id: str = "test-eval-admin") -> dict[str, str]:
     """Create Authorization headers with a valid access token."""
     token, _ = create_access_token(user_id)
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_init_eval_db_backfills_conversation_cost_columns(tmp_path, monkeypatch):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'old_eval.db'}"
+    monkeypatch.setenv("EVAL_DATABASE_URL", database_url)
+    await close_eval_db()
+
+    engine = create_async_engine(database_url)
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql("CREATE TABLE conversation_runs (id VARCHAR(36) PRIMARY KEY)")
+        await conn.exec_driver_sql(
+            """
+            CREATE TABLE conversation_costs (
+                id VARCHAR(36) PRIMARY KEY,
+                run_id VARCHAR(36) NOT NULL,
+                token_input INTEGER NOT NULL,
+                token_output INTEGER NOT NULL,
+                token_cost FLOAT NOT NULL,
+                tool_cost FLOAT NOT NULL,
+                total_cost FLOAT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    await engine.dispose()
+
+    await init_eval_db()
+
+    verify_engine = create_async_engine(database_url)
+    async with verify_engine.connect() as conn:
+        result = await conn.exec_driver_sql("PRAGMA table_info(conversation_costs)")
+        columns = {row[1] for row in result.fetchall()}
+    await verify_engine.dispose()
+    await close_eval_db()
+
+    assert {
+        "cached_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "provider",
+        "model_name",
+        "cost_estimated",
+        "pricing_json",
+    }.issubset(columns)
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +599,7 @@ async def test_monitoring_persists_model_usage_cost_and_alerts(client):
             session,
             result=result,
             events=[
-                {"event": "model_usage", "data": {"provider": "openai", "model": "gpt-5.5", "usage": {"input_tokens": 1000, "output_tokens": 2000}}},
+                {"event": "model_usage", "data": {"provider": "openai", "model": "gpt-5.5", "usage": {"input_tokens": 1000, "output_tokens": 2000, "cached_tokens": 700}}},
                 {"event": "model_usage", "data": {"provider": "openai", "model": "gpt-5.5", "usage": {"input_tokens": 300, "output_tokens": 400}}},
                 {"event": "error", "data": {"code": "429", "message": "provider rate limit"}},
             ],
@@ -574,6 +621,9 @@ async def test_monitoring_persists_model_usage_cost_and_alerts(client):
     payload = cost.json()
     assert payload["token_input"] >= 1300
     assert payload["token_output"] >= 2400
+    assert payload["cached_tokens"] >= 700
+    assert payload["cache_miss_tokens"] >= 600
+    assert payload["cache_hit_rate"] > 0
     assert payload["latency_p99_ms"] >= 0
 
     failures = await client.get("/api/v1/internal/monitoring/failures?window=24h", headers=_auth_headers())
@@ -584,6 +634,79 @@ async def test_monitoring_persists_model_usage_cost_and_alerts(client):
     alert_resp = await client.get("/api/v1/internal/eval-alerts?status=open", headers=_auth_headers())
     assert alert_resp.status_code == 200
     assert any(item["alert_type"] == "provider_error_rate" for item in alert_resp.json()["alerts"])
+
+
+@pytest.mark.asyncio
+async def test_monitoring_separates_provider_billing_from_agent_fallback(client):
+    result = RealtimeEvalResult(
+        id="monitoring-provider-billing-run-1",
+        session_id="monitoring-provider-billing-session",
+        scene="chat",
+        agent_id="general_chat",
+        is_fallback=True,
+        has_content=True,
+        overall_quality=0.1,
+        schema_compliance=1.0,
+        no_leak=1.0,
+        total_duration_ms=1200,
+    )
+    final_payload = {
+        "agent_result": {
+            "status": "failed",
+            "worker": "general_chat",
+            "failure_class": "upstream_error",
+            "final": {
+                "state": "fallback",
+                "failure_class": "upstream_error",
+                "recommendations": [{"type": "note", "title": "模型不可用", "reason": "fallback"}],
+            },
+            "diagnostics": {
+                "provider_issue": {
+                    "http_status": 402,
+                    "code": "provider_upstream_error",
+                    "user_message": "Error code: 402 - Insufficient Balance",
+                }
+            },
+        },
+        "failure_class": "upstream_error",
+    }
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as session:
+        await persist_realtime_conversation(
+            session,
+            result=result,
+            events=[{"event": "final", "data": final_payload}],
+            final_json=final_payload["agent_result"]["final"],
+            user_id="monitoring-user",
+            trace_id="trace-provider-billing-test",
+            model_provider="openai",
+            model_name="deepseek-v4-flash",
+            started_at=now,
+            ended_at=now,
+        )
+        await session.commit()
+
+    overview = await client.get("/api/v1/internal/monitoring/overview?window=24h", headers=_auth_headers())
+    assert overview.status_code == 200
+    overview_payload = overview.json()
+    assert overview_payload["provider_error_rate"] > 0
+    assert overview_payload["environment_failure_rate"] > 0
+    assert overview_payload["agent_fallback_rate"] < overview_payload["user_visible_fallback_rate"]
+
+    failures = await client.get("/api/v1/internal/monitoring/failures?window=24h", headers=_auth_headers())
+    assert failures.status_code == 200
+    assert failures.json()["by_failure_class"]["provider_billing_unavailable"] >= 1
+
+    traces = await client.get(
+        "/api/v1/internal/monitoring/traces?limit=80",
+        headers=_auth_headers(),
+    )
+    assert traces.status_code == 200
+    target = next(item for item in traces.json()["records"] if item["id"] == "monitoring-provider-billing-run-1")
+    assert target["failure_class"] == "upstream_error"
+    assert target["root_failure_class"] == "provider_billing_unavailable"
+    assert target["environment_failure"] is True
+    assert target["agent_fallback"] is False
 
 
 @pytest.mark.asyncio

@@ -23,7 +23,7 @@ def summarize_provider_health(
     reports: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     provider_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    reports = list(reports or [])
+    reports = [_normalize_provider_observation_report(item) for item in list(reports or [])]
     config = sanitize_provider_config(provider_config if provider_config is not None else collect_provider_config_snapshot())
     issue_counts = _merge_count_maps(
         reports,
@@ -301,6 +301,84 @@ def load_json(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _normalize_provider_observation_report(report: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(report, dict):
+        return {}
+    normalized = dict(report)
+    issues = _provider_unavailable_issues(report)
+    if not issues:
+        return normalized
+
+    issue_counts = dict(normalized.get("provider_issue_counts") or {})
+    category_counts = dict(normalized.get("provider_issue_category_counts") or {})
+    action_counts = dict(normalized.get("provider_action_counts") or {})
+    environment_count = int(normalized.get("environment_failure_count") or 0)
+    for issue in issues:
+        code = str(issue.get("code") or "provider_unavailable")
+        category = str(issue.get("category") or _provider_issue_category(code))
+        action = str(issue.get("action") or _provider_issue_action(code, category))
+        issue_counts[code] = int(issue_counts.get(code) or 0) + 1
+        category_counts[category] = int(category_counts.get(category) or 0) + 1
+        action_counts[action] = int(action_counts.get(action) or 0) + 1
+        environment_count += 1
+    normalized["provider_issue_counts"] = issue_counts
+    normalized["provider_issue_category_counts"] = category_counts
+    normalized["provider_action_counts"] = action_counts
+    normalized["environment_failure_count"] = environment_count
+    return normalized
+
+
+def _provider_unavailable_issues(report: dict[str, Any]) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_issue(issue: dict[str, Any]) -> None:
+        key = (
+            str(issue.get("kind") or "provider_unavailable"),
+            str(issue.get("http_status") or ""),
+            str(issue.get("code") or ""),
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        issues.append(issue)
+
+    top = report.get("provider_unavailable")
+    if isinstance(top, dict):
+        add_issue(top)
+    for result in report.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        issue = result.get("provider_unavailable")
+        if isinstance(issue, dict):
+            add_issue(issue)
+    return issues
+
+
+def _provider_issue_category(code: str) -> str:
+    if code == "provider_billing_unavailable":
+        return "provider_billing_unavailable"
+    if code in {"provider_auth_failed", "subscription_expired"}:
+        return "provider_auth"
+    if code == "provider_rate_limited":
+        return "provider_rate_limit"
+    if code == "model_timeout":
+        return "provider_timeout"
+    return "provider_model_error"
+
+
+def _provider_issue_action(code: str, category: str) -> str:
+    if code == "provider_billing_unavailable" or category == "provider_billing_unavailable":
+        return "recharge_provider_or_switch_model"
+    if category == "provider_auth":
+        return "check_api_key_model_permission_or_provider_config"
+    if category == "provider_rate_limit":
+        return "retry_later_or_switch_model"
+    if category == "provider_timeout":
+        return "retry_reduce_context_or_increase_timeout"
+    return "inspect_provider_error_and_model_config"
 
 
 def _split_csv(value: str | None) -> list[str]:

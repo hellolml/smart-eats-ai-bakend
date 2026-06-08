@@ -42,6 +42,39 @@ def test_provider_health_summarizes_observed_provider_issues_without_secret_leak
     assert secret not in json.dumps(health, ensure_ascii=False)
 
 
+def test_provider_health_reads_dialogue_probe_provider_unavailable_report():
+    health = summarize_provider_health(
+        [
+            {
+                "total_planned": 1,
+                "provider_unavailable": {
+                    "kind": "provider_unavailable",
+                    "http_status": 402,
+                    "code": "provider_billing_unavailable",
+                    "message": "Error code: 402 - Insufficient Balance",
+                },
+                "results": [
+                    {
+                        "provider_unavailable": {
+                            "kind": "provider_unavailable",
+                            "http_status": 402,
+                            "code": "provider_billing_unavailable",
+                        }
+                    }
+                ],
+            }
+        ],
+        provider_config={"provider": "openai", "api_key_set": True},
+    )
+
+    assert health["status"] == "unhealthy"
+    assert health["issue"] == "provider_billing_unavailable"
+    assert health["category"] == "provider_billing_unavailable"
+    assert health["action"] == "recharge_provider_or_switch_model"
+    assert health["observed_environment_failures"] == 1
+    assert health["issue_counts"] == {"provider_billing_unavailable": 1}
+
+
 def test_provider_health_suggests_configured_model_failover_for_subscription_issue():
     suggestions = suggest_provider_values(
         {

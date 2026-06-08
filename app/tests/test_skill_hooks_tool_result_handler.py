@@ -151,6 +151,93 @@ def test_food_assistant_short_circuits_selected_restaurant_with_typo_particle():
     assert handled["followups"][0] == "我可以继续帮你规划路线。"
 
 
+def test_food_assistant_negative_ordinal_refines_instead_of_selecting():
+    state = AgentRuntimeState(session_id="s1", message="第二家看起来一般，先别选，换一家更适合一个人吃的")
+    state.context = {
+        "food_mode": "eat_out",
+        "last_restaurants": [
+            {"name": "清和小馆", "address": "科技园步行 5 分钟"},
+            {"name": "重油大排档", "address": "科技园步行 8 分钟"},
+            {"name": "一人食简餐", "address": "科技园步行 6 分钟"},
+        ],
+    }
+
+    handled = FoodAssistantHooks().short_circuit_final(state)
+
+    assert handled is not None
+    titles = [item["title"] for item in handled["recommendations"]]
+    assert "重油大排档" not in titles
+    assert "一人食简餐" in titles
+    assert "selected_restaurant" not in handled
+    assert "更适合一个人" in handled["recommendations"][0]["reason"]
+
+
+def test_food_assistant_defaults_deictic_selection_to_latest_restaurant():
+    state = AgentRuntimeState(session_id="s1", message="那就这家，帮我记住我今天想吃清淡。")
+    state.context = {
+        "food_mode": "eat_out",
+        "last_restaurants": [
+            {"name": "清和小馆", "address": "人民广场附近"},
+            {"name": "贾大娘跷脚牛肉", "address": "人民广场附近"},
+        ],
+    }
+
+    handled = FoodAssistantHooks().short_circuit_final(state)
+
+    assert handled is not None
+    assert handled["selected_restaurant"]["name"] == "清和小馆"
+    assert "清淡" in handled["followups"][0]
+
+
+def test_food_assistant_selects_restaurant_when_home_fallback_mentions_no_route():
+    state = AgentRuntimeState(session_id="s1", message="如果做饭失败，再回春熙路选第一家餐厅，但先不要规划路线。")
+    state.context = {
+        "last_restaurants": [
+            {"name": "状元盖码饭(春熙路店)", "address": "春熙路附近"},
+            {"name": "清淡牛肉馆", "address": "春熙路附近"},
+        ],
+    }
+
+    handled = FoodAssistantHooks().short_circuit_final(state)
+
+    assert handled is not None
+    assert handled["selected_restaurant"]["name"] == "状元盖码饭(春熙路店)"
+    assert "已选第一家" in handled["recommendations"][0]["reason"]
+    assert "春熙路" in handled["recommendations"][0]["reason"]
+    assert "先不规划路线" in handled["followups"][0]
+
+
+def test_food_assistant_compares_home_and_eat_out_without_reselecting_restaurant():
+    state = AgentRuntimeState(session_id="s1", message="最后给我两个方案对比：在家做和出去吃，各一句话。")
+    state.context = {
+        "food_mode": "eat_out",
+        "latest_home_chef_final_json": {"recommendations": [{"title": "番茄炒蛋"}]},
+        "selected_restaurant": {"name": "状元盖码饭(春熙路店)"},
+    }
+
+    handled = FoodAssistantHooks().short_circuit_final(state)
+
+    assert handled is not None
+    assert handled["recommendations"][0]["title"] == "在家做：番茄炒蛋"
+    assert handled["recommendations"][1]["title"] == "出去吃：状元盖码饭(春熙路店)"
+    assert "selected_restaurant" not in handled
+
+
+def test_food_assistant_selected_restaurant_reason_uses_recent_preference():
+    state = AgentRuntimeState(session_id="s1", message="现在回到刚才那家餐厅，给我一句简短推荐理由。")
+    state.context = {
+        "food_mode": "eat_out",
+        "selected_restaurant": {"name": "清和小馆", "address": "人民广场附近"},
+    }
+
+    handled = FoodAssistantHooks().short_circuit_final(state)
+
+    assert handled is not None
+    reason = handled["recommendations"][0]["reason"]
+    assert "推荐这家餐厅" in reason
+    assert "清淡" in reason
+
+
 def test_food_assistant_filters_food_decision_for_eat_out_mode():
     state = AgentRuntimeState(session_id="s1", message="出去吃粉面")
     state.context = {"food_mode": "eat_out"}
@@ -169,6 +256,19 @@ def test_food_assistant_filters_food_decision_for_eat_out_mode():
     )
 
     assert allowed == ["search_restaurants", "geocode_location", "get_weather"]
+
+
+def test_food_assistant_forces_restaurant_search_after_location_ready():
+    state = AgentRuntimeState(session_id="s1", message="我在长沙洋湖附近想吃湘菜")
+    state.context = {"food_mode": "eat_out", "location": {"lat": 28.12, "lng": 112.95}, "city": "长沙"}
+    state.observations = [{"tool": "geocode_location", "result": {"lat": 28.12, "lng": 112.95, "city": "长沙"}}]
+
+    calls = FoodAssistantHooks().forced_tool_calls(state)
+
+    assert calls is not None
+    assert calls[0]["name"] == "search_restaurants"
+    assert calls[0]["args"]["query"] == "湘菜"
+    assert calls[0]["args"]["lat"] == 28.12
 
 
 def test_food_assistant_filters_decide_food_to_decision_tool_only():
@@ -332,6 +432,45 @@ async def test_route_hook_builds_target_candidate_from_prior_candidates():
     }
 
 
+@pytest.mark.asyncio
+async def test_route_hook_builds_target_candidate_from_selected_restaurant_reference():
+    state = AgentRuntimeState(session_id="s1", message="从天安门到这家怎么走")
+    context = {
+        "selected_restaurant": {
+            "name": "京味烤鸭",
+            "lat": 39.905,
+            "lng": 116.397,
+        }
+    }
+
+    extra = await RoutePlannerHooks().build_context(state, context)
+
+    assert extra["route_target_candidate"] == {
+        "name": "京味烤鸭",
+        "geo": {"lat": 39.905, "lng": 116.397},
+        "raw": context["selected_restaurant"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_route_hook_builds_target_candidate_from_restaurant_ordinal():
+    state = AgentRuntimeState(session_id="s1", message="从天安门到第一家怎么走")
+    context = {
+        "last_restaurants": [
+            {"name": "京味烤鸭", "lat": 39.905, "lng": 116.397},
+            {"name": "胡同小馆", "lat": 39.91, "lng": 116.38},
+        ]
+    }
+
+    extra = await RoutePlannerHooks().build_context(state, context)
+
+    assert extra["route_target_candidate"] == {
+        "name": "京味烤鸭",
+        "geo": {"lat": 39.905, "lng": 116.397},
+        "raw": context["last_restaurants"][0],
+    }
+
+
 def test_route_hook_returns_missing_origin_final():
     state = AgentRuntimeState(session_id="s1")
 
@@ -352,6 +491,16 @@ def test_route_hook_short_circuits_bare_route_followup_to_clarification():
     assert "去哪儿" in handled["recommendations"][0]["title"]
 
 
+def test_route_hook_short_circuits_deictic_bare_route_followup_to_clarification():
+    state = AgentRuntimeState(session_id="s1", scene="route", message="那怎么走？")
+    state.context = {}
+
+    handled = RoutePlannerHooks().short_circuit_final(state)
+
+    assert handled is not None
+    assert handled["status"] == "needs_clarification"
+
+
 def test_route_hook_does_not_short_circuit_explicit_destination():
     state = AgentRuntimeState(session_id="s1", scene="route", message="怎么去西湖")
     state.context = {}
@@ -365,9 +514,130 @@ def test_route_hook_records_latest_route_directive():
 
     handled = RoutePlannerHooks().handle_tool_result(state, "plan_route", result)
 
-    assert handled is None
+    assert handled is not None
     assert state.context_overrides["latest_route"]["distance_m"] == 1200
     assert "submit_final_answer" in state.context_overrides["system_directive"]
+    assert handled["recommendations"][0]["type"] == "route"
+    assert "路线" in handled["recommendations"][0]["title"]
+    assert "分钟" in handled["recommendations"][0]["title"]
+
+
+def test_route_hook_records_geocoded_origin_for_route_followup():
+    state = AgentRuntimeState(session_id="s1", message="从天安门到第一家怎么走")
+    state.context = {
+        "route_target_candidate": {"name": "京味烤鸭", "lat": 39.905, "lng": 116.397},
+    }
+
+    handled = RoutePlannerHooks().handle_tool_result(
+        state,
+        "geocode_location",
+        {"latitude": 39.9087, "longitude": 116.3975},
+    )
+
+    assert handled is None
+    assert state.context["route_origin"] == {"lat": 39.9087, "lng": 116.3975}
+    calls = RoutePlannerHooks().forced_tool_calls(state)
+    assert calls is not None
+    assert calls[0]["name"] == "plan_route"
+
+
+def test_route_hook_forces_origin_geocode_before_route_for_selected_restaurant():
+    state = AgentRuntimeState(session_id="s1", message="还是回到刚才选的那家餐厅，从新街口过去怎么走？")
+    state.context = {
+        "route_target_candidate": {"name": "安庆馄饨", "geo": {"lat": 32.041, "lng": 118.784}},
+    }
+
+    calls = RoutePlannerHooks().forced_tool_calls(state)
+
+    assert calls is not None
+    assert calls[0] == {"name": "geocode_location", "args": {"query": "新街口"}, "type": "tool_call"}
+
+
+@pytest.mark.asyncio
+async def test_route_hook_uses_selected_restaurant_for_bare_route_followup():
+    state = AgentRuntimeState(session_id="s1", message="怎么走呢")
+    context = {
+        "selected_restaurant": {
+            "name": "人民广场粤味小馆",
+            "lat": 31.2338,
+            "lng": 121.4821,
+        }
+    }
+
+    extra = await RoutePlannerHooks().build_context(state, context, runtime={})
+
+    assert extra["route_target_candidate"]["name"] == "人民广场粤味小馆"
+    assert extra["route_target_candidate"]["geo"] == {"lat": 31.2338, "lng": 121.4821}
+
+
+def test_route_hook_clarifies_ambiguous_restaurant_route_selection():
+    state = AgentRuntimeState(session_id="s1", message="就选更适合不能吃辣的那家，从解放碑步行过去怎么走？")
+    state.context = {
+        "last_restaurants": [
+            {"name": "光巴斗老火锅", "lat": 29.554, "lng": 106.549},
+            {"name": "渝升大罗老火锅", "lat": 29.555, "lng": 106.55},
+        ],
+    }
+
+    final = RoutePlannerHooks().short_circuit_final(state)
+
+    assert final is not None
+    assert final["status"] == "needs_clarification"
+    assert "具体餐厅" in final["recommendations"][0]["title"]
+
+
+def test_route_hook_geocodes_target_then_origin_then_routes():
+    state = AgentRuntimeState(session_id="s1", message="还是回到刚才选的那家餐厅，从新街口过去怎么走？")
+    state.context = {
+        "route_target_candidate": {"name": "安庆馄饨董家金牌锅贴(丰富路店)"},
+    }
+
+    calls = RoutePlannerHooks().forced_tool_calls(state)
+    assert calls is not None
+    assert calls[0]["name"] == "geocode_location"
+    assert calls[0]["args"]["query"] == "安庆馄饨董家金牌锅贴(丰富路店)"
+
+    state.observations.append({"tool": "geocode_location", "args": calls[0]["args"], "result": {"lat": 32.041, "lng": 118.784, "query": "安庆馄饨董家金牌锅贴(丰富路店)"}})
+    RoutePlannerHooks().handle_tool_result(state, "geocode_location", {"lat": 32.041, "lng": 118.784, "query": "安庆馄饨董家金牌锅贴(丰富路店)"})
+    calls = RoutePlannerHooks().forced_tool_calls(state)
+    assert calls is not None
+    assert calls[0] == {"name": "geocode_location", "args": {"query": "新街口"}, "type": "tool_call"}
+
+    state.observations.append({"tool": "geocode_location", "args": calls[0]["args"], "result": {"lat": 32.045, "lng": 118.789, "query": "新街口"}})
+    RoutePlannerHooks().handle_tool_result(state, "geocode_location", {"lat": 32.045, "lng": 118.789, "query": "新街口"})
+    calls = RoutePlannerHooks().forced_tool_calls(state)
+    assert calls is not None
+    assert calls[0]["name"] == "plan_route"
+    assert calls[0]["args"]["origin_lat"] == 32.045
+    assert calls[0]["args"]["destination_lat"] == 32.041
+
+
+def test_route_hook_recovers_geocoded_coordinates_from_observations():
+    state = AgentRuntimeState(session_id="s1", message="从三里屯太古里过去怎么走？")
+    state.context = {
+        "route_target_candidate": {"name": "LE COQ 大公鸡小酒馆(北京首店)"},
+    }
+    state.observations.extend(
+        [
+            {
+                "tool": "geocode_location",
+                "args": {"query": "LE COQ 大公鸡小酒馆(北京首店)"},
+                "result": {"lat": 39.936, "lng": 116.454, "query": "LE COQ 大公鸡小酒馆(北京首店) 北京"},
+            },
+            {
+                "tool": "geocode_location",
+                "args": {"query": "三里屯太古里"},
+                "result": {"lat": 39.9369, "lng": 116.4544, "query": "三里屯太古里 北京"},
+            },
+        ]
+    )
+
+    calls = RoutePlannerHooks().forced_tool_calls(state)
+
+    assert calls is not None
+    assert calls[0]["name"] == "plan_route"
+    assert calls[0]["args"]["origin_lat"] == 39.9369
+    assert calls[0]["args"]["destination_lat"] == 39.936
 
 
 def test_travel_plan_new_hook_stops_at_candidate_confirmation():
@@ -976,6 +1246,177 @@ def test_travel_plan_new_default_map_title_does_not_duplicate_travel_word():
     title = calls[0]["args"]["title"]
     assert title == "旅行地图"
     assert "旅行旅行" not in title
+
+
+def test_travel_plan_new_parses_structured_trip_meta_from_user_message():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message=(
+            "目的地：成都\n"
+            "出行时间：2026-06-10\n"
+            "出行天数：三天 2 晚 天\n"
+            "出行人数：1 人\n"
+            "请输出清晰的候选旅行行程"
+        ),
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+    trip_meta = context["travel_state"]["trip_meta"]
+
+    assert trip_meta["destination"] == "成都"
+    assert trip_meta["start_date"] == "2026-06-10"
+    assert trip_meta["days"] == 3
+    assert trip_meta["travelers_count"] == 1
+
+
+def test_travel_plan_new_prefers_primary_destination_over_road_poi_city_name():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message="帮我做广州 3 天旅行计划：陈家祠、沙面、永庆坊、广东省博物馆、北京路。",
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+    trip_meta = context["travel_state"]["trip_meta"]
+
+    assert trip_meta["destination"] == "广州"
+
+
+def test_travel_plan_new_revision_overrides_destination_and_filters_day_phrase_place():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message="临时改成杭州 1 天，不去拙政园，只保留西湖和灵隐寺，别太赶。",
+        context_overrides={
+            "travel_payload": {
+                "trip_meta": {"destination": "苏州", "days": 2},
+                "places": [{"name": "拙政园"}, {"name": "平江路"}],
+            }
+        },
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+    travel_state = context["travel_state"]
+    names = [item["name"] for item in travel_state["extracted_places"]]
+
+    assert travel_state["trip_meta"]["destination"] == "杭州"
+    assert travel_state["trip_meta"]["days"] == 1
+    assert "杭州1天" not in names
+    assert "拙政园" in travel_state["excluded_places"]
+
+
+def test_travel_plan_new_handles_exclusion_correction_phrase_and_preference_text():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message="我刚才说错了，不去的是曾厝垵，沙坡尾保留，植物园也保留。",
+        context_overrides={
+            "travel_payload": {
+                "trip_meta": {"destination": "厦门", "days": 2},
+                "places": [{"name": "鼓浪屿"}, {"name": "曾厝垵"}, {"name": "想轻松一点"}],
+            }
+        },
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+    travel_state = context["travel_state"]
+    names = [item["name"] for item in travel_state["extracted_places"]]
+
+    assert "曾厝垵" in travel_state["excluded_places"]
+    assert "的是曾厝垵" not in travel_state["excluded_places"]
+    assert "想轻松一点" not in names
+
+
+def test_travel_plan_new_filters_prompt_artifacts_from_extracted_places():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        context_overrides={
+            "travel_payload": {
+                "extracted_places": [
+                    {"name": "这样我可以提取地点后用高德验证POI，再为您排出一份靠谱的每日候选行程😊"},
+                    {"name": "您有什么特别想去的地方吗？"},
+                    {"name": "宽窄巷子"},
+                ]
+            }
+        },
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+    names = [item["name"] for item in context["travel_state"]["extracted_places"]]
+
+    assert names == ["宽窄巷子"]
+
+
+def test_travel_plan_new_extracts_user_structured_want_places_only():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message=(
+            "目的地：成都\n"
+            "出行天数：三天 2 晚\n"
+            "我想去：宽窄巷子、武侯祠、杜甫草堂、成都大熊猫繁育研究基地、太古里、人民公园。\n"
+            "偏好：别太赶，想吃火锅和小吃。"
+        ),
+        skill_state={
+            "ai_message_contents": [
+                "阶段一：识别目的地信息\n目的地：成都\n人数：1\n现在我来验证这些地点的POI信息"
+            ]
+        },
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+    names = [item["name"] for item in context["travel_state"]["extracted_places"]]
+
+    assert "宽窄巷子" in names
+    assert "武侯祠" in names
+    assert "目的地" not in names
+    assert "人数" not in names
+    assert "阶段一" not in names
+    assert "现在我来验证这些地点的POI信息" not in names
+
+
+def test_travel_plan_new_extracts_places_from_compact_trip_plan_text():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message="帮我做北京 2 天轻松旅行计划：故宫、景山、南锣鼓巷、雍和宫，第二晚想吃烤鸭。",
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+    names = [item["name"] for item in context["travel_state"]["extracted_places"]]
+
+    assert "故宫" in names
+    assert "景山" in names
+    assert "南锣鼓巷" in names
+    assert "雍和宫" in names
+    assert "第二晚想吃烤鸭" not in names
+
+
+def test_travel_plan_new_tracks_user_replacement_and_exclusion():
+    state = AgentRuntimeState(
+        session_id="s1",
+        scene="travel_planner",
+        message="故宫不去了，改成国家博物馆，而且不要太早起。",
+        context_overrides={
+            "travel_payload": {
+                "candidates": [
+                    {"name": "故宫博物院", "poi": {"poi_id": "p1", "longitude": 116.397, "latitude": 39.916}},
+                    {"name": "景山公园", "poi": {"poi_id": "p2", "longitude": 116.395, "latitude": 39.925}},
+                ]
+            }
+        },
+    )
+
+    context = TravelPlanNewHooks().build_context(state, {})
+    names = [item["name"] for item in context["travel_state"]["extracted_places"]]
+    excluded = context["travel_state"]["excluded_places"]
+    candidates = [item["name"] for item in context["travel_state"]["candidates"]]
+
+    assert "国家博物馆" in names
+    assert "故宫" in excluded
+    assert "故宫博物院" not in candidates
 
 
 def test_travel_plan_new_line_list_uses_verified_pois_and_connects_days():

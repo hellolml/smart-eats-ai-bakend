@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 from uuid import uuid4
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
 from app.common.config import settings
 
@@ -18,6 +19,7 @@ def _emit_model_usage(chat_state: Any, ai_message: Any, planner: Any) -> None:
         return
     provider = usage.get("provider") or getattr(getattr(planner, "config", None), "name", None)
     model_name = usage.get("model_name") or getattr(getattr(planner, "config", None), "model_planner", None)
+    _attach_usage_to_prompt_cache_shape(chat_state, usage)
     chat_state.events.append({
         "event": "model_usage",
         "data": {
@@ -26,6 +28,68 @@ def _emit_model_usage(chat_state: Any, ai_message: Any, planner: Any) -> None:
             "usage": usage,
         },
     })
+
+
+def _stable_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16] if text else ""
+
+
+def _message_text(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    return str(content or "")
+
+
+def _prompt_section(messages: list[Any], prefix: str) -> str:
+    for message in messages:
+        text = _message_text(message)
+        if text.lstrip().startswith(prefix):
+            return text
+    return ""
+
+
+def _attach_usage_to_prompt_cache_shape(chat_state: Any, usage: dict[str, Any]) -> None:
+    events = getattr(chat_state, "events", None)
+    if not isinstance(events, list):
+        return
+    for event in reversed(events):
+        if not isinstance(event, dict) or event.get("event") != "prompt_cache_shape":
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return
+        data["input_tokens"] = int(usage.get("input_tokens") or 0)
+        data["cached_tokens"] = int(usage.get("cached_tokens") or 0)
+        data["cache_miss_tokens"] = int(usage.get("cache_miss_tokens") or 0)
+        return
+
+
+def _emit_prompt_cache_shape(chat_state: Any, messages: list[Any], allowed_tools: list[str]) -> None:
+    stable_prefix = _message_text(messages[0]) if messages else ""
+    runtime_context = _prompt_section(messages[1:], "## Runtime Context")
+    memories = _prompt_section(messages[1:], "<long_term_memories>")
+    summary = _prompt_section(messages[1:], "<conversation_summary>")
+    chat_state.events.append(
+        {
+            "event": "prompt_cache_shape",
+            "data": {
+                "stable_prefix_hash": _stable_hash(stable_prefix),
+                "stable_prefix_chars": len(stable_prefix),
+                "cacheable_prefix_hash": _stable_hash(stable_prefix),
+                "cacheable_prefix_chars": len(stable_prefix),
+                "runtime_context_hash": _stable_hash(runtime_context),
+                "runtime_context_chars": len(runtime_context),
+                "memory_hash": _stable_hash(memories),
+                "memory_chars": len(memories),
+                "summary_hash": _stable_hash(summary),
+                "summary_chars": len(summary),
+                "dynamic_context_chars": len(runtime_context),
+                "message_count": len(messages),
+                "allowed_tools": list(allowed_tools),
+            },
+        }
+    )
 
 
 def make_agent_node(*, agent_config: Any, planner: Any, registered_tools: list[str]):
@@ -120,15 +184,28 @@ def make_agent_node(*, agent_config: Any, planner: Any, registered_tools: list[s
                 )
 
         state_messages = state.get("messages")
+        runtime_context_prompt = (
+            chat_state.context.get("model_runtime_context")
+            if isinstance(chat_state.context, dict)
+            else None
+        )
         if isinstance(state_messages, list) and state_messages:
             planner_messages = runtime_builder.build_model_messages(
                 system_prompt=system,
                 summary=chat_state.summary,
                 messages=state_messages,
                 memories=chat_state.retrieved_memories,
+                runtime_context_prompt=runtime_context_prompt,
             )
         else:
-            planner_messages = [SystemMessage(content=system), HumanMessage(content=user)]
+            planner_messages = runtime_builder.build_model_messages(
+                system_prompt=system,
+                summary=chat_state.summary,
+                messages=[HumanMessage(content=user)],
+                memories=chat_state.retrieved_memories,
+                runtime_context_prompt=runtime_context_prompt,
+            )
+        _emit_prompt_cache_shape(chat_state, planner_messages, current_allowed_tools)
         try:
             ai_message = await active_planner.ainvoke_with_tools(
                 planner_messages,

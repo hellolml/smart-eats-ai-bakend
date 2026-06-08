@@ -17,10 +17,13 @@ class SkillResolver:
         scene = str(getattr(state, "scene", "") or context.get("ui_scene") or "")
         intent = str(getattr(state, "intent", "") or context.get("intent") or "")
         forced_skill_ids = self._forced_skill_ids(state, context)
+        allowed_skill_ids = self._allowed_skill_ids(state, context)
 
         scored: list[tuple[int, SkillSpec, list[str]]] = []
         for skill in self.skills:
             if not skill.enabled:
+                continue
+            if allowed_skill_ids and skill.id not in allowed_skill_ids:
                 continue
             score, reasons = self._score_skill(
                 skill,
@@ -99,6 +102,21 @@ class SkillResolver:
             candidates.append(context_overrides.get("forced_skill_ids"))
         candidates.append(context.get("skill_ids"))
         candidates.append(context.get("forced_skill_ids"))
+
+        skill_ids: set[str] = set()
+        for value in candidates:
+            if isinstance(value, str):
+                skill_ids.add(value)
+            elif isinstance(value, list):
+                skill_ids.update(item for item in value if isinstance(item, str))
+        return skill_ids
+
+    def _allowed_skill_ids(self, state: Any, context: dict[str, Any]) -> set[str]:
+        candidates: list[Any] = []
+        context_overrides = getattr(state, "context_overrides", None)
+        if isinstance(context_overrides, dict):
+            candidates.append(context_overrides.get("allowed_skill_ids"))
+        candidates.append(context.get("allowed_skill_ids"))
 
         skill_ids: set[str] = set()
         for value in candidates:

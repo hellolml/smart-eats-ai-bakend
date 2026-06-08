@@ -25,6 +25,7 @@ from app.agent.langgraph_context import (
     tier_tool_messages,
 )
 from app.agent.tools import context_memory
+from app.agent.runtime.nodes.agent import _attach_usage_to_prompt_cache_shape, _emit_prompt_cache_shape
 
 
 @pytest.mark.asyncio
@@ -37,14 +38,69 @@ async def test_build_model_messages_injects_context_without_mutating_state_messa
         summary="用户正在找晚饭。",
         messages=state_messages,
         memories=memories,
+        runtime_context_prompt="## Runtime Context\n- context: {}",
     )
 
     assert isinstance(model_messages[0], SystemMessage)
-    assert "用户喜欢川菜" in model_messages[0].content
+    assert model_messages[0].content == "你是通用助手。"
     assert isinstance(model_messages[1], SystemMessage)
-    assert "用户正在找晚饭" in model_messages[1].content
+    assert "Runtime Context" in model_messages[1].content
+    assert isinstance(model_messages[2], SystemMessage)
+    assert "用户喜欢川菜" in model_messages[2].content
+    assert isinstance(model_messages[3], SystemMessage)
+    assert "用户正在找晚饭" in model_messages[3].content
     assert model_messages[-1] is state_messages[0]
     assert state_messages == [HumanMessage(content="今晚想吃辣的")]
+
+
+def test_build_model_messages_keeps_stable_prefix_free_of_dynamic_context():
+    state_messages = [HumanMessage(content="帮我规划成都三日游")]
+
+    model_messages = build_model_messages(
+        system_prompt="稳定规则和 skill 指令。",
+        runtime_context_prompt='## Runtime Context\n- context: {"user_message":"帮我规划成都三日游"}',
+        summary="用户之前选择了宽窄巷子。",
+        messages=state_messages,
+        memories=[{"id": "m1", "content": "用户偏好轻松节奏"}],
+    )
+
+    assert model_messages[0].content == "稳定规则和 skill 指令。"
+    assert "成都三日游" not in model_messages[0].content
+    assert "宽窄巷子" not in model_messages[0].content
+    assert "轻松节奏" not in model_messages[0].content
+    assert "成都三日游" in model_messages[1].content
+
+
+def test_prompt_cache_shape_tracks_stable_and_dynamic_sections_separately():
+    state_a = SimpleNamespace(events=[])
+    state_b = SimpleNamespace(events=[])
+    messages_a = [
+        SystemMessage(content="稳定规则和 skill 指令。"),
+        SystemMessage(content='## Runtime Context\n- context: {"step": 1}'),
+        SystemMessage(content="<long_term_memories>\n- 用户偏好轻松节奏\n</long_term_memories>"),
+        HumanMessage(content="继续"),
+    ]
+    messages_b = [
+        SystemMessage(content="稳定规则和 skill 指令。"),
+        SystemMessage(content='## Runtime Context\n- context: {"step": 2}'),
+        SystemMessage(content="<long_term_memories>\n- 用户偏好轻松节奏\n</long_term_memories>"),
+        HumanMessage(content="继续"),
+    ]
+
+    _emit_prompt_cache_shape(state_a, messages_a, ["tool_a"])
+    _attach_usage_to_prompt_cache_shape(
+        state_a,
+        {"input_tokens": 1200, "cached_tokens": 800, "cache_miss_tokens": 400},
+    )
+    _emit_prompt_cache_shape(state_b, messages_b, ["tool_a"])
+
+    shape_a = state_a.events[0]["data"]
+    shape_b = state_b.events[0]["data"]
+    assert shape_a["stable_prefix_hash"] == shape_b["stable_prefix_hash"]
+    assert shape_a["runtime_context_hash"] != shape_b["runtime_context_hash"]
+    assert shape_a["memory_hash"] == shape_b["memory_hash"]
+    assert shape_a["cached_tokens"] == 800
+    assert shape_a["cache_miss_tokens"] == 400
 
 
 def test_resolve_model_context_window_uses_model_specific_overrides():

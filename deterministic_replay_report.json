@@ -1,0 +1,4638 @@
+{
+  "total": 12,
+  "passed_count": 12,
+  "pass_rate": 1.0,
+  "fallback_count": 0,
+  "active_tool_counts": {
+    "geocode_location": 11,
+    "get_ip_location": 7,
+    "search_restaurants": 7,
+    "get_weather": 7,
+    "plan_route": 4,
+    "travel_search_poi": 4,
+    "travel_fetch_url_content": 3,
+    "travel_search_nearby_poi": 3,
+    "memory_search": 1,
+    "memory_write": 1,
+    "memory_update": 1,
+    "memory_forget": 1,
+    "source_event_search": 1,
+    "food_decision": 1,
+    "get_fridge_items": 1,
+    "rag_search_recipes": 1,
+    "search_recipes": 1,
+    "travel_create_personal_map": 1
+  },
+  "active_skill_counts": {
+    "food_assistant": 9,
+    "food_decision": 9,
+    "restaurant_finder": 8,
+    "travel_plan_new": 5,
+    "route_planner": 4,
+    "home_chef": 1
+  },
+  "tool_call_counts": {
+    "search_restaurants": 5,
+    "plan_route": 3,
+    "travel_search_poi": 3,
+    "food_decision": 1,
+    "get_fridge_items": 1,
+    "rag_search_recipes": 1,
+    "travel_create_personal_map": 1
+  },
+  "worker_tool_counts": {
+    "food_advisor": {
+      "get_ip_location": 7,
+      "geocode_location": 7,
+      "search_restaurants": 7,
+      "get_weather": 7,
+      "food_decision": 1
+    },
+    "general_chat": {
+      "memory_search": 1,
+      "memory_write": 1,
+      "memory_update": 1,
+      "memory_forget": 1,
+      "source_event_search": 1
+    },
+    "home_chef": {
+      "get_fridge_items": 1,
+      "rag_search_recipes": 1,
+      "search_recipes": 1
+    },
+    "route_planner": {
+      "geocode_location": 4,
+      "plan_route": 4
+    },
+    "travel_planner": {
+      "travel_search_poi": 4,
+      "travel_fetch_url_content": 3,
+      "travel_search_nearby_poi": 3,
+      "travel_create_personal_map": 1
+    }
+  },
+  "worker_tool_call_counts": {
+    "food_advisor": {
+      "search_restaurants": 5,
+      "food_decision": 1
+    },
+    "general_chat": {},
+    "home_chef": {
+      "get_fridge_items": 1,
+      "rag_search_recipes": 1
+    },
+    "route_planner": {
+      "plan_route": 3
+    },
+    "travel_planner": {
+      "travel_search_poi": 3,
+      "travel_create_personal_map": 1
+    }
+  },
+  "worker_tool_boundary_violations": [],
+  "coverage": {
+    "passed": true,
+    "required": {
+      "workers": [
+        "food_advisor",
+        "general_chat",
+        "home_chef",
+        "route_planner",
+        "travel_planner"
+      ],
+      "statuses": [
+        "completed",
+        "needs_clarification"
+      ],
+      "intents": [
+        "chat",
+        "cook_home",
+        "decide_food",
+        "eat_out",
+        "route",
+        "travel"
+      ],
+      "tool_calls": [
+        "food_decision",
+        "get_fridge_items",
+        "plan_route",
+        "rag_search_recipes",
+        "search_restaurants",
+        "travel_create_personal_map",
+        "travel_search_poi"
+      ],
+      "scenes": [
+        "chat",
+        "eat",
+        "home_chef",
+        "travel_planner"
+      ],
+      "scenario_types": [
+        "multi_turn",
+        "single_turn"
+      ],
+      "business_states": [
+        "candidates_ready",
+        "itinerary_generated",
+        "map_generated"
+      ],
+      "quality_issue_regressions": [
+        "food_affirmation_mode_drift",
+        "restaurant_selection_ack",
+        "restaurant_selection_context_loss",
+        "route_memory_tool_leak",
+        "travel_tool_explosion"
+      ]
+    },
+    "observed": {
+      "workers": [
+        "food_advisor",
+        "general_chat",
+        "home_chef",
+        "route_planner",
+        "travel_planner"
+      ],
+      "statuses": [
+        "completed",
+        "needs_clarification"
+      ],
+      "intents": [
+        "chat",
+        "cook_home",
+        "decide_food",
+        "eat_out",
+        "route",
+        "travel"
+      ],
+      "tool_calls": [
+        "food_decision",
+        "get_fridge_items",
+        "plan_route",
+        "rag_search_recipes",
+        "search_restaurants",
+        "travel_create_personal_map",
+        "travel_search_poi"
+      ],
+      "scenes": [
+        "chat",
+        "eat",
+        "home_chef",
+        "travel_planner"
+      ],
+      "scenario_types": [
+        "multi_turn",
+        "single_turn"
+      ],
+      "business_states": [
+        "candidates_ready",
+        "itinerary_generated",
+        "map_generated"
+      ],
+      "quality_issue_regressions": [
+        "food_affirmation_mode_drift",
+        "restaurant_selection_ack",
+        "restaurant_selection_context_loss",
+        "route_memory_tool_leak",
+        "travel_tool_explosion"
+      ]
+    },
+    "missing": {
+      "workers": [],
+      "statuses": [],
+      "intents": [],
+      "tool_calls": [],
+      "scenes": [],
+      "scenario_types": [],
+      "business_states": [],
+      "quality_issue_regressions": []
+    }
+  },
+  "failed": [],
+  "results": [
+    {
+      "id": "deterministic-general-chat",
+      "message": "你好",
+      "fallback": false,
+      "status": "completed",
+      "worker": "general_chat",
+      "intent": "chat",
+      "failure_class": null,
+      "trace_id": "trace-deterministic-general-chat",
+      "active_tools": [
+        "memory_search",
+        "memory_write",
+        "memory_update",
+        "memory_forget",
+        "source_event_search"
+      ],
+      "active_skills": [],
+      "tool_calls": [],
+      "answer": {
+        "recommendations": [
+          {
+            "type": "note",
+            "title": "已完成 deterministic replay",
+            "reason": "deterministic_final"
+          }
+        ],
+        "followups": [],
+        "warnings": []
+      },
+      "agent_result": {
+        "status": "completed",
+        "final": {
+          "recommendations": [
+            {
+              "type": "note",
+              "title": "已完成 deterministic replay",
+              "reason": "deterministic_final"
+            }
+          ],
+          "followups": [],
+          "warnings": []
+        },
+        "diagnostics": {
+          "route": {
+            "worker": "general_chat",
+            "intent": "chat",
+            "confidence": 0.75,
+            "reason": "default_chat",
+            "required_context": [],
+            "blocked_reason": null
+          },
+          "worker": "general_chat",
+          "tools": [],
+          "active_tools": [
+            "memory_search",
+            "memory_write",
+            "memory_update",
+            "memory_forget",
+            "source_event_search"
+          ],
+          "active_skills": [],
+          "schema_valid": true,
+          "skill_diagnostics": {
+            "prompt_chars": 0,
+            "denied_tools": {},
+            "warnings": [],
+            "tool_sources": {
+              "memory_search": [
+                "base"
+              ],
+              "memory_write": [
+                "base"
+              ],
+              "memory_update": [
+                "base"
+              ],
+              "memory_forget": [
+                "base"
+              ],
+              "source_event_search": [
+                "base"
+              ]
+            },
+            "max_tool_calls_per_turn": null
+          }
+        },
+        "business_payload": {},
+        "worker": "general_chat"
+      },
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-decide-food",
+      "message": "今天吃什么",
+      "fallback": false,
+      "status": "completed",
+      "worker": "food_advisor",
+      "intent": "decide_food",
+      "failure_class": null,
+      "trace_id": "trace-deterministic-decide-food",
+      "active_tools": [
+        "food_decision"
+      ],
+      "active_skills": [
+        "food_assistant",
+        "food_decision",
+        "restaurant_finder"
+      ],
+      "tool_calls": [
+        "food_decision"
+      ],
+      "answer": {
+        "recommendations": [
+          {
+            "type": "dish",
+            "title": "番茄炒蛋配米饭",
+            "reason": "快手；食材常见；适合当前场景",
+            "raw": {
+              "type": "dish",
+              "title": "番茄炒蛋配米饭"
+            }
+          }
+        ],
+        "followups": [
+          "换成附近餐厅",
+          "给我做法"
+        ],
+        "warnings": [],
+        "decision": {
+          "decision": {
+            "type": "dish",
+            "title": "番茄炒蛋配米饭"
+          },
+          "reasons": [
+            "快手",
+            "食材常见",
+            "适合当前场景"
+          ],
+          "actions": [
+            {
+              "label": "换成附近餐厅"
+            },
+            {
+              "label": "给我做法"
+            }
+          ]
+        }
+      },
+      "agent_result": {
+        "status": "completed",
+        "final": {
+          "recommendations": [
+            {
+              "type": "dish",
+              "title": "番茄炒蛋配米饭",
+              "reason": "快手；食材常见；适合当前场景",
+              "raw": {
+                "type": "dish",
+                "title": "番茄炒蛋配米饭"
+              }
+            }
+          ],
+          "followups": [
+            "换成附近餐厅",
+            "给我做法"
+          ],
+          "warnings": [],
+          "decision": {
+            "decision": {
+              "type": "dish",
+              "title": "番茄炒蛋配米饭"
+            },
+            "reasons": [
+              "快手",
+              "食材常见",
+              "适合当前场景"
+            ],
+            "actions": [
+              {
+                "label": "换成附近餐厅"
+              },
+              {
+                "label": "给我做法"
+              }
+            ]
+          }
+        },
+        "diagnostics": {
+          "route": {
+            "worker": "food_advisor",
+            "intent": "decide_food",
+            "confidence": 0.9,
+            "reason": "food_intent",
+            "required_context": [],
+            "blocked_reason": null
+          },
+          "worker": "food_advisor",
+          "tools": [
+            {
+              "name": "food_decision",
+              "args": {
+                "query": "今天吃什么",
+                "scene": "food_decision"
+              },
+              "latency_ms": null
+            }
+          ],
+          "active_tools": [
+            "food_decision"
+          ],
+          "active_skills": [
+            {
+              "id": "food_assistant",
+              "version": "1.0.0",
+              "reasons": [
+                "forced",
+                "keyword:吃什么",
+                "keyword:今天吃"
+              ]
+            },
+            {
+              "id": "food_decision",
+              "version": "1.0.0",
+              "reasons": [
+                "scene:eat",
+                "keyword:吃什么",
+                "keyword:今天吃"
+              ]
+            },
+            {
+              "id": "restaurant_finder",
+              "version": "1.0.0",
+              "reasons": [
+                "scene:eat"
+              ]
+            }
+          ],
+          "schema_valid": true,
+          "skill_diagnostics": {
+            "prompt_chars": 1889,
+            "denied_tools": {},
+            "warnings": [],
+            "tool_sources": {
+              "food_decision": [
+                "food_assistant",
+                "food_decision"
+              ]
+            },
+            "max_tool_calls_per_turn": 2
+          }
+        },
+        "business_payload": {},
+        "worker": "food_advisor"
+      },
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-eat-out",
+      "message": "我在人民广场附近想吃粤菜",
+      "fallback": false,
+      "status": "completed",
+      "worker": "food_advisor",
+      "intent": "eat_out",
+      "failure_class": null,
+      "trace_id": "trace-deterministic-eat-out",
+      "active_tools": [
+        "get_ip_location",
+        "geocode_location",
+        "search_restaurants",
+        "get_weather"
+      ],
+      "active_skills": [
+        "food_assistant",
+        "food_decision",
+        "restaurant_finder"
+      ],
+      "tool_calls": [
+        "search_restaurants"
+      ],
+      "answer": {
+        "scene": "eat",
+        "agent_id": "food_assistant",
+        "recommendations": [
+          {
+            "type": "restaurant",
+            "title": "人民广场粤味小馆",
+            "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+            "raw": {
+              "name": "人民广场粤味小馆",
+              "address": "人民广场步行 8 分钟",
+              "rating": "4.7",
+              "price": "人均 88",
+              "lat": 31.2338,
+              "lng": 121.4821
+            }
+          }
+        ],
+        "followups": [
+          "要不要我按距离、评分或口味再帮你筛一轮？",
+          "选定一家后我可以继续帮你规划路线。"
+        ],
+        "warnings": []
+      },
+      "agent_result": {
+        "status": "completed",
+        "final": {
+          "scene": "eat",
+          "agent_id": "food_assistant",
+          "recommendations": [
+            {
+              "type": "restaurant",
+              "title": "人民广场粤味小馆",
+              "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+              "raw": {
+                "name": "人民广场粤味小馆",
+                "address": "人民广场步行 8 分钟",
+                "rating": "4.7",
+                "price": "人均 88",
+                "lat": 31.2338,
+                "lng": 121.4821
+              }
+            }
+          ],
+          "followups": [
+            "要不要我按距离、评分或口味再帮你筛一轮？",
+            "选定一家后我可以继续帮你规划路线。"
+          ],
+          "warnings": []
+        },
+        "diagnostics": {
+          "route": {
+            "worker": "food_advisor",
+            "intent": "eat_out",
+            "confidence": 0.9,
+            "reason": "food_intent",
+            "required_context": [],
+            "blocked_reason": null
+          },
+          "worker": "food_advisor",
+          "tools": [
+            {
+              "name": "search_restaurants",
+              "args": {
+                "query": "粤菜",
+                "lat": 31.2304,
+                "lng": 121.4737,
+                "city": "上海"
+              },
+              "latency_ms": null
+            }
+          ],
+          "active_tools": [
+            "get_ip_location",
+            "geocode_location",
+            "search_restaurants",
+            "get_weather"
+          ],
+          "active_skills": [
+            {
+              "id": "food_assistant",
+              "version": "1.0.0",
+              "reasons": [
+                "forced",
+                "keyword:附近"
+              ]
+            },
+            {
+              "id": "food_decision",
+              "version": "1.0.0",
+              "reasons": [
+                "scene:eat",
+                "intent:eat_out"
+              ]
+            },
+            {
+              "id": "restaurant_finder",
+              "version": "1.0.0",
+              "reasons": [
+                "scene:eat",
+                "intent:eat_out",
+                "keyword:附近"
+              ]
+            }
+          ],
+          "schema_valid": true,
+          "skill_diagnostics": {
+            "prompt_chars": 1893,
+            "denied_tools": {},
+            "warnings": [],
+            "tool_sources": {
+              "get_ip_location": [
+                "food_assistant",
+                "restaurant_finder"
+              ],
+              "geocode_location": [
+                "food_assistant",
+                "restaurant_finder"
+              ],
+              "search_restaurants": [
+                "food_assistant",
+                "restaurant_finder"
+              ],
+              "get_weather": [
+                "food_assistant",
+                "restaurant_finder"
+              ]
+            },
+            "max_tool_calls_per_turn": 2
+          }
+        },
+        "business_payload": {
+          "scene": "eat",
+          "agent_id": "food_assistant"
+        },
+        "worker": "food_advisor"
+      },
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-eat-out-affirm-refine-multiturn",
+      "message": null,
+      "fallback": false,
+      "status": "completed",
+      "worker": "food_advisor",
+      "intent": "eat_out",
+      "failure_class": null,
+      "turns": [
+        {
+          "id": "deterministic-eat-out-affirm-refine-multiturn:1",
+          "message": "我在人民广场附近想吃粤菜",
+          "fallback": false,
+          "status": "completed",
+          "worker": "food_advisor",
+          "intent": "eat_out",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-eat-out-affirm-refine-multiturn:1",
+          "active_tools": [
+            "get_ip_location",
+            "geocode_location",
+            "search_restaurants",
+            "get_weather"
+          ],
+          "active_skills": [
+            "food_assistant",
+            "food_decision",
+            "restaurant_finder"
+          ],
+          "tool_calls": [
+            "search_restaurants"
+          ],
+          "answer": {
+            "scene": "eat",
+            "agent_id": "food_assistant",
+            "recommendations": [
+              {
+                "type": "restaurant",
+                "title": "人民广场粤味小馆",
+                "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                "raw": {
+                  "name": "人民广场粤味小馆",
+                  "address": "人民广场步行 8 分钟",
+                  "rating": "4.7",
+                  "price": "人均 88",
+                  "lat": 31.2338,
+                  "lng": 121.4821
+                }
+              }
+            ],
+            "followups": [
+              "要不要我按距离、评分或口味再帮你筛一轮？",
+              "选定一家后我可以继续帮你规划路线。"
+            ],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "scene": "eat",
+              "agent_id": "food_assistant",
+              "recommendations": [
+                {
+                  "type": "restaurant",
+                  "title": "人民广场粤味小馆",
+                  "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                  "raw": {
+                    "name": "人民广场粤味小馆",
+                    "address": "人民广场步行 8 分钟",
+                    "rating": "4.7",
+                    "price": "人均 88",
+                    "lat": 31.2338,
+                    "lng": 121.4821
+                  }
+                }
+              ],
+              "followups": [
+                "要不要我按距离、评分或口味再帮你筛一轮？",
+                "选定一家后我可以继续帮你规划路线。"
+              ],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "food_advisor",
+                "intent": "eat_out",
+                "confidence": 0.9,
+                "reason": "food_intent",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "food_advisor",
+              "tools": [
+                {
+                  "name": "search_restaurants",
+                  "args": {
+                    "query": "粤菜",
+                    "lat": 31.2304,
+                    "lng": 121.4737,
+                    "city": "上海"
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "get_ip_location",
+                "geocode_location",
+                "search_restaurants",
+                "get_weather"
+              ],
+              "active_skills": [
+                {
+                  "id": "food_assistant",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "keyword:附近"
+                  ]
+                },
+                {
+                  "id": "food_decision",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out"
+                  ]
+                },
+                {
+                  "id": "restaurant_finder",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out",
+                    "keyword:附近"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 1893,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "get_ip_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "geocode_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "search_restaurants": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "get_weather": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ]
+                },
+                "max_tool_calls_per_turn": 2
+              }
+            },
+            "business_payload": {
+              "scene": "eat",
+              "agent_id": "food_assistant"
+            },
+            "worker": "food_advisor"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        },
+        {
+          "id": "deterministic-eat-out-affirm-refine-multiturn:2",
+          "message": "可以啊",
+          "fallback": false,
+          "status": "completed",
+          "worker": "food_advisor",
+          "intent": "eat_out",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-eat-out-affirm-refine-multiturn:2",
+          "active_tools": [
+            "get_ip_location",
+            "geocode_location",
+            "search_restaurants",
+            "get_weather"
+          ],
+          "active_skills": [
+            "food_assistant",
+            "food_decision",
+            "restaurant_finder"
+          ],
+          "tool_calls": [
+            "search_restaurants"
+          ],
+          "answer": {
+            "scene": "eat",
+            "agent_id": "food_assistant",
+            "recommendations": [
+              {
+                "type": "restaurant",
+                "title": "人民广场粤味小馆",
+                "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                "raw": {
+                  "name": "人民广场粤味小馆",
+                  "address": "人民广场步行 8 分钟",
+                  "rating": "4.7",
+                  "price": "人均 88",
+                  "lat": 31.2338,
+                  "lng": 121.4821
+                }
+              }
+            ],
+            "followups": [
+              "要不要我按距离、评分或口味再帮你筛一轮？",
+              "选定一家后我可以继续帮你规划路线。"
+            ],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "scene": "eat",
+              "agent_id": "food_assistant",
+              "recommendations": [
+                {
+                  "type": "restaurant",
+                  "title": "人民广场粤味小馆",
+                  "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                  "raw": {
+                    "name": "人民广场粤味小馆",
+                    "address": "人民广场步行 8 分钟",
+                    "rating": "4.7",
+                    "price": "人均 88",
+                    "lat": 31.2338,
+                    "lng": 121.4821
+                  }
+                }
+              ],
+              "followups": [
+                "要不要我按距离、评分或口味再帮你筛一轮？",
+                "选定一家后我可以继续帮你规划路线。"
+              ],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "food_advisor",
+                "intent": "eat_out",
+                "confidence": 0.9,
+                "reason": "food_intent",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "food_advisor",
+              "tools": [
+                {
+                  "name": "search_restaurants",
+                  "args": {
+                    "query": "附近餐厅"
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "get_ip_location",
+                "geocode_location",
+                "search_restaurants",
+                "get_weather"
+              ],
+              "active_skills": [
+                {
+                  "id": "food_assistant",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced"
+                  ]
+                },
+                {
+                  "id": "food_decision",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out"
+                  ]
+                },
+                {
+                  "id": "restaurant_finder",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 1867,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "get_ip_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "geocode_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "search_restaurants": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "get_weather": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ]
+                },
+                "max_tool_calls_per_turn": 2
+              }
+            },
+            "business_payload": {
+              "scene": "eat",
+              "agent_id": "food_assistant"
+            },
+            "worker": "food_advisor"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        }
+      ],
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-route-clarification",
+      "message": "怎么走呢",
+      "fallback": false,
+      "status": "needs_clarification",
+      "worker": "route_planner",
+      "intent": "route",
+      "failure_class": null,
+      "trace_id": "trace-deterministic-route-clarification",
+      "active_tools": [
+        "geocode_location",
+        "plan_route"
+      ],
+      "active_skills": [
+        "route_planner"
+      ],
+      "tool_calls": [],
+      "answer": {
+        "recommendations": [
+          {
+            "type": "note",
+            "title": "你想去哪儿？",
+            "reason": "当前路线追问缺少明确目的地。"
+          }
+        ],
+        "followups": [
+          "告诉我餐厅、景点或地址名称，我再帮你规划路线。"
+        ],
+        "warnings": [],
+        "status": "needs_clarification"
+      },
+      "agent_result": {
+        "status": "needs_clarification",
+        "final": {
+          "recommendations": [
+            {
+              "type": "note",
+              "title": "你想去哪儿？",
+              "reason": "当前路线追问缺少明确目的地。"
+            }
+          ],
+          "followups": [
+            "告诉我餐厅、景点或地址名称，我再帮你规划路线。"
+          ],
+          "warnings": [],
+          "status": "needs_clarification"
+        },
+        "diagnostics": {
+          "route": {
+            "worker": "route_planner",
+            "intent": "route",
+            "confidence": 0.9,
+            "reason": "route_intent",
+            "required_context": [],
+            "blocked_reason": null
+          },
+          "worker": "route_planner",
+          "tools": [],
+          "active_tools": [
+            "geocode_location",
+            "plan_route"
+          ],
+          "active_skills": [
+            {
+              "id": "route_planner",
+              "version": "1.0.0",
+              "reasons": [
+                "forced",
+                "scene:route",
+                "intent:route",
+                "keyword:怎么走"
+              ]
+            }
+          ],
+          "schema_valid": true,
+          "skill_diagnostics": {
+            "prompt_chars": 433,
+            "denied_tools": {},
+            "warnings": [],
+            "tool_sources": {
+              "geocode_location": [
+                "route_planner"
+              ],
+              "plan_route": [
+                "route_planner"
+              ]
+            },
+            "max_tool_calls_per_turn": 2
+          }
+        },
+        "business_payload": {},
+        "worker": "route_planner"
+      },
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-restaurant-selection-route-multiturn",
+      "message": null,
+      "fallback": false,
+      "status": "completed",
+      "worker": "route_planner",
+      "intent": "route",
+      "failure_class": null,
+      "turns": [
+        {
+          "id": "deterministic-restaurant-selection-route-multiturn:1",
+          "message": "我在人民广场附近想吃粤菜",
+          "fallback": false,
+          "status": "completed",
+          "worker": "food_advisor",
+          "intent": "eat_out",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-restaurant-selection-route-multiturn:1",
+          "active_tools": [
+            "get_ip_location",
+            "geocode_location",
+            "search_restaurants",
+            "get_weather"
+          ],
+          "active_skills": [
+            "food_assistant",
+            "food_decision",
+            "restaurant_finder"
+          ],
+          "tool_calls": [
+            "search_restaurants"
+          ],
+          "answer": {
+            "scene": "eat",
+            "agent_id": "food_assistant",
+            "recommendations": [
+              {
+                "type": "restaurant",
+                "title": "人民广场粤味小馆",
+                "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                "raw": {
+                  "name": "人民广场粤味小馆",
+                  "address": "人民广场步行 8 分钟",
+                  "rating": "4.7",
+                  "price": "人均 88",
+                  "lat": 31.2338,
+                  "lng": 121.4821
+                }
+              }
+            ],
+            "followups": [
+              "要不要我按距离、评分或口味再帮你筛一轮？",
+              "选定一家后我可以继续帮你规划路线。"
+            ],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "scene": "eat",
+              "agent_id": "food_assistant",
+              "recommendations": [
+                {
+                  "type": "restaurant",
+                  "title": "人民广场粤味小馆",
+                  "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                  "raw": {
+                    "name": "人民广场粤味小馆",
+                    "address": "人民广场步行 8 分钟",
+                    "rating": "4.7",
+                    "price": "人均 88",
+                    "lat": 31.2338,
+                    "lng": 121.4821
+                  }
+                }
+              ],
+              "followups": [
+                "要不要我按距离、评分或口味再帮你筛一轮？",
+                "选定一家后我可以继续帮你规划路线。"
+              ],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "food_advisor",
+                "intent": "eat_out",
+                "confidence": 0.9,
+                "reason": "food_intent",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "food_advisor",
+              "tools": [
+                {
+                  "name": "search_restaurants",
+                  "args": {
+                    "query": "粤菜",
+                    "lat": 31.2304,
+                    "lng": 121.4737,
+                    "city": "上海"
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "get_ip_location",
+                "geocode_location",
+                "search_restaurants",
+                "get_weather"
+              ],
+              "active_skills": [
+                {
+                  "id": "food_assistant",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "keyword:附近"
+                  ]
+                },
+                {
+                  "id": "food_decision",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out"
+                  ]
+                },
+                {
+                  "id": "restaurant_finder",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out",
+                    "keyword:附近"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 1893,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "get_ip_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "geocode_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "search_restaurants": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "get_weather": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ]
+                },
+                "max_tool_calls_per_turn": 2
+              }
+            },
+            "business_payload": {
+              "scene": "eat",
+              "agent_id": "food_assistant"
+            },
+            "worker": "food_advisor"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        },
+        {
+          "id": "deterministic-restaurant-selection-route-multiturn:2",
+          "message": "人民广场粤味小馆吧",
+          "fallback": false,
+          "status": "completed",
+          "worker": "food_advisor",
+          "intent": "eat_out",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-restaurant-selection-route-multiturn:2",
+          "active_tools": [
+            "get_ip_location",
+            "geocode_location",
+            "search_restaurants",
+            "get_weather"
+          ],
+          "active_skills": [
+            "food_assistant",
+            "food_decision",
+            "restaurant_finder"
+          ],
+          "tool_calls": [],
+          "answer": {
+            "scene": "eat",
+            "agent_id": "food_assistant",
+            "recommendations": [
+              {
+                "type": "restaurant",
+                "title": "人民广场粤味小馆",
+                "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                "raw": {
+                  "name": "人民广场粤味小馆",
+                  "address": "人民广场步行 8 分钟",
+                  "rating": "4.7",
+                  "price": "人均 88",
+                  "lat": 31.2338,
+                  "lng": 121.4821,
+                  "geo": {
+                    "lat": 31.2338,
+                    "lng": 121.4821
+                  }
+                }
+              }
+            ],
+            "followups": [
+              "我可以继续帮你规划路线。",
+              "也可以换一家或再按口味筛选。"
+            ],
+            "warnings": [],
+            "selected_restaurant": {
+              "name": "人民广场粤味小馆",
+              "address": "人民广场步行 8 分钟",
+              "rating": "4.7",
+              "price": "人均 88",
+              "lat": 31.2338,
+              "lng": 121.4821,
+              "geo": {
+                "lat": 31.2338,
+                "lng": 121.4821
+              }
+            }
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "scene": "eat",
+              "agent_id": "food_assistant",
+              "recommendations": [
+                {
+                  "type": "restaurant",
+                  "title": "人民广场粤味小馆",
+                  "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                  "raw": {
+                    "name": "人民广场粤味小馆",
+                    "address": "人民广场步行 8 分钟",
+                    "rating": "4.7",
+                    "price": "人均 88",
+                    "lat": 31.2338,
+                    "lng": 121.4821,
+                    "geo": {
+                      "lat": 31.2338,
+                      "lng": 121.4821
+                    }
+                  }
+                }
+              ],
+              "followups": [
+                "我可以继续帮你规划路线。",
+                "也可以换一家或再按口味筛选。"
+              ],
+              "warnings": [],
+              "selected_restaurant": {
+                "name": "人民广场粤味小馆",
+                "address": "人民广场步行 8 分钟",
+                "rating": "4.7",
+                "price": "人均 88",
+                "lat": 31.2338,
+                "lng": 121.4821,
+                "geo": {
+                  "lat": 31.2338,
+                  "lng": 121.4821
+                }
+              }
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "food_advisor",
+                "intent": "eat_out",
+                "confidence": 0.95,
+                "reason": "recent_restaurant_selection",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "food_advisor",
+              "tools": [],
+              "active_tools": [
+                "get_ip_location",
+                "geocode_location",
+                "search_restaurants",
+                "get_weather"
+              ],
+              "active_skills": [
+                {
+                  "id": "food_assistant",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced"
+                  ]
+                },
+                {
+                  "id": "food_decision",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out"
+                  ]
+                },
+                {
+                  "id": "restaurant_finder",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 1867,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "get_ip_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "geocode_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "search_restaurants": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "get_weather": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ]
+                },
+                "max_tool_calls_per_turn": 2
+              }
+            },
+            "business_payload": {
+              "scene": "eat",
+              "agent_id": "food_assistant"
+            },
+            "worker": "food_advisor"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        },
+        {
+          "id": "deterministic-restaurant-selection-route-multiturn:3",
+          "message": "怎么走呢",
+          "fallback": false,
+          "status": "completed",
+          "worker": "route_planner",
+          "intent": "route",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-restaurant-selection-route-multiturn:3",
+          "active_tools": [
+            "geocode_location",
+            "plan_route"
+          ],
+          "active_skills": [
+            "route_planner"
+          ],
+          "tool_calls": [
+            "plan_route"
+          ],
+          "answer": {
+            "recommendations": [
+              {
+                "type": "note",
+                "title": "路线已规划",
+                "reason": "based_on_plan_route"
+              }
+            ],
+            "followups": [],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "recommendations": [
+                {
+                  "type": "note",
+                  "title": "路线已规划",
+                  "reason": "based_on_plan_route"
+                }
+              ],
+              "followups": [],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "route_planner",
+                "intent": "route",
+                "confidence": 0.9,
+                "reason": "route_intent",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "route_planner",
+              "tools": [
+                {
+                  "name": "plan_route",
+                  "args": {
+                    "origin_lat": 31.2304,
+                    "origin_lng": 121.4737,
+                    "destination_lat": 31.2338,
+                    "destination_lng": 121.4821,
+                    "mode": "walking"
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "geocode_location",
+                "plan_route"
+              ],
+              "active_skills": [
+                {
+                  "id": "route_planner",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "scene:route",
+                    "intent:route",
+                    "keyword:怎么走"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 433,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "geocode_location": [
+                    "route_planner"
+                  ],
+                  "plan_route": [
+                    "route_planner"
+                  ]
+                },
+                "max_tool_calls_per_turn": 2
+              }
+            },
+            "business_payload": {},
+            "worker": "route_planner"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        }
+      ],
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-restaurant-selection-from-persisted-context",
+      "message": "五星之家",
+      "fallback": false,
+      "status": "completed",
+      "worker": "food_advisor",
+      "intent": "eat_out",
+      "failure_class": null,
+      "trace_id": "trace-deterministic-restaurant-selection-from-persisted-context",
+      "active_tools": [
+        "get_ip_location",
+        "geocode_location",
+        "search_restaurants",
+        "get_weather"
+      ],
+      "active_skills": [
+        "food_assistant",
+        "food_decision",
+        "restaurant_finder"
+      ],
+      "tool_calls": [],
+      "answer": {
+        "scene": "eat",
+        "agent_id": "food_assistant",
+        "recommendations": [
+          {
+            "type": "restaurant",
+            "title": "五星之家",
+            "reason": "洋湖附近；评分 4.5",
+            "raw": {
+              "name": "五星之家",
+              "address": "洋湖附近",
+              "rating": "4.5"
+            }
+          }
+        ],
+        "followups": [
+          "我可以继续帮你规划路线。",
+          "也可以换一家或再按口味筛选。"
+        ],
+        "warnings": [],
+        "selected_restaurant": {
+          "name": "五星之家",
+          "address": "洋湖附近",
+          "rating": "4.5"
+        }
+      },
+      "agent_result": {
+        "status": "completed",
+        "final": {
+          "scene": "eat",
+          "agent_id": "food_assistant",
+          "recommendations": [
+            {
+              "type": "restaurant",
+              "title": "五星之家",
+              "reason": "洋湖附近；评分 4.5",
+              "raw": {
+                "name": "五星之家",
+                "address": "洋湖附近",
+                "rating": "4.5"
+              }
+            }
+          ],
+          "followups": [
+            "我可以继续帮你规划路线。",
+            "也可以换一家或再按口味筛选。"
+          ],
+          "warnings": [],
+          "selected_restaurant": {
+            "name": "五星之家",
+            "address": "洋湖附近",
+            "rating": "4.5"
+          }
+        },
+        "diagnostics": {
+          "route": {
+            "worker": "food_advisor",
+            "intent": "eat_out",
+            "confidence": 0.95,
+            "reason": "recent_restaurant_selection",
+            "required_context": [],
+            "blocked_reason": null
+          },
+          "worker": "food_advisor",
+          "tools": [],
+          "active_tools": [
+            "get_ip_location",
+            "geocode_location",
+            "search_restaurants",
+            "get_weather"
+          ],
+          "active_skills": [
+            {
+              "id": "food_assistant",
+              "version": "1.0.0",
+              "reasons": [
+                "forced"
+              ]
+            },
+            {
+              "id": "food_decision",
+              "version": "1.0.0",
+              "reasons": [
+                "scene:eat",
+                "intent:eat_out"
+              ]
+            },
+            {
+              "id": "restaurant_finder",
+              "version": "1.0.0",
+              "reasons": [
+                "scene:eat",
+                "intent:eat_out"
+              ]
+            }
+          ],
+          "schema_valid": true,
+          "skill_diagnostics": {
+            "prompt_chars": 1867,
+            "denied_tools": {},
+            "warnings": [],
+            "tool_sources": {
+              "get_ip_location": [
+                "food_assistant",
+                "restaurant_finder"
+              ],
+              "geocode_location": [
+                "food_assistant",
+                "restaurant_finder"
+              ],
+              "search_restaurants": [
+                "food_assistant",
+                "restaurant_finder"
+              ],
+              "get_weather": [
+                "food_assistant",
+                "restaurant_finder"
+              ]
+            },
+            "max_tool_calls_per_turn": 2
+          }
+        },
+        "business_payload": {
+          "scene": "eat",
+          "agent_id": "food_assistant"
+        },
+        "worker": "food_advisor"
+      },
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-route-from-restaurant",
+      "message": "去阿娜尔麻辣干锅怎么走",
+      "fallback": false,
+      "status": "completed",
+      "worker": "route_planner",
+      "intent": "route",
+      "failure_class": null,
+      "trace_id": "trace-deterministic-route-from-restaurant",
+      "active_tools": [
+        "geocode_location",
+        "plan_route"
+      ],
+      "active_skills": [
+        "route_planner"
+      ],
+      "tool_calls": [
+        "plan_route"
+      ],
+      "answer": {
+        "recommendations": [
+          {
+            "type": "note",
+            "title": "路线已规划",
+            "reason": "based_on_plan_route"
+          }
+        ],
+        "followups": [],
+        "warnings": []
+      },
+      "agent_result": {
+        "status": "completed",
+        "final": {
+          "recommendations": [
+            {
+              "type": "note",
+              "title": "路线已规划",
+              "reason": "based_on_plan_route"
+            }
+          ],
+          "followups": [],
+          "warnings": []
+        },
+        "diagnostics": {
+          "route": {
+            "worker": "route_planner",
+            "intent": "route",
+            "confidence": 0.9,
+            "reason": "route_intent",
+            "required_context": [],
+            "blocked_reason": null
+          },
+          "worker": "route_planner",
+          "tools": [
+            {
+              "name": "plan_route",
+              "args": {
+                "origin_lat": 31.2304,
+                "origin_lng": 121.4737,
+                "destination_lat": 31.2338,
+                "destination_lng": 121.4821,
+                "destination": "阿娜尔麻辣干锅",
+                "mode": "walking"
+              },
+              "latency_ms": null
+            }
+          ],
+          "active_tools": [
+            "geocode_location",
+            "plan_route"
+          ],
+          "active_skills": [
+            {
+              "id": "route_planner",
+              "version": "1.0.0",
+              "reasons": [
+                "forced",
+                "scene:route",
+                "intent:route",
+                "keyword:怎么走"
+              ]
+            }
+          ],
+          "schema_valid": true,
+          "skill_diagnostics": {
+            "prompt_chars": 433,
+            "denied_tools": {},
+            "warnings": [],
+            "tool_sources": {
+              "geocode_location": [
+                "route_planner"
+              ],
+              "plan_route": [
+                "route_planner"
+              ]
+            },
+            "max_tool_calls_per_turn": 2
+          }
+        },
+        "business_payload": {},
+        "worker": "route_planner"
+      },
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-home-chef",
+      "message": "我冰箱里有鸡蛋和番茄，做什么快手菜",
+      "fallback": false,
+      "status": "completed",
+      "worker": "home_chef",
+      "intent": "cook_home",
+      "failure_class": null,
+      "trace_id": "trace-deterministic-home-chef",
+      "active_tools": [
+        "get_fridge_items",
+        "rag_search_recipes",
+        "search_recipes"
+      ],
+      "active_skills": [
+        "home_chef",
+        "food_assistant",
+        "food_decision"
+      ],
+      "tool_calls": [
+        "get_fridge_items",
+        "rag_search_recipes"
+      ],
+      "answer": {
+        "recommendations": [
+          {
+            "type": "note",
+            "title": "可以做番茄炒蛋",
+            "reason": "based_on_rag_search_recipes"
+          }
+        ],
+        "followups": [],
+        "warnings": []
+      },
+      "agent_result": {
+        "status": "completed",
+        "final": {
+          "recommendations": [
+            {
+              "type": "note",
+              "title": "可以做番茄炒蛋",
+              "reason": "based_on_rag_search_recipes"
+            }
+          ],
+          "followups": [],
+          "warnings": []
+        },
+        "diagnostics": {
+          "route": {
+            "worker": "home_chef",
+            "intent": "cook_home",
+            "confidence": 0.9,
+            "reason": "home_cooking_intent",
+            "required_context": [],
+            "blocked_reason": null
+          },
+          "worker": "home_chef",
+          "tools": [
+            {
+              "name": "get_fridge_items",
+              "args": {},
+              "latency_ms": null
+            },
+            {
+              "name": "rag_search_recipes",
+              "args": {
+                "query": "鸡蛋 番茄 快手菜"
+              },
+              "latency_ms": null
+            }
+          ],
+          "active_tools": [
+            "get_fridge_items",
+            "rag_search_recipes",
+            "search_recipes"
+          ],
+          "active_skills": [
+            {
+              "id": "home_chef",
+              "version": "1.0.0",
+              "reasons": [
+                "forced",
+                "scene:home_chef",
+                "intent:cook_home",
+                "keyword:冰箱"
+              ]
+            },
+            {
+              "id": "food_assistant",
+              "version": "1.0.0",
+              "reasons": [
+                "scene:home_chef",
+                "keyword:冰箱"
+              ]
+            },
+            {
+              "id": "food_decision",
+              "version": "1.0.0",
+              "reasons": [
+                "scene:home_chef",
+                "intent:cook_home"
+              ]
+            }
+          ],
+          "schema_valid": true,
+          "skill_diagnostics": {
+            "prompt_chars": 1827,
+            "denied_tools": {},
+            "warnings": [],
+            "tool_sources": {
+              "get_fridge_items": [
+                "home_chef",
+                "food_assistant"
+              ],
+              "rag_search_recipes": [
+                "home_chef",
+                "food_assistant"
+              ],
+              "search_recipes": [
+                "home_chef",
+                "food_assistant"
+              ]
+            },
+            "max_tool_calls_per_turn": 2
+          }
+        },
+        "business_payload": {},
+        "worker": "home_chef"
+      },
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-travel-poi",
+      "message": "帮我做杭州1天旅行攻略：西湖",
+      "fallback": false,
+      "status": "completed",
+      "worker": "travel_planner",
+      "intent": "travel",
+      "failure_class": null,
+      "trace_id": "trace-deterministic-travel-poi",
+      "active_tools": [
+        "travel_fetch_url_content",
+        "travel_search_poi",
+        "travel_search_nearby_poi"
+      ],
+      "active_skills": [
+        "travel_plan_new"
+      ],
+      "tool_calls": [
+        "travel_search_poi"
+      ],
+      "answer": {
+        "state": "candidates_ready",
+        "await_confirmation": true,
+        "trip_meta": {
+          "destination": "杭州",
+          "start_date": null,
+          "end_date": null,
+          "days": 1,
+          "travelers_count": null,
+          "preferences": [],
+          "budget": null,
+          "start_point": null,
+          "end_point": null
+        },
+        "sources": [],
+        "places": [
+          {
+            "name": "西湖",
+            "category": "attraction"
+          }
+        ],
+        "total_candidates": 1,
+        "categories": {
+          "attraction": 1
+        },
+        "candidate_groups": {
+          "attractions": [
+            {
+              "candidate_id": "candidate_001",
+              "name": "西湖",
+              "source_name": "西湖",
+              "verified_name": "西湖风景名胜区",
+              "category": "attraction",
+              "source": "poi_verified",
+              "score": 8,
+              "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+              "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+              "business_hours": null,
+              "opening_hours": null,
+              "suggested_duration_minutes": 120,
+              "estimated_duration": null,
+              "price_range": null,
+              "average_cost_yuan": null,
+              "mention_count": null,
+              "warnings": [],
+              "context_snippet": null,
+              "amap_poi_keyword": "西湖",
+              "match_status": null,
+              "rejected_pois": [],
+              "poi": {
+                "poi_id": "poi-west-lake",
+                "name": "西湖风景名胜区",
+                "address": "杭州市西湖区龙井路1号",
+                "longitude": 120.141,
+                "latitude": 30.25
+              },
+              "id": "candidate_001",
+              "score_breakdown": {
+                "poi_verified": 3,
+                "fit": 3,
+                "route_value": 2
+              },
+              "not_recommended_reason": null,
+              "recommended_time_slots": [
+                "morning",
+                "afternoon"
+              ],
+              "best_visit_time": "白天游览",
+              "crowd_level": "unknown",
+              "cost_estimate_yuan": null,
+              "nearby_candidates": [],
+              "poi_verified": true,
+              "amap_poi_id": "poi-west-lake",
+              "longitude": 120.141,
+              "latitude": 30.25,
+              "tags": [
+                "attraction"
+              ]
+            }
+          ],
+          "restaurants": [],
+          "hotels": [],
+          "transport_hubs": [],
+          "others": [],
+          "food_items": [],
+          "failed": [],
+          "excluded": [],
+          "pending": []
+        },
+        "candidates": [
+          {
+            "candidate_id": "candidate_001",
+            "name": "西湖",
+            "source_name": "西湖",
+            "verified_name": "西湖风景名胜区",
+            "category": "attraction",
+            "source": "poi_verified",
+            "score": 8,
+            "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+            "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+            "business_hours": null,
+            "opening_hours": null,
+            "suggested_duration_minutes": 120,
+            "estimated_duration": null,
+            "price_range": null,
+            "average_cost_yuan": null,
+            "mention_count": null,
+            "warnings": [],
+            "context_snippet": null,
+            "amap_poi_keyword": "西湖",
+            "match_status": null,
+            "rejected_pois": [],
+            "poi": {
+              "poi_id": "poi-west-lake",
+              "name": "西湖风景名胜区",
+              "address": "杭州市西湖区龙井路1号",
+              "longitude": 120.141,
+              "latitude": 30.25
+            },
+            "id": "candidate_001",
+            "score_breakdown": {
+              "poi_verified": 3,
+              "fit": 3,
+              "route_value": 2
+            },
+            "not_recommended_reason": null,
+            "recommended_time_slots": [
+              "morning",
+              "afternoon"
+            ],
+            "best_visit_time": "白天游览",
+            "crowd_level": "unknown",
+            "cost_estimate_yuan": null,
+            "nearby_candidates": [],
+            "poi_verified": true,
+            "amap_poi_id": "poi-west-lake",
+            "longitude": 120.141,
+            "latitude": 30.25,
+            "tags": [
+              "attraction"
+            ]
+          }
+        ],
+        "failed_places": [],
+        "pending_places": [],
+        "excluded_places": [],
+        "food_items": [],
+        "food_preference_summary": "",
+        "food_preferences": null,
+        "itinerary": {
+          "days": []
+        },
+        "map": {
+          "qr_code_url": null,
+          "schema_url": null
+        },
+        "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。",
+        "recommendations": [
+          {
+            "type": "note",
+            "title": "已验证 1 个候选地点",
+            "reason": "请先确认、删除或补充候选地点，确认后我再生成每日行程。"
+          }
+        ],
+        "followups": [
+          "确认候选地点后，将继续生成最终每日行程。"
+        ],
+        "warnings": []
+      },
+      "agent_result": {
+        "status": "completed",
+        "final": {
+          "state": "candidates_ready",
+          "await_confirmation": true,
+          "trip_meta": {
+            "destination": "杭州",
+            "start_date": null,
+            "end_date": null,
+            "days": 1,
+            "travelers_count": null,
+            "preferences": [],
+            "budget": null,
+            "start_point": null,
+            "end_point": null
+          },
+          "sources": [],
+          "places": [
+            {
+              "name": "西湖",
+              "category": "attraction"
+            }
+          ],
+          "total_candidates": 1,
+          "categories": {
+            "attraction": 1
+          },
+          "candidate_groups": {
+            "attractions": [
+              {
+                "candidate_id": "candidate_001",
+                "name": "西湖",
+                "source_name": "西湖",
+                "verified_name": "西湖风景名胜区",
+                "category": "attraction",
+                "source": "poi_verified",
+                "score": 8,
+                "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "business_hours": null,
+                "opening_hours": null,
+                "suggested_duration_minutes": 120,
+                "estimated_duration": null,
+                "price_range": null,
+                "average_cost_yuan": null,
+                "mention_count": null,
+                "warnings": [],
+                "context_snippet": null,
+                "amap_poi_keyword": "西湖",
+                "match_status": null,
+                "rejected_pois": [],
+                "poi": {
+                  "poi_id": "poi-west-lake",
+                  "name": "西湖风景名胜区",
+                  "address": "杭州市西湖区龙井路1号",
+                  "longitude": 120.141,
+                  "latitude": 30.25
+                },
+                "id": "candidate_001",
+                "score_breakdown": {
+                  "poi_verified": 3,
+                  "fit": 3,
+                  "route_value": 2
+                },
+                "not_recommended_reason": null,
+                "recommended_time_slots": [
+                  "morning",
+                  "afternoon"
+                ],
+                "best_visit_time": "白天游览",
+                "crowd_level": "unknown",
+                "cost_estimate_yuan": null,
+                "nearby_candidates": [],
+                "poi_verified": true,
+                "amap_poi_id": "poi-west-lake",
+                "longitude": 120.141,
+                "latitude": 30.25,
+                "tags": [
+                  "attraction"
+                ]
+              }
+            ],
+            "restaurants": [],
+            "hotels": [],
+            "transport_hubs": [],
+            "others": [],
+            "food_items": [],
+            "failed": [],
+            "excluded": [],
+            "pending": []
+          },
+          "candidates": [
+            {
+              "candidate_id": "candidate_001",
+              "name": "西湖",
+              "source_name": "西湖",
+              "verified_name": "西湖风景名胜区",
+              "category": "attraction",
+              "source": "poi_verified",
+              "score": 8,
+              "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+              "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+              "business_hours": null,
+              "opening_hours": null,
+              "suggested_duration_minutes": 120,
+              "estimated_duration": null,
+              "price_range": null,
+              "average_cost_yuan": null,
+              "mention_count": null,
+              "warnings": [],
+              "context_snippet": null,
+              "amap_poi_keyword": "西湖",
+              "match_status": null,
+              "rejected_pois": [],
+              "poi": {
+                "poi_id": "poi-west-lake",
+                "name": "西湖风景名胜区",
+                "address": "杭州市西湖区龙井路1号",
+                "longitude": 120.141,
+                "latitude": 30.25
+              },
+              "id": "candidate_001",
+              "score_breakdown": {
+                "poi_verified": 3,
+                "fit": 3,
+                "route_value": 2
+              },
+              "not_recommended_reason": null,
+              "recommended_time_slots": [
+                "morning",
+                "afternoon"
+              ],
+              "best_visit_time": "白天游览",
+              "crowd_level": "unknown",
+              "cost_estimate_yuan": null,
+              "nearby_candidates": [],
+              "poi_verified": true,
+              "amap_poi_id": "poi-west-lake",
+              "longitude": 120.141,
+              "latitude": 30.25,
+              "tags": [
+                "attraction"
+              ]
+            }
+          ],
+          "failed_places": [],
+          "pending_places": [],
+          "excluded_places": [],
+          "food_items": [],
+          "food_preference_summary": "",
+          "food_preferences": null,
+          "itinerary": {
+            "days": []
+          },
+          "map": {
+            "qr_code_url": null,
+            "schema_url": null
+          },
+          "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。",
+          "recommendations": [
+            {
+              "type": "note",
+              "title": "已验证 1 个候选地点",
+              "reason": "请先确认、删除或补充候选地点，确认后我再生成每日行程。"
+            }
+          ],
+          "followups": [
+            "确认候选地点后，将继续生成最终每日行程。"
+          ],
+          "warnings": []
+        },
+        "diagnostics": {
+          "route": {
+            "worker": "travel_planner",
+            "intent": "travel",
+            "confidence": 0.95,
+            "reason": "travel_scene_context",
+            "required_context": [],
+            "blocked_reason": null
+          },
+          "worker": "travel_planner",
+          "tools": [
+            {
+              "name": "travel_search_poi",
+              "args": {
+                "keywords": "西湖",
+                "city": "杭州",
+                "category": "attraction",
+                "page_size": 5
+              },
+              "latency_ms": null
+            }
+          ],
+          "active_tools": [
+            "travel_fetch_url_content",
+            "travel_search_poi",
+            "travel_search_nearby_poi"
+          ],
+          "active_skills": [
+            {
+              "id": "travel_plan_new",
+              "version": "1.0.0",
+              "reasons": [
+                "forced",
+                "scene:travel_planner",
+                "keyword:攻略"
+              ]
+            }
+          ],
+          "schema_valid": true,
+          "skill_diagnostics": {
+            "prompt_chars": 4298,
+            "denied_tools": {},
+            "warnings": [],
+            "tool_sources": {
+              "travel_fetch_url_content": [
+                "travel_plan_new"
+              ],
+              "travel_search_poi": [
+                "travel_plan_new"
+              ],
+              "travel_search_nearby_poi": [
+                "travel_plan_new"
+              ]
+            },
+            "max_tool_calls_per_turn": 8
+          }
+        },
+        "business_payload": {
+          "state": "candidates_ready",
+          "await_confirmation": true,
+          "trip_meta": {
+            "destination": "杭州",
+            "start_date": null,
+            "end_date": null,
+            "days": 1,
+            "travelers_count": null,
+            "preferences": [],
+            "budget": null,
+            "start_point": null,
+            "end_point": null
+          },
+          "places": [
+            {
+              "name": "西湖",
+              "category": "attraction"
+            }
+          ],
+          "candidates": [
+            {
+              "candidate_id": "candidate_001",
+              "name": "西湖",
+              "source_name": "西湖",
+              "verified_name": "西湖风景名胜区",
+              "category": "attraction",
+              "source": "poi_verified",
+              "score": 8,
+              "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+              "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+              "business_hours": null,
+              "opening_hours": null,
+              "suggested_duration_minutes": 120,
+              "estimated_duration": null,
+              "price_range": null,
+              "average_cost_yuan": null,
+              "mention_count": null,
+              "warnings": [],
+              "context_snippet": null,
+              "amap_poi_keyword": "西湖",
+              "match_status": null,
+              "rejected_pois": [],
+              "poi": {
+                "poi_id": "poi-west-lake",
+                "name": "西湖风景名胜区",
+                "address": "杭州市西湖区龙井路1号",
+                "longitude": 120.141,
+                "latitude": 30.25
+              },
+              "id": "candidate_001",
+              "score_breakdown": {
+                "poi_verified": 3,
+                "fit": 3,
+                "route_value": 2
+              },
+              "not_recommended_reason": null,
+              "recommended_time_slots": [
+                "morning",
+                "afternoon"
+              ],
+              "best_visit_time": "白天游览",
+              "crowd_level": "unknown",
+              "cost_estimate_yuan": null,
+              "nearby_candidates": [],
+              "poi_verified": true,
+              "amap_poi_id": "poi-west-lake",
+              "longitude": 120.141,
+              "latitude": 30.25,
+              "tags": [
+                "attraction"
+              ]
+            }
+          ],
+          "itinerary": {
+            "days": []
+          },
+          "map": {
+            "qr_code_url": null,
+            "schema_url": null
+          },
+          "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。"
+        },
+        "worker": "travel_planner"
+      },
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-travel-food-route-multiturn",
+      "message": null,
+      "fallback": false,
+      "status": "completed",
+      "worker": "route_planner",
+      "intent": "route",
+      "failure_class": null,
+      "turns": [
+        {
+          "id": "deterministic-travel-food-route-multiturn:1",
+          "message": "帮我做杭州1天旅行攻略：西湖",
+          "fallback": false,
+          "status": "completed",
+          "worker": "travel_planner",
+          "intent": "travel",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-travel-food-route-multiturn:1",
+          "active_tools": [
+            "travel_fetch_url_content",
+            "travel_search_poi",
+            "travel_search_nearby_poi"
+          ],
+          "active_skills": [
+            "travel_plan_new"
+          ],
+          "tool_calls": [
+            "travel_search_poi"
+          ],
+          "answer": {
+            "state": "candidates_ready",
+            "await_confirmation": true,
+            "trip_meta": {
+              "destination": "杭州",
+              "start_date": null,
+              "end_date": null,
+              "days": 1,
+              "travelers_count": null,
+              "preferences": [],
+              "budget": null,
+              "start_point": null,
+              "end_point": null
+            },
+            "sources": [],
+            "places": [
+              {
+                "name": "西湖",
+                "category": "attraction"
+              }
+            ],
+            "total_candidates": 1,
+            "categories": {
+              "attraction": 1
+            },
+            "candidate_groups": {
+              "attractions": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "source_name": "西湖",
+                  "verified_name": "西湖风景名胜区",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "suggested_duration_minutes": 120,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "mention_count": null,
+                  "warnings": [],
+                  "context_snippet": null,
+                  "amap_poi_keyword": "西湖",
+                  "match_status": null,
+                  "rejected_pois": [],
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖风景名胜区",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "tags": [
+                    "attraction"
+                  ]
+                }
+              ],
+              "restaurants": [],
+              "hotels": [],
+              "transport_hubs": [],
+              "others": [],
+              "food_items": [],
+              "failed": [],
+              "excluded": [],
+              "pending": []
+            },
+            "candidates": [
+              {
+                "candidate_id": "candidate_001",
+                "name": "西湖",
+                "source_name": "西湖",
+                "verified_name": "西湖风景名胜区",
+                "category": "attraction",
+                "source": "poi_verified",
+                "score": 8,
+                "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "business_hours": null,
+                "opening_hours": null,
+                "suggested_duration_minutes": 120,
+                "estimated_duration": null,
+                "price_range": null,
+                "average_cost_yuan": null,
+                "mention_count": null,
+                "warnings": [],
+                "context_snippet": null,
+                "amap_poi_keyword": "西湖",
+                "match_status": null,
+                "rejected_pois": [],
+                "poi": {
+                  "poi_id": "poi-west-lake",
+                  "name": "西湖风景名胜区",
+                  "address": "杭州市西湖区龙井路1号",
+                  "longitude": 120.141,
+                  "latitude": 30.25
+                },
+                "id": "candidate_001",
+                "score_breakdown": {
+                  "poi_verified": 3,
+                  "fit": 3,
+                  "route_value": 2
+                },
+                "not_recommended_reason": null,
+                "recommended_time_slots": [
+                  "morning",
+                  "afternoon"
+                ],
+                "best_visit_time": "白天游览",
+                "crowd_level": "unknown",
+                "cost_estimate_yuan": null,
+                "nearby_candidates": [],
+                "poi_verified": true,
+                "amap_poi_id": "poi-west-lake",
+                "longitude": 120.141,
+                "latitude": 30.25,
+                "tags": [
+                  "attraction"
+                ]
+              }
+            ],
+            "failed_places": [],
+            "pending_places": [],
+            "excluded_places": [],
+            "food_items": [],
+            "food_preference_summary": "",
+            "food_preferences": null,
+            "itinerary": {
+              "days": []
+            },
+            "map": {
+              "qr_code_url": null,
+              "schema_url": null
+            },
+            "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。",
+            "recommendations": [
+              {
+                "type": "note",
+                "title": "已验证 1 个候选地点",
+                "reason": "请先确认、删除或补充候选地点，确认后我再生成每日行程。"
+              }
+            ],
+            "followups": [
+              "确认候选地点后，将继续生成最终每日行程。"
+            ],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "state": "candidates_ready",
+              "await_confirmation": true,
+              "trip_meta": {
+                "destination": "杭州",
+                "start_date": null,
+                "end_date": null,
+                "days": 1,
+                "travelers_count": null,
+                "preferences": [],
+                "budget": null,
+                "start_point": null,
+                "end_point": null
+              },
+              "sources": [],
+              "places": [
+                {
+                  "name": "西湖",
+                  "category": "attraction"
+                }
+              ],
+              "total_candidates": 1,
+              "categories": {
+                "attraction": 1
+              },
+              "candidate_groups": {
+                "attractions": [
+                  {
+                    "candidate_id": "candidate_001",
+                    "name": "西湖",
+                    "source_name": "西湖",
+                    "verified_name": "西湖风景名胜区",
+                    "category": "attraction",
+                    "source": "poi_verified",
+                    "score": 8,
+                    "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                    "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                    "business_hours": null,
+                    "opening_hours": null,
+                    "suggested_duration_minutes": 120,
+                    "estimated_duration": null,
+                    "price_range": null,
+                    "average_cost_yuan": null,
+                    "mention_count": null,
+                    "warnings": [],
+                    "context_snippet": null,
+                    "amap_poi_keyword": "西湖",
+                    "match_status": null,
+                    "rejected_pois": [],
+                    "poi": {
+                      "poi_id": "poi-west-lake",
+                      "name": "西湖风景名胜区",
+                      "address": "杭州市西湖区龙井路1号",
+                      "longitude": 120.141,
+                      "latitude": 30.25
+                    },
+                    "id": "candidate_001",
+                    "score_breakdown": {
+                      "poi_verified": 3,
+                      "fit": 3,
+                      "route_value": 2
+                    },
+                    "not_recommended_reason": null,
+                    "recommended_time_slots": [
+                      "morning",
+                      "afternoon"
+                    ],
+                    "best_visit_time": "白天游览",
+                    "crowd_level": "unknown",
+                    "cost_estimate_yuan": null,
+                    "nearby_candidates": [],
+                    "poi_verified": true,
+                    "amap_poi_id": "poi-west-lake",
+                    "longitude": 120.141,
+                    "latitude": 30.25,
+                    "tags": [
+                      "attraction"
+                    ]
+                  }
+                ],
+                "restaurants": [],
+                "hotels": [],
+                "transport_hubs": [],
+                "others": [],
+                "food_items": [],
+                "failed": [],
+                "excluded": [],
+                "pending": []
+              },
+              "candidates": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "source_name": "西湖",
+                  "verified_name": "西湖风景名胜区",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "suggested_duration_minutes": 120,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "mention_count": null,
+                  "warnings": [],
+                  "context_snippet": null,
+                  "amap_poi_keyword": "西湖",
+                  "match_status": null,
+                  "rejected_pois": [],
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖风景名胜区",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "tags": [
+                    "attraction"
+                  ]
+                }
+              ],
+              "failed_places": [],
+              "pending_places": [],
+              "excluded_places": [],
+              "food_items": [],
+              "food_preference_summary": "",
+              "food_preferences": null,
+              "itinerary": {
+                "days": []
+              },
+              "map": {
+                "qr_code_url": null,
+                "schema_url": null
+              },
+              "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。",
+              "recommendations": [
+                {
+                  "type": "note",
+                  "title": "已验证 1 个候选地点",
+                  "reason": "请先确认、删除或补充候选地点，确认后我再生成每日行程。"
+                }
+              ],
+              "followups": [
+                "确认候选地点后，将继续生成最终每日行程。"
+              ],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "travel_planner",
+                "intent": "travel",
+                "confidence": 0.95,
+                "reason": "travel_scene_context",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "travel_planner",
+              "tools": [
+                {
+                  "name": "travel_search_poi",
+                  "args": {
+                    "keywords": "西湖",
+                    "city": "杭州",
+                    "category": "attraction",
+                    "page_size": 5
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "travel_fetch_url_content",
+                "travel_search_poi",
+                "travel_search_nearby_poi"
+              ],
+              "active_skills": [
+                {
+                  "id": "travel_plan_new",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "scene:travel_planner",
+                    "keyword:攻略"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 4298,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "travel_fetch_url_content": [
+                    "travel_plan_new"
+                  ],
+                  "travel_search_poi": [
+                    "travel_plan_new"
+                  ],
+                  "travel_search_nearby_poi": [
+                    "travel_plan_new"
+                  ]
+                },
+                "max_tool_calls_per_turn": 8
+              }
+            },
+            "business_payload": {
+              "state": "candidates_ready",
+              "await_confirmation": true,
+              "trip_meta": {
+                "destination": "杭州",
+                "start_date": null,
+                "end_date": null,
+                "days": 1,
+                "travelers_count": null,
+                "preferences": [],
+                "budget": null,
+                "start_point": null,
+                "end_point": null
+              },
+              "places": [
+                {
+                  "name": "西湖",
+                  "category": "attraction"
+                }
+              ],
+              "candidates": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "source_name": "西湖",
+                  "verified_name": "西湖风景名胜区",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "suggested_duration_minutes": 120,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "mention_count": null,
+                  "warnings": [],
+                  "context_snippet": null,
+                  "amap_poi_keyword": "西湖",
+                  "match_status": null,
+                  "rejected_pois": [],
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖风景名胜区",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "tags": [
+                    "attraction"
+                  ]
+                }
+              ],
+              "itinerary": {
+                "days": []
+              },
+              "map": {
+                "qr_code_url": null,
+                "schema_url": null
+              },
+              "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。"
+            },
+            "worker": "travel_planner"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        },
+        {
+          "id": "deterministic-travel-food-route-multiturn:2",
+          "message": "我在杭州旅行，附近有什么好吃的",
+          "fallback": false,
+          "status": "completed",
+          "worker": "food_advisor",
+          "intent": "eat_out",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-travel-food-route-multiturn:2",
+          "active_tools": [
+            "get_ip_location",
+            "geocode_location",
+            "search_restaurants",
+            "get_weather"
+          ],
+          "active_skills": [
+            "food_assistant",
+            "food_decision",
+            "restaurant_finder"
+          ],
+          "tool_calls": [
+            "search_restaurants"
+          ],
+          "answer": {
+            "scene": "eat",
+            "agent_id": "food_assistant",
+            "recommendations": [
+              {
+                "type": "restaurant",
+                "title": "人民广场粤味小馆",
+                "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                "raw": {
+                  "name": "人民广场粤味小馆",
+                  "address": "人民广场步行 8 分钟",
+                  "rating": "4.7",
+                  "price": "人均 88",
+                  "lat": 31.2338,
+                  "lng": 121.4821
+                }
+              }
+            ],
+            "followups": [
+              "要不要我按距离、评分或口味再帮你筛一轮？",
+              "选定一家后我可以继续帮你规划路线。"
+            ],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "scene": "eat",
+              "agent_id": "food_assistant",
+              "recommendations": [
+                {
+                  "type": "restaurant",
+                  "title": "人民广场粤味小馆",
+                  "reason": "人民广场步行 8 分钟；评分 4.7；人均 88",
+                  "raw": {
+                    "name": "人民广场粤味小馆",
+                    "address": "人民广场步行 8 分钟",
+                    "rating": "4.7",
+                    "price": "人均 88",
+                    "lat": 31.2338,
+                    "lng": 121.4821
+                  }
+                }
+              ],
+              "followups": [
+                "要不要我按距离、评分或口味再帮你筛一轮？",
+                "选定一家后我可以继续帮你规划路线。"
+              ],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "food_advisor",
+                "intent": "eat_out",
+                "confidence": 0.9,
+                "reason": "food_intent",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "food_advisor",
+              "tools": [
+                {
+                  "name": "search_restaurants",
+                  "args": {
+                    "query": "粤菜",
+                    "lat": 31.2304,
+                    "lng": 121.4737,
+                    "city": "上海"
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "get_ip_location",
+                "geocode_location",
+                "search_restaurants",
+                "get_weather"
+              ],
+              "active_skills": [
+                {
+                  "id": "food_assistant",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "keyword:附近"
+                  ]
+                },
+                {
+                  "id": "food_decision",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out",
+                    "keyword:吃的",
+                    "keyword:好吃"
+                  ]
+                },
+                {
+                  "id": "restaurant_finder",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "scene:eat",
+                    "intent:eat_out",
+                    "keyword:附近",
+                    "keyword:吃的"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 1932,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "get_ip_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "geocode_location": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "search_restaurants": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ],
+                  "get_weather": [
+                    "food_assistant",
+                    "restaurant_finder"
+                  ]
+                },
+                "max_tool_calls_per_turn": 2
+              }
+            },
+            "business_payload": {
+              "scene": "eat",
+              "agent_id": "food_assistant"
+            },
+            "worker": "food_advisor"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        },
+        {
+          "id": "deterministic-travel-food-route-multiturn:3",
+          "message": "去人民广场粤味小馆怎么走",
+          "fallback": false,
+          "status": "completed",
+          "worker": "route_planner",
+          "intent": "route",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-travel-food-route-multiturn:3",
+          "active_tools": [
+            "geocode_location",
+            "plan_route"
+          ],
+          "active_skills": [
+            "route_planner"
+          ],
+          "tool_calls": [
+            "plan_route"
+          ],
+          "answer": {
+            "recommendations": [
+              {
+                "type": "note",
+                "title": "路线已规划",
+                "reason": "based_on_plan_route"
+              }
+            ],
+            "followups": [],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "recommendations": [
+                {
+                  "type": "note",
+                  "title": "路线已规划",
+                  "reason": "based_on_plan_route"
+                }
+              ],
+              "followups": [],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "route_planner",
+                "intent": "route",
+                "confidence": 0.9,
+                "reason": "route_intent",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "route_planner",
+              "tools": [
+                {
+                  "name": "plan_route",
+                  "args": {
+                    "origin_lat": 31.2304,
+                    "origin_lng": 121.4737,
+                    "destination_lat": 31.2338,
+                    "destination_lng": 121.4821,
+                    "destination": "人民广场粤味小馆",
+                    "mode": "walking"
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "geocode_location",
+                "plan_route"
+              ],
+              "active_skills": [
+                {
+                  "id": "route_planner",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "scene:route",
+                    "intent:route",
+                    "keyword:怎么走"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 433,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "geocode_location": [
+                    "route_planner"
+                  ],
+                  "plan_route": [
+                    "route_planner"
+                  ]
+                },
+                "max_tool_calls_per_turn": 2
+              }
+            },
+            "business_payload": {},
+            "worker": "route_planner"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        }
+      ],
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    },
+    {
+      "id": "deterministic-travel-confirm-map-multiturn",
+      "message": null,
+      "fallback": false,
+      "status": "completed",
+      "worker": "travel_planner",
+      "intent": "travel",
+      "failure_class": null,
+      "turns": [
+        {
+          "id": "deterministic-travel-confirm-map-multiturn:1",
+          "message": "帮我做杭州1天旅行攻略：西湖",
+          "fallback": false,
+          "status": "completed",
+          "worker": "travel_planner",
+          "intent": "travel",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-travel-confirm-map-multiturn:1",
+          "active_tools": [
+            "travel_fetch_url_content",
+            "travel_search_poi",
+            "travel_search_nearby_poi"
+          ],
+          "active_skills": [
+            "travel_plan_new"
+          ],
+          "tool_calls": [
+            "travel_search_poi"
+          ],
+          "answer": {
+            "state": "candidates_ready",
+            "await_confirmation": true,
+            "trip_meta": {
+              "destination": "杭州",
+              "start_date": null,
+              "end_date": null,
+              "days": 1,
+              "travelers_count": null,
+              "preferences": [],
+              "budget": null,
+              "start_point": null,
+              "end_point": null
+            },
+            "sources": [],
+            "places": [
+              {
+                "name": "西湖",
+                "category": "attraction"
+              }
+            ],
+            "total_candidates": 1,
+            "categories": {
+              "attraction": 1
+            },
+            "candidate_groups": {
+              "attractions": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "source_name": "西湖",
+                  "verified_name": "西湖风景名胜区",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "suggested_duration_minutes": 120,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "mention_count": null,
+                  "warnings": [],
+                  "context_snippet": null,
+                  "amap_poi_keyword": "西湖",
+                  "match_status": null,
+                  "rejected_pois": [],
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖风景名胜区",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "tags": [
+                    "attraction"
+                  ]
+                }
+              ],
+              "restaurants": [],
+              "hotels": [],
+              "transport_hubs": [],
+              "others": [],
+              "food_items": [],
+              "failed": [],
+              "excluded": [],
+              "pending": []
+            },
+            "candidates": [
+              {
+                "candidate_id": "candidate_001",
+                "name": "西湖",
+                "source_name": "西湖",
+                "verified_name": "西湖风景名胜区",
+                "category": "attraction",
+                "source": "poi_verified",
+                "score": 8,
+                "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "business_hours": null,
+                "opening_hours": null,
+                "suggested_duration_minutes": 120,
+                "estimated_duration": null,
+                "price_range": null,
+                "average_cost_yuan": null,
+                "mention_count": null,
+                "warnings": [],
+                "context_snippet": null,
+                "amap_poi_keyword": "西湖",
+                "match_status": null,
+                "rejected_pois": [],
+                "poi": {
+                  "poi_id": "poi-west-lake",
+                  "name": "西湖风景名胜区",
+                  "address": "杭州市西湖区龙井路1号",
+                  "longitude": 120.141,
+                  "latitude": 30.25
+                },
+                "id": "candidate_001",
+                "score_breakdown": {
+                  "poi_verified": 3,
+                  "fit": 3,
+                  "route_value": 2
+                },
+                "not_recommended_reason": null,
+                "recommended_time_slots": [
+                  "morning",
+                  "afternoon"
+                ],
+                "best_visit_time": "白天游览",
+                "crowd_level": "unknown",
+                "cost_estimate_yuan": null,
+                "nearby_candidates": [],
+                "poi_verified": true,
+                "amap_poi_id": "poi-west-lake",
+                "longitude": 120.141,
+                "latitude": 30.25,
+                "tags": [
+                  "attraction"
+                ]
+              }
+            ],
+            "failed_places": [],
+            "pending_places": [],
+            "excluded_places": [],
+            "food_items": [],
+            "food_preference_summary": "",
+            "food_preferences": null,
+            "itinerary": {
+              "days": []
+            },
+            "map": {
+              "qr_code_url": null,
+              "schema_url": null
+            },
+            "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。",
+            "recommendations": [
+              {
+                "type": "note",
+                "title": "已验证 1 个候选地点",
+                "reason": "请先确认、删除或补充候选地点，确认后我再生成每日行程。"
+              }
+            ],
+            "followups": [
+              "确认候选地点后，将继续生成最终每日行程。"
+            ],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "state": "candidates_ready",
+              "await_confirmation": true,
+              "trip_meta": {
+                "destination": "杭州",
+                "start_date": null,
+                "end_date": null,
+                "days": 1,
+                "travelers_count": null,
+                "preferences": [],
+                "budget": null,
+                "start_point": null,
+                "end_point": null
+              },
+              "sources": [],
+              "places": [
+                {
+                  "name": "西湖",
+                  "category": "attraction"
+                }
+              ],
+              "total_candidates": 1,
+              "categories": {
+                "attraction": 1
+              },
+              "candidate_groups": {
+                "attractions": [
+                  {
+                    "candidate_id": "candidate_001",
+                    "name": "西湖",
+                    "source_name": "西湖",
+                    "verified_name": "西湖风景名胜区",
+                    "category": "attraction",
+                    "source": "poi_verified",
+                    "score": 8,
+                    "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                    "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                    "business_hours": null,
+                    "opening_hours": null,
+                    "suggested_duration_minutes": 120,
+                    "estimated_duration": null,
+                    "price_range": null,
+                    "average_cost_yuan": null,
+                    "mention_count": null,
+                    "warnings": [],
+                    "context_snippet": null,
+                    "amap_poi_keyword": "西湖",
+                    "match_status": null,
+                    "rejected_pois": [],
+                    "poi": {
+                      "poi_id": "poi-west-lake",
+                      "name": "西湖风景名胜区",
+                      "address": "杭州市西湖区龙井路1号",
+                      "longitude": 120.141,
+                      "latitude": 30.25
+                    },
+                    "id": "candidate_001",
+                    "score_breakdown": {
+                      "poi_verified": 3,
+                      "fit": 3,
+                      "route_value": 2
+                    },
+                    "not_recommended_reason": null,
+                    "recommended_time_slots": [
+                      "morning",
+                      "afternoon"
+                    ],
+                    "best_visit_time": "白天游览",
+                    "crowd_level": "unknown",
+                    "cost_estimate_yuan": null,
+                    "nearby_candidates": [],
+                    "poi_verified": true,
+                    "amap_poi_id": "poi-west-lake",
+                    "longitude": 120.141,
+                    "latitude": 30.25,
+                    "tags": [
+                      "attraction"
+                    ]
+                  }
+                ],
+                "restaurants": [],
+                "hotels": [],
+                "transport_hubs": [],
+                "others": [],
+                "food_items": [],
+                "failed": [],
+                "excluded": [],
+                "pending": []
+              },
+              "candidates": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "source_name": "西湖",
+                  "verified_name": "西湖风景名胜区",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "suggested_duration_minutes": 120,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "mention_count": null,
+                  "warnings": [],
+                  "context_snippet": null,
+                  "amap_poi_keyword": "西湖",
+                  "match_status": null,
+                  "rejected_pois": [],
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖风景名胜区",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "tags": [
+                    "attraction"
+                  ]
+                }
+              ],
+              "failed_places": [],
+              "pending_places": [],
+              "excluded_places": [],
+              "food_items": [],
+              "food_preference_summary": "",
+              "food_preferences": null,
+              "itinerary": {
+                "days": []
+              },
+              "map": {
+                "qr_code_url": null,
+                "schema_url": null
+              },
+              "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。",
+              "recommendations": [
+                {
+                  "type": "note",
+                  "title": "已验证 1 个候选地点",
+                  "reason": "请先确认、删除或补充候选地点，确认后我再生成每日行程。"
+                }
+              ],
+              "followups": [
+                "确认候选地点后，将继续生成最终每日行程。"
+              ],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "travel_planner",
+                "intent": "travel",
+                "confidence": 0.95,
+                "reason": "travel_scene_context",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "travel_planner",
+              "tools": [
+                {
+                  "name": "travel_search_poi",
+                  "args": {
+                    "keywords": "西湖",
+                    "city": "杭州",
+                    "category": "attraction",
+                    "page_size": 5
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "travel_fetch_url_content",
+                "travel_search_poi",
+                "travel_search_nearby_poi"
+              ],
+              "active_skills": [
+                {
+                  "id": "travel_plan_new",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "scene:travel_planner",
+                    "keyword:攻略"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 4298,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "travel_fetch_url_content": [
+                    "travel_plan_new"
+                  ],
+                  "travel_search_poi": [
+                    "travel_plan_new"
+                  ],
+                  "travel_search_nearby_poi": [
+                    "travel_plan_new"
+                  ]
+                },
+                "max_tool_calls_per_turn": 8
+              }
+            },
+            "business_payload": {
+              "state": "candidates_ready",
+              "await_confirmation": true,
+              "trip_meta": {
+                "destination": "杭州",
+                "start_date": null,
+                "end_date": null,
+                "days": 1,
+                "travelers_count": null,
+                "preferences": [],
+                "budget": null,
+                "start_point": null,
+                "end_point": null
+              },
+              "places": [
+                {
+                  "name": "西湖",
+                  "category": "attraction"
+                }
+              ],
+              "candidates": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "source_name": "西湖",
+                  "verified_name": "西湖风景名胜区",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "suggested_duration_minutes": 120,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "mention_count": null,
+                  "warnings": [],
+                  "context_snippet": null,
+                  "amap_poi_keyword": "西湖",
+                  "match_status": null,
+                  "rejected_pois": [],
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖风景名胜区",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "tags": [
+                    "attraction"
+                  ]
+                }
+              ],
+              "itinerary": {
+                "days": []
+              },
+              "map": {
+                "qr_code_url": null,
+                "schema_url": null
+              },
+              "raw_text": "## 候选地点筛选结果\n\n- 已验证候选：1 个\n- 验证失败 / 需确认：0 个\n- 待继续验证：0 个\n- 美食偏好 / 未验证菜品：0 个\n- 已排除地点：0 个\n\n### 景点类\n1. **西湖（高德：西湖风景名胜区）**\n   - 来源：攻略提取\n   - 评分：8\n   - 营业时间：待确认\n   - 预计时长：2小时\n   - 推荐理由：攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」\n   - 备注：地址：杭州市西湖区龙井路1号\n\n请确认、删除或补充候选地点，确认后我再生成每日行程。"
+            },
+            "worker": "travel_planner"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        },
+        {
+          "id": "deterministic-travel-confirm-map-multiturn:2",
+          "message": "确认，继续生成每日行程",
+          "fallback": false,
+          "status": "completed",
+          "worker": "travel_planner",
+          "intent": "travel",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-travel-confirm-map-multiturn:2",
+          "active_tools": [
+            "travel_search_poi"
+          ],
+          "active_skills": [
+            "travel_plan_new"
+          ],
+          "tool_calls": [],
+          "answer": {
+            "state": "itinerary_generated",
+            "await_confirmation": true,
+            "trip_meta": {
+              "destination": "杭州",
+              "start_date": null,
+              "end_date": null,
+              "days": 1,
+              "travelers_count": null,
+              "preferences": [],
+              "budget": null,
+              "start_point": null,
+              "end_point": null
+            },
+            "sources": [],
+            "places": [
+              {
+                "name": "西湖",
+                "category": "attraction"
+              }
+            ],
+            "candidates": [
+              {
+                "candidate_id": "candidate_001",
+                "name": "西湖",
+                "category": "attraction",
+                "source": "poi_verified",
+                "score": 8,
+                "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "poi": {
+                  "poi_id": "poi-west-lake",
+                  "name": "西湖",
+                  "address": "杭州市西湖区龙井路1号",
+                  "longitude": 120.141,
+                  "latitude": 30.25
+                },
+                "id": "candidate_001",
+                "source_name": "西湖",
+                "verified_name": "西湖",
+                "score_breakdown": {
+                  "poi_verified": 3,
+                  "fit": 3,
+                  "route_value": 2
+                },
+                "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "not_recommended_reason": null,
+                "recommended_time_slots": [
+                  "morning",
+                  "afternoon"
+                ],
+                "suggested_duration_minutes": 120,
+                "best_visit_time": "白天游览",
+                "crowd_level": "unknown",
+                "cost_estimate_yuan": null,
+                "nearby_candidates": [],
+                "poi_verified": true,
+                "amap_poi_id": "poi-west-lake",
+                "amap_poi_keyword": "西湖",
+                "longitude": 120.141,
+                "latitude": 30.25,
+                "business_hours": null,
+                "opening_hours": null,
+                "estimated_duration": null,
+                "price_range": null,
+                "average_cost_yuan": null,
+                "context_snippet": null,
+                "tags": [
+                  "attraction"
+                ],
+                "warnings": []
+              }
+            ],
+            "itinerary": {
+              "days": [
+                {
+                  "day_number": 1,
+                  "theme": "Day 1",
+                  "items": [
+                    {
+                      "place_name": "西湖",
+                      "name": "西湖",
+                      "poi_id": "poi-west-lake",
+                      "longitude": 120.141,
+                      "latitude": 30.25,
+                      "address": "杭州市西湖区龙井路1号"
+                    }
+                  ]
+                }
+              ]
+            },
+            "map": {
+              "qr_code_url": null,
+              "schema_url": null
+            },
+            "raw_text": "## 每日行程草稿\n\n### Day 1\n1. 西湖\n\n确认这版行程后，我会生成高德地图二维码。",
+            "recommendations": [
+              {
+                "type": "note",
+                "title": "行程已生成",
+                "reason": "请确认最终行程，确认后可生成高德地图二维码。"
+              }
+            ],
+            "followups": [
+              "确认行程后即可生成高德地图二维码。"
+            ],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "state": "itinerary_generated",
+              "await_confirmation": true,
+              "trip_meta": {
+                "destination": "杭州",
+                "start_date": null,
+                "end_date": null,
+                "days": 1,
+                "travelers_count": null,
+                "preferences": [],
+                "budget": null,
+                "start_point": null,
+                "end_point": null
+              },
+              "sources": [],
+              "places": [
+                {
+                  "name": "西湖",
+                  "category": "attraction"
+                }
+              ],
+              "candidates": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "source_name": "西湖",
+                  "verified_name": "西湖",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "suggested_duration_minutes": 120,
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "amap_poi_keyword": "西湖",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "context_snippet": null,
+                  "tags": [
+                    "attraction"
+                  ],
+                  "warnings": []
+                }
+              ],
+              "itinerary": {
+                "days": [
+                  {
+                    "day_number": 1,
+                    "theme": "Day 1",
+                    "items": [
+                      {
+                        "place_name": "西湖",
+                        "name": "西湖",
+                        "poi_id": "poi-west-lake",
+                        "longitude": 120.141,
+                        "latitude": 30.25,
+                        "address": "杭州市西湖区龙井路1号"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "map": {
+                "qr_code_url": null,
+                "schema_url": null
+              },
+              "raw_text": "## 每日行程草稿\n\n### Day 1\n1. 西湖\n\n确认这版行程后，我会生成高德地图二维码。",
+              "recommendations": [
+                {
+                  "type": "note",
+                  "title": "行程已生成",
+                  "reason": "请确认最终行程，确认后可生成高德地图二维码。"
+                }
+              ],
+              "followups": [
+                "确认行程后即可生成高德地图二维码。"
+              ],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "travel_planner",
+                "intent": "travel",
+                "confidence": 0.95,
+                "reason": "travel_scene_context",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "travel_planner",
+              "tools": [],
+              "active_tools": [
+                "travel_search_poi"
+              ],
+              "active_skills": [
+                {
+                  "id": "travel_plan_new",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "scene:travel_planner",
+                    "keyword:行程"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 4298,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "travel_search_poi": [
+                    "travel_plan_new"
+                  ]
+                },
+                "max_tool_calls_per_turn": 8
+              }
+            },
+            "business_payload": {
+              "state": "itinerary_generated",
+              "await_confirmation": true,
+              "trip_meta": {
+                "destination": "杭州",
+                "start_date": null,
+                "end_date": null,
+                "days": 1,
+                "travelers_count": null,
+                "preferences": [],
+                "budget": null,
+                "start_point": null,
+                "end_point": null
+              },
+              "places": [
+                {
+                  "name": "西湖",
+                  "category": "attraction"
+                }
+              ],
+              "candidates": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "source_name": "西湖",
+                  "verified_name": "西湖",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "suggested_duration_minutes": 120,
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "amap_poi_keyword": "西湖",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "context_snippet": null,
+                  "tags": [
+                    "attraction"
+                  ],
+                  "warnings": []
+                }
+              ],
+              "itinerary": {
+                "days": [
+                  {
+                    "day_number": 1,
+                    "theme": "Day 1",
+                    "items": [
+                      {
+                        "place_name": "西湖",
+                        "name": "西湖",
+                        "poi_id": "poi-west-lake",
+                        "longitude": 120.141,
+                        "latitude": 30.25,
+                        "address": "杭州市西湖区龙井路1号"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "map": {
+                "qr_code_url": null,
+                "schema_url": null
+              },
+              "raw_text": "## 每日行程草稿\n\n### Day 1\n1. 西湖\n\n确认这版行程后，我会生成高德地图二维码。"
+            },
+            "worker": "travel_planner"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        },
+        {
+          "id": "deterministic-travel-confirm-map-multiturn:3",
+          "message": "确认，生成高德地图二维码",
+          "fallback": false,
+          "status": "completed",
+          "worker": "travel_planner",
+          "intent": "travel",
+          "failure_class": null,
+          "trace_id": "trace-deterministic-travel-confirm-map-multiturn:3",
+          "active_tools": [
+            "travel_create_personal_map"
+          ],
+          "active_skills": [
+            "travel_plan_new"
+          ],
+          "tool_calls": [
+            "travel_create_personal_map"
+          ],
+          "answer": {
+            "state": "map_generated",
+            "await_confirmation": false,
+            "trip_meta": {
+              "destination": "杭州",
+              "start_date": null,
+              "end_date": null,
+              "days": 1,
+              "travelers_count": null,
+              "preferences": [],
+              "budget": null,
+              "start_point": null,
+              "end_point": null
+            },
+            "sources": [],
+            "places": [],
+            "candidates": [
+              {
+                "candidate_id": "candidate_001",
+                "name": "西湖",
+                "category": "attraction",
+                "source": "poi_verified",
+                "score": 8,
+                "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "poi": {
+                  "poi_id": "poi-west-lake",
+                  "name": "西湖",
+                  "address": "杭州市西湖区龙井路1号",
+                  "longitude": 120.141,
+                  "latitude": 30.25
+                },
+                "id": "candidate_001",
+                "source_name": "西湖",
+                "verified_name": "西湖",
+                "score_breakdown": {
+                  "poi_verified": 3,
+                  "fit": 3,
+                  "route_value": 2
+                },
+                "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                "not_recommended_reason": null,
+                "recommended_time_slots": [
+                  "morning",
+                  "afternoon"
+                ],
+                "suggested_duration_minutes": 120,
+                "best_visit_time": "白天游览",
+                "crowd_level": "unknown",
+                "cost_estimate_yuan": null,
+                "nearby_candidates": [],
+                "poi_verified": true,
+                "amap_poi_id": "poi-west-lake",
+                "amap_poi_keyword": "西湖",
+                "longitude": 120.141,
+                "latitude": 30.25,
+                "business_hours": null,
+                "opening_hours": null,
+                "estimated_duration": null,
+                "price_range": null,
+                "average_cost_yuan": null,
+                "context_snippet": null,
+                "tags": [
+                  "attraction"
+                ],
+                "warnings": []
+              }
+            ],
+            "itinerary": {
+              "days": [
+                {
+                  "day_number": 1,
+                  "theme": "Day 1",
+                  "items": [
+                    {
+                      "order": 1,
+                      "place_name": "西湖",
+                      "poi_id": "poi-west-lake",
+                      "longitude": 120.141,
+                      "latitude": 30.25
+                    }
+                  ]
+                }
+              ]
+            },
+            "routes": [
+              {
+                "day_number": 1,
+                "title": "Day 1",
+                "points": [
+                  {
+                    "name": "西湖",
+                    "poi_id": "poi-west-lake",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  }
+                ],
+                "legs": []
+              }
+            ],
+            "map": {
+              "qr_code_url": "https://example.com/deterministic-map.png",
+              "schema_url": "amapuri://workInAmap/createWithToken?polymericId=deterministic",
+              "title": "杭州1日游地图",
+              "line_list": [
+                {
+                  "title": "Day 1",
+                  "pointInfoList": [
+                    {
+                      "name": "西湖",
+                      "poiId": "poi-west-lake",
+                      "lon": 120.141,
+                      "lat": 30.25
+                    }
+                  ]
+                }
+              ],
+              "route_preview": [
+                {
+                  "day_number": 1,
+                  "title": "Day 1",
+                  "points": [
+                    {
+                      "name": "西湖",
+                      "poi_id": "poi-west-lake",
+                      "longitude": 120.141,
+                      "latitude": 30.25
+                    }
+                  ],
+                  "legs": []
+                }
+              ],
+              "error": null,
+              "message": "deterministic map generated"
+            },
+            "raw_text": "## 旅行计划已生成\n高德地图链接已生成，可在详情页查看二维码。\n\n## 路线预览\n- **Day 1**\n  - 西湖\n\n## 每日行程草稿\n\n### Day 1\n1. 西湖\n\n确认这版行程后，我会生成高德地图二维码。",
+            "recommendations": [
+              {
+                "type": "note",
+                "title": "杭州1日游地图",
+                "reason": "deterministic map generated"
+              }
+            ],
+            "followups": [
+              "你可以继续提出调整要求，我会在当前计划基础上修改。"
+            ],
+            "warnings": []
+          },
+          "agent_result": {
+            "status": "completed",
+            "final": {
+              "state": "map_generated",
+              "await_confirmation": false,
+              "trip_meta": {
+                "destination": "杭州",
+                "start_date": null,
+                "end_date": null,
+                "days": 1,
+                "travelers_count": null,
+                "preferences": [],
+                "budget": null,
+                "start_point": null,
+                "end_point": null
+              },
+              "sources": [],
+              "places": [],
+              "candidates": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "source_name": "西湖",
+                  "verified_name": "西湖",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "suggested_duration_minutes": 120,
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "amap_poi_keyword": "西湖",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "context_snippet": null,
+                  "tags": [
+                    "attraction"
+                  ],
+                  "warnings": []
+                }
+              ],
+              "itinerary": {
+                "days": [
+                  {
+                    "day_number": 1,
+                    "theme": "Day 1",
+                    "items": [
+                      {
+                        "order": 1,
+                        "place_name": "西湖",
+                        "poi_id": "poi-west-lake",
+                        "longitude": 120.141,
+                        "latitude": 30.25
+                      }
+                    ]
+                  }
+                ]
+              },
+              "routes": [
+                {
+                  "day_number": 1,
+                  "title": "Day 1",
+                  "points": [
+                    {
+                      "name": "西湖",
+                      "poi_id": "poi-west-lake",
+                      "longitude": 120.141,
+                      "latitude": 30.25
+                    }
+                  ],
+                  "legs": []
+                }
+              ],
+              "map": {
+                "qr_code_url": "https://example.com/deterministic-map.png",
+                "schema_url": "amapuri://workInAmap/createWithToken?polymericId=deterministic",
+                "title": "杭州1日游地图",
+                "line_list": [
+                  {
+                    "title": "Day 1",
+                    "pointInfoList": [
+                      {
+                        "name": "西湖",
+                        "poiId": "poi-west-lake",
+                        "lon": 120.141,
+                        "lat": 30.25
+                      }
+                    ]
+                  }
+                ],
+                "route_preview": [
+                  {
+                    "day_number": 1,
+                    "title": "Day 1",
+                    "points": [
+                      {
+                        "name": "西湖",
+                        "poi_id": "poi-west-lake",
+                        "longitude": 120.141,
+                        "latitude": 30.25
+                      }
+                    ],
+                    "legs": []
+                  }
+                ],
+                "error": null,
+                "message": "deterministic map generated"
+              },
+              "raw_text": "## 旅行计划已生成\n高德地图链接已生成，可在详情页查看二维码。\n\n## 路线预览\n- **Day 1**\n  - 西湖\n\n## 每日行程草稿\n\n### Day 1\n1. 西湖\n\n确认这版行程后，我会生成高德地图二维码。",
+              "recommendations": [
+                {
+                  "type": "note",
+                  "title": "杭州1日游地图",
+                  "reason": "deterministic map generated"
+                }
+              ],
+              "followups": [
+                "你可以继续提出调整要求，我会在当前计划基础上修改。"
+              ],
+              "warnings": []
+            },
+            "diagnostics": {
+              "route": {
+                "worker": "travel_planner",
+                "intent": "travel",
+                "confidence": 0.95,
+                "reason": "scene_or_travel_payload",
+                "required_context": [],
+                "blocked_reason": null
+              },
+              "worker": "travel_planner",
+              "tools": [
+                {
+                  "name": "travel_create_personal_map",
+                  "args": {
+                    "title": "杭州1日游地图",
+                    "line_list": [
+                      {
+                        "title": "Day 1",
+                        "pointInfoList": [
+                          {
+                            "name": "西湖",
+                            "poiId": "poi-west-lake",
+                            "lon": 120.141,
+                            "lat": 30.25
+                          }
+                        ]
+                      }
+                    ],
+                    "scene_type": 1
+                  },
+                  "latency_ms": null
+                }
+              ],
+              "active_tools": [
+                "travel_create_personal_map"
+              ],
+              "active_skills": [
+                {
+                  "id": "travel_plan_new",
+                  "version": "1.0.0",
+                  "reasons": [
+                    "forced",
+                    "scene:travel_planner"
+                  ]
+                }
+              ],
+              "schema_valid": true,
+              "skill_diagnostics": {
+                "prompt_chars": 4285,
+                "denied_tools": {},
+                "warnings": [],
+                "tool_sources": {
+                  "travel_create_personal_map": [
+                    "travel_plan_new"
+                  ]
+                },
+                "max_tool_calls_per_turn": 8
+              }
+            },
+            "business_payload": {
+              "state": "map_generated",
+              "await_confirmation": false,
+              "trip_meta": {
+                "destination": "杭州",
+                "start_date": null,
+                "end_date": null,
+                "days": 1,
+                "travelers_count": null,
+                "preferences": [],
+                "budget": null,
+                "start_point": null,
+                "end_point": null
+              },
+              "candidates": [
+                {
+                  "candidate_id": "candidate_001",
+                  "name": "西湖",
+                  "category": "attraction",
+                  "source": "poi_verified",
+                  "score": 8,
+                  "reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "poi": {
+                    "poi_id": "poi-west-lake",
+                    "name": "西湖",
+                    "address": "杭州市西湖区龙井路1号",
+                    "longitude": 120.141,
+                    "latitude": 30.25
+                  },
+                  "id": "candidate_001",
+                  "source_name": "西湖",
+                  "verified_name": "西湖",
+                  "score_breakdown": {
+                    "poi_verified": 3,
+                    "fit": 3,
+                    "route_value": 2
+                  },
+                  "recommended_reason": "攻略提取「西湖」，已匹配高德 POI「西湖风景名胜区」",
+                  "not_recommended_reason": null,
+                  "recommended_time_slots": [
+                    "morning",
+                    "afternoon"
+                  ],
+                  "suggested_duration_minutes": 120,
+                  "best_visit_time": "白天游览",
+                  "crowd_level": "unknown",
+                  "cost_estimate_yuan": null,
+                  "nearby_candidates": [],
+                  "poi_verified": true,
+                  "amap_poi_id": "poi-west-lake",
+                  "amap_poi_keyword": "西湖",
+                  "longitude": 120.141,
+                  "latitude": 30.25,
+                  "business_hours": null,
+                  "opening_hours": null,
+                  "estimated_duration": null,
+                  "price_range": null,
+                  "average_cost_yuan": null,
+                  "context_snippet": null,
+                  "tags": [
+                    "attraction"
+                  ],
+                  "warnings": []
+                }
+              ],
+              "itinerary": {
+                "days": [
+                  {
+                    "day_number": 1,
+                    "theme": "Day 1",
+                    "items": [
+                      {
+                        "order": 1,
+                        "place_name": "西湖",
+                        "poi_id": "poi-west-lake",
+                        "longitude": 120.141,
+                        "latitude": 30.25
+                      }
+                    ]
+                  }
+                ]
+              },
+              "map": {
+                "qr_code_url": "https://example.com/deterministic-map.png",
+                "schema_url": "amapuri://workInAmap/createWithToken?polymericId=deterministic",
+                "title": "杭州1日游地图",
+                "line_list": [
+                  {
+                    "title": "Day 1",
+                    "pointInfoList": [
+                      {
+                        "name": "西湖",
+                        "poiId": "poi-west-lake",
+                        "lon": 120.141,
+                        "lat": 30.25
+                      }
+                    ]
+                  }
+                ],
+                "route_preview": [
+                  {
+                    "day_number": 1,
+                    "title": "Day 1",
+                    "points": [
+                      {
+                        "name": "西湖",
+                        "poi_id": "poi-west-lake",
+                        "longitude": 120.141,
+                        "latitude": 30.25
+                      }
+                    ],
+                    "legs": []
+                  }
+                ],
+                "error": null,
+                "message": "deterministic map generated"
+              },
+              "raw_text": "## 旅行计划已生成\n高德地图链接已生成，可在详情页查看二维码。\n\n## 路线预览\n- **Day 1**\n  - 西湖\n\n## 每日行程草稿\n\n### Day 1\n1. 西湖\n\n确认这版行程后，我会生成高德地图二维码。"
+            },
+            "worker": "travel_planner"
+          },
+          "evaluation": {
+            "passed": true,
+            "violations": []
+          }
+        }
+      ],
+      "evaluation": {
+        "passed": true,
+        "violations": []
+      }
+    }
+  ]
+}

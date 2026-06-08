@@ -434,21 +434,33 @@ class OpenAIPlanner:
             "usage": usage,
         }
 
+    @staticmethod
+    def _usage_field(obj: Any, key: str, default: Any = None) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
     def _extract_usage_from_response(self, response: Any, model: str | None = None) -> dict[str, Any]:
         """从 OpenAI-compatible 响应中提取 token usage 信息."""
         usage_obj = getattr(response, "usage", None)
         if not usage_obj:
             return {}
+        prompt_details = self._usage_field(usage_obj, "prompt_tokens_details") or {}
+        completion_details = self._usage_field(usage_obj, "completion_tokens_details") or {}
+        cached_tokens = (
+            self._usage_field(prompt_details, "cached_tokens", None)
+            or self._usage_field(prompt_details, "cache_read_input_tokens", None)
+            or self._usage_field(usage_obj, "cached_tokens", None)
+            or 0
+        )
+        input_tokens = self._usage_field(usage_obj, "prompt_tokens", 0) or 0
         return {
-            "input_tokens": getattr(usage_obj, "prompt_tokens", None) or 0,
-            "output_tokens": getattr(usage_obj, "completion_tokens", None) or 0,
-            "total_tokens": getattr(usage_obj, "total_tokens", None) or 0,
-            "cached_tokens": getattr(usage_obj, "prompt_tokens_details", None)
-                and getattr(getattr(usage_obj, "prompt_tokens_details", None), "cached_tokens", None)
-                or 0,
-            "reasoning_tokens": getattr(usage_obj, "completion_tokens_details", None)
-                and getattr(getattr(usage_obj, "completion_tokens_details", None), "reasoning_tokens", None)
-                or 0,
+            "input_tokens": input_tokens,
+            "output_tokens": self._usage_field(usage_obj, "completion_tokens", 0) or 0,
+            "total_tokens": self._usage_field(usage_obj, "total_tokens", 0) or 0,
+            "cached_tokens": cached_tokens,
+            "cache_miss_tokens": max(0, int(input_tokens or 0) - int(cached_tokens or 0)),
+            "reasoning_tokens": self._usage_field(completion_details, "reasoning_tokens", 0) or 0,
             "provider": self.config.name,
             "model_name": model or self.config.model_planner,
         }
@@ -545,9 +557,11 @@ class OpenAIPlanner:
 
     def _build_openai_tools(self, available_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
-        for item in available_tools:
-            if not isinstance(item, dict):
-                continue
+        sorted_tools = sorted(
+            (item for item in available_tools if isinstance(item, dict)),
+            key=lambda item: str(item.get("name") or ""),
+        )
+        for item in sorted_tools:
             name = item.get("name")
             if not isinstance(name, str) or not name:
                 continue
@@ -700,11 +714,9 @@ class AnthropicPlanner(OpenAIPlanner):
         tools: list[Any],
         image_parts: list[dict[str, Any]] | None = None,
     ) -> AIMessage:
-        system, user = self._messages_to_system_user(messages)
         available_tools = self._langchain_tools_to_available_schemas(tools)
-        decision = await self.plan_tool_calls(
-            system,
-            user,
+        decision = await self.plan_native_messages_with_tools(
+            messages,
             available_tools,
             image_parts=image_parts,
         )
@@ -720,9 +732,39 @@ class AnthropicPlanner(OpenAIPlanner):
             additional_kwargs=additional_kwargs,
         )
 
+    async def plan_native_messages_with_tools(
+        self,
+        messages: list[Any],
+        available_tools: list[dict[str, Any]],
+        image_parts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        system_content = self._build_anthropic_system_content(messages)
+        user = self._anthropic_user_text_from_messages(messages)
+        return await self._post_anthropic_messages(
+            system_content=system_content,
+            user=user,
+            available_tools=available_tools,
+            image_parts=image_parts,
+        )
+
     async def plan_tool_calls(
         self,
         system: str,
+        user: str,
+        available_tools: list[dict[str, Any]],
+        image_parts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return await self._post_anthropic_messages(
+            system_content=self._build_anthropic_system_content_from_text(system),
+            user=user,
+            available_tools=available_tools,
+            image_parts=image_parts,
+        )
+
+    async def _post_anthropic_messages(
+        self,
+        *,
+        system_content: str | list[dict[str, Any]],
         user: str,
         available_tools: list[dict[str, Any]],
         image_parts: list[dict[str, Any]] | None = None,
@@ -744,7 +786,7 @@ class AnthropicPlanner(OpenAIPlanner):
                 context.get("session_id"),
                 context.get("turn"),
                 context.get("step"),
-                system,
+                system_content,
             )
         if _should_log_request("user"):
             logger.info(
@@ -767,7 +809,7 @@ class AnthropicPlanner(OpenAIPlanner):
             json={
                 "model": model,
                 "max_tokens": 2048,
-                "system": system,
+                "system": system_content,
                 "messages": [
                     {
                         "role": "user",
@@ -824,25 +866,77 @@ class AnthropicPlanner(OpenAIPlanner):
         )
         return {"content": content, "tool_calls": normalized_calls, "usage": usage}
 
+    def _build_anthropic_system_content(self, messages: list[Any]) -> str | list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        for message in messages:
+            if not isinstance(message, SystemMessage):
+                continue
+            text = self._message_content_to_text(getattr(message, "content", None)).strip()
+            if not text:
+                continue
+            block: dict[str, Any] = {"type": "text", "text": text}
+            if not blocks and settings.LLM_PROMPT_CACHE_ENABLED:
+                block["cache_control"] = {"type": "ephemeral"}
+            blocks.append(block)
+        if not blocks:
+            return ""
+        if settings.LLM_PROMPT_CACHE_ENABLED:
+            return blocks
+        return "\n\n".join(str(block.get("text") or "") for block in blocks).strip()
+
+    def _build_anthropic_system_content_from_text(self, system: str) -> str | list[dict[str, Any]]:
+        text = str(system or "").strip()
+        if not text:
+            return ""
+        if not settings.LLM_PROMPT_CACHE_ENABLED:
+            return text
+        return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+
+    def _anthropic_user_text_from_messages(self, messages: list[Any]) -> str:
+        parts: list[str] = []
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                continue
+            content = self._message_content_to_text(getattr(message, "content", None))
+            if not content:
+                continue
+            if isinstance(message, HumanMessage):
+                parts.append(content)
+            elif isinstance(message, AIMessage):
+                parts.append(f"assistant: {content}")
+            else:
+                message_type = getattr(message, "type", None) or getattr(message, "role", None) or "context"
+                parts.append(f"{message_type}: {content}")
+        return "\n".join(parts).strip()
+
     def _extract_anthropic_usage(self, data: dict[str, Any], model: str | None = None) -> dict[str, Any]:
         """从 Anthropic 响应中提取 token usage 信息."""
         usage_obj = data.get("usage") if isinstance(data, dict) else None
         if not isinstance(usage_obj, dict):
             return {}
+        cache_read = usage_obj.get("cache_read_input_tokens", 0) or 0
+        cache_creation = usage_obj.get("cache_creation_input_tokens", 0) or 0
+        input_tokens = usage_obj.get("input_tokens", 0) or 0
+        output_tokens = usage_obj.get("output_tokens", 0) or 0
         return {
-            "input_tokens": usage_obj.get("input_tokens", 0) or 0,
-            "output_tokens": usage_obj.get("output_tokens", 0) or 0,
-            "cache_read_input_tokens": usage_obj.get("cache_read_input_tokens", 0) or 0,
-            "cache_creation_input_tokens": usage_obj.get("cache_creation_input_tokens", 0) or 0,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_creation,
+            "cached_tokens": cache_read,
+            "cache_miss_tokens": max(0, int(input_tokens or 0) - int(cache_read or 0)),
+            "total_tokens": int(input_tokens or 0) + int(output_tokens or 0),
             "provider": self.config.name,
             "model_name": model or self.config.model_planner,
         }
 
     def _build_anthropic_tools(self, available_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
-        for item in available_tools:
-            if not isinstance(item, dict):
-                continue
+        sorted_tools = sorted(
+            (item for item in available_tools if isinstance(item, dict)),
+            key=lambda item: str(item.get("name") or ""),
+        )
+        for item in sorted_tools:
             name = item.get("name")
             if not isinstance(name, str) or not name:
                 continue

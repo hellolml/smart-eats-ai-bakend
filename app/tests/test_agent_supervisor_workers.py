@@ -50,6 +50,19 @@ async def test_route_worker_forces_route_skill():
     assert payload["scene"] == "route"
     assert overrides["intent"] == "route"
     assert overrides["forced_skill_ids"] == ["route_planner"]
+    assert overrides["allowed_skill_ids"] == ["route_planner"]
+
+
+@pytest.mark.asyncio
+async def test_general_chat_worker_disables_business_skills():
+    payload = await _prepare_worker_payload(
+        _spec("general_chat"),
+        {"session_id": "s1", "message": "先别管旅行，陪我吐槽一句。"},
+    )
+
+    overrides = payload["context_overrides"]
+    assert payload["scene"] == "chat"
+    assert overrides["allowed_skill_ids"] == ["__none__"]
 
 
 @pytest.mark.asyncio

@@ -137,6 +137,77 @@ def test_evaluate_result_checks_recommendation_titles():
     assert "missing_recommendation_titles:长沙米粉" in failed["violations"]
 
 
+def test_evaluate_result_checks_travel_business_payload_quality():
+    result = {
+        "trace_id": "t1",
+        "worker": "travel_planner",
+        "agent_result": {
+            "status": "completed",
+            "worker": "travel_planner",
+            "trace_id": "t1",
+            "final": {
+                "state": "itinerary_generated",
+                "trip_meta": {"destination": None, "days": None},
+                "candidates": [
+                    {"name": "这样我可以提取地点后用高德验证POI，再为您排出一份靠谱的每日候选行程"}
+                ],
+                "itinerary": {"days": [{"day_number": 1, "items": [{"place_name": "宽窄巷子"}]}]},
+            },
+        },
+    }
+
+    evaluation = evaluate_result(
+        {
+            "expect": {
+                "trip_meta": {"destination": "成都", "days": 3},
+                "min_itinerary_days": 3,
+                "no_prompt_artifact_pois": True,
+            }
+        },
+        result,
+    )
+
+    assert "trip_meta:destination:None!=expected:成都" in evaluation["violations"]
+    assert "trip_meta:days:None!=expected:3" in evaluation["violations"]
+    assert "itinerary_days:1<3" in evaluation["violations"]
+    assert any(item.startswith("prompt_artifact_pois:这样我可以") for item in evaluation["violations"])
+
+
+def test_evaluate_result_checks_travel_place_inclusion_and_stale_candidates():
+    result = {
+        "trace_id": "trace",
+        "worker": "travel_planner",
+        "agent_result": {
+            "status": "completed",
+            "worker": "travel_planner",
+            "trace_id": "trace",
+            "diagnostics": {"route": {"worker": "travel_planner"}},
+            "final": {
+                "state": "candidates_ready",
+                "trip_meta": {"destination": "杭州", "days": 1},
+                "candidates": [{"name": "西湖"}, {"name": "苏州博物馆"}],
+                "itinerary": {"days": []},
+            },
+        },
+        "answer": {},
+        "status": "completed",
+    }
+
+    evaluation = evaluate_result(
+        {
+            "expect": {
+                "candidate_expected_any": ["西湖", "灵隐寺"],
+                "candidate_unexpected_any": ["苏州博物馆", "拙政园"],
+            }
+        },
+        result,
+    )
+
+    assert evaluation["passed"] is False
+    assert "candidate_missing_any:灵隐寺" in evaluation["violations"]
+    assert "candidate_unexpected_any:苏州博物馆" in evaluation["violations"]
+
+
 def test_replay_eval_extracts_and_counts_provider_issue():
     payload = {
         "answer": {

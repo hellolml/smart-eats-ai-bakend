@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -115,11 +116,166 @@ def _is_travel_intent(message: str) -> bool:
 
 
 def _is_navigation_intent(message: str) -> bool:
+    if _negates_navigation_intent(message):
+        return False
     if any(token in message for token in ("导航", "怎么走", "怎么去", "带我去", "前往")):
         return True
     if "路线" not in message:
         return False
     return any(token in message for token in ("从", "到", "去", "开车", "步行", "骑行", "地铁"))
+
+
+def _negates_navigation_intent(message: str) -> bool:
+    return any(
+        token in str(message or "")
+        for token in (
+            "不要规划路线",
+            "先不要规划路线",
+            "不用规划路线",
+            "先不用规划路线",
+            "不需要路线",
+            "暂时不规划路线",
+            "先不规划路线",
+        )
+    )
+
+
+def _is_structured_travel_request(message: str) -> bool:
+    return any(token in message for token in ("目的地", "出行时间", "出行天数", "旅行天数", "游玩天数", "候选行程", "每日行程"))
+
+
+def _is_travel_scene_food_followup(message: str) -> bool:
+    if _is_travel_revision_intent(message) or _is_primary_travel_planning_request(message):
+        return False
+    if not any(token in message for token in ("附近", "周边", "餐厅", "饭店", "吃什么", "好吃的", "找几家")):
+        return False
+    if "附近" in message and not any(token in message for token in ("附近找", "附近有什么好吃", "附近餐厅", "附近饭店", "附近吃")):
+        return False
+    return any(token in message for token in ("吃", "餐厅", "饭店", "火锅", "小吃", "烧烤", "湘菜", "粤菜"))
+
+
+def _is_primary_travel_planning_request(message: str) -> bool:
+    text = str(message or "")
+    if not _is_travel_intent(text):
+        return False
+    return any(token in text for token in ("旅行计划", "旅游计划", "旅行攻略", "旅游攻略", "行程计划", "几天", "天旅行", "天旅游"))
+
+
+def _is_travel_revision_intent(message: str) -> bool:
+    text = str(message or "")
+    return any(token in text for token in ("改成", "不去", "少走", "膝盖", "不要太早", "行程", "每日安排", "每日行程"))
+
+
+def _is_general_chat_override(message: str) -> bool:
+    text = str(message or "")
+    return any(
+        token in text
+        for token in (
+            "先别管吃饭",
+            "先不聊吃饭",
+            "先别管旅行",
+            "先不聊旅行",
+            "先别管行程",
+            "先不聊行程",
+            "陪我随便聊",
+            "随便聊一句",
+            "陪我聊一句",
+            "陪我吐槽",
+        )
+    )
+
+
+def _message_selects_recent_restaurant(message: str, context: dict[str, Any]) -> bool:
+    hints = _selection_hints(message)
+    text = _normalize_selection_text(message)
+    restaurants = context.get("last_restaurants")
+    if not text or not isinstance(restaurants, list):
+        return False
+    if restaurants and _selection_index(message) is not None:
+        return True
+    for item in restaurants:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("title") or "").strip()
+        for alias in _restaurant_aliases(name):
+            if alias and alias in text:
+                return True
+            if hints and any(hint in alias for hint in hints):
+                return True
+    return False
+
+
+def _message_is_restaurant_selection_followup(message: str, context: dict[str, Any]) -> bool:
+    restaurants = context.get("last_restaurants")
+    selected = context.get("selected_restaurant")
+    if not (isinstance(restaurants, list) and restaurants) and not isinstance(selected, dict):
+        return False
+    text = str(message or "")
+    normalized = _normalize_selection_text(text)
+    if not normalized:
+        return False
+    if _selection_index(text) is not None or _selection_hints(text):
+        return True
+    return any(
+        token in text
+        for token in (
+            "上面推荐",
+            "刚才推荐",
+            "就这家",
+            "就那家",
+            "选这家",
+            "选那家",
+            "这家餐厅",
+            "那家餐厅",
+            "换到",
+            "回到上面",
+            "推荐的",
+        )
+    )
+
+
+def _selection_index(value: str) -> int | None:
+    text = str(value or "")
+    digit = re.search(r"第\s*(\d+)\s*家|(\d+)\s*号|第\s*(\d+)\s*个", text)
+    if digit:
+        for group in digit.groups():
+            if group:
+                return max(0, int(group) - 1)
+    chinese = re.search(r"第?\s*([一二两三四五六七八九十])\s*(?:家|个|号)", text)
+    if not chinese and any(token in text for token in ("第一家", "第一个", "第一")):
+        return 0
+    if chinese:
+        index = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}.get(chinese.group(1))
+        return max(0, index - 1) if index else None
+    return None
+
+
+def _restaurant_aliases(name: str) -> list[str]:
+    aliases: list[str] = []
+    for value in (name, name.split("(", 1)[0], name.split("（", 1)[0]):
+        cleaned = _normalize_selection_text(value)
+        if len(cleaned) >= 2 and cleaned not in aliases:
+            aliases.append(cleaned)
+    return aliases
+
+
+def _normalize_selection_text(value: str) -> str:
+    text = str(value or "").strip().lower()
+    for token in (" ", "\t", "\n", "，", "。", "！", "？", "!", "?", ",", ".", "“", "”", "\"", "'", "就", "选", "去"):
+        text = text.replace(token, "")
+    while text.endswith(("吧", "把", "呗", "呢", "啦", "了")):
+        text = text[:-1]
+    return text
+
+
+def _selection_hints(value: str) -> list[str]:
+    hints: list[str] = []
+    for pattern in (r"名字带[“\"']?([^“”\"'，。！？\s]{1,8})", r"[“\"']([^“”\"']{1,8})[”\"']"):
+        for match in re.findall(pattern, str(value or "")):
+            cleaned = _normalize_selection_text(match)
+            if len(cleaned) >= 2 and cleaned not in hints:
+                hints.append(cleaned)
+    return hints
 
 
 def route_agent_request(state: dict[str, Any]) -> AgentRouteDecision:
@@ -137,6 +293,38 @@ def route_agent_request(state: dict[str, Any]) -> AgentRouteDecision:
             intent="route",
             confidence=0.9,
             reason="route_intent",
+        )
+
+    if _is_general_chat_override(message):
+        return AgentRouteDecision(
+            worker="general_chat",
+            intent="chat",
+            confidence=0.9,
+            reason="explicit_general_chat",
+        )
+
+    if scene in TRAVEL_SCENES and (
+        state.get("travel_action")
+        or state.get("travel_payload")
+        or _has_attachments(state, context)
+        or _is_structured_travel_request(message)
+        or _is_primary_travel_planning_request(message)
+        or _is_travel_revision_intent(message)
+        or (_is_travel_intent(message) and not _is_travel_scene_food_followup(message))
+    ) and not (_message_selects_recent_restaurant(message, context) or _message_is_restaurant_selection_followup(message, context)):
+        return AgentRouteDecision(
+            worker="travel_planner",
+            intent="travel",
+            confidence=0.95,
+            reason="travel_scene_context",
+        )
+
+    if _message_selects_recent_restaurant(message, context) or _message_is_restaurant_selection_followup(message, context):
+        return AgentRouteDecision(
+            worker="food_advisor",
+            intent="eat_out",
+            confidence=0.95,
+            reason="recent_restaurant_selection",
         )
 
     if scene in HOME_SCENES or food_intent == "cook_home":

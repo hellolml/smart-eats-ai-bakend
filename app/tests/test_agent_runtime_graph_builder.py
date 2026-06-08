@@ -80,6 +80,35 @@ def test_build_official_runtime_context_includes_common_tool_payload():
     assert payload["servers_path"] == "mcp.json"
 
 
+def test_runtime_context_prompt_uses_model_safe_subset():
+    prompt = builder_module.build_runtime_context_prompt(
+        {
+            "ui_scene": "chat",
+            "intent": "eat_out",
+            "allowed_tools": ["search"],
+            "attachments": [{"content_type": "image/png", "object_key": "secret/path.png"}],
+            "context_budget": {"total_tokens": 999},
+            "skill_diagnostics": {"active": True},
+            "observations": [{"large": "tool output"}],
+            "checkpoint": {"checkpoint_ref": "abc"},
+            "system_prompt": "stable",
+            "model_runtime_context": "old",
+            "system_directive": "private",
+        }
+    )
+
+    assert "context_budget" not in prompt
+    assert "skill_diagnostics" not in prompt
+    assert "observations" not in prompt
+    assert "checkpoint" not in prompt
+    assert "system_prompt" not in prompt
+    assert "model_runtime_context" not in prompt
+    assert "system_directive" not in prompt
+    assert "allowed_tools" in prompt
+    assert "image/png" in prompt
+    assert "secret/path.png" not in prompt
+
+
 def test_runtime_config_contains_only_core_tools():
     config = get_agent_runtime_config()
 

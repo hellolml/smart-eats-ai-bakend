@@ -77,7 +77,8 @@ def calculate_model_cost(
     reasoning_tokens: int = 0,
 ) -> dict[str, Any]:
     pricing, known = model_pricing(provider, model)
-    input_cost = input_tokens * _safe_number(pricing.get("input_per_1m")) / 1_000_000
+    billable_input_tokens = max(0, int(input_tokens or 0) - int(cached_tokens or 0))
+    input_cost = billable_input_tokens * _safe_number(pricing.get("input_per_1m")) / 1_000_000
     output_cost = output_tokens * _safe_number(pricing.get("output_per_1m")) / 1_000_000
     cached_cost = cached_tokens * _safe_number(pricing.get("cached_input_per_1m")) / 1_000_000
     reasoning_cost = reasoning_tokens * _safe_number(pricing.get("reasoning_per_1m")) / 1_000_000
@@ -124,11 +125,13 @@ def normalize_usage(raw: dict[str, Any] | None) -> dict[str, int]:
         data.get("reasoning_tokens")
         or completion_details.get("reasoning_tokens")
     )
-    total_tokens = _safe_int(data.get("total_tokens"), input_tokens + output_tokens + cached_tokens + reasoning_tokens)
+    cache_miss_tokens = _safe_int(data.get("cache_miss_tokens"), max(0, input_tokens - cached_tokens))
+    total_tokens = _safe_int(data.get("total_tokens"), input_tokens + output_tokens)
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cached_tokens": cached_tokens,
+        "cache_miss_tokens": cache_miss_tokens,
         "reasoning_tokens": reasoning_tokens,
         "total_tokens": total_tokens,
     }

@@ -16,6 +16,9 @@ def select_pytest_command() -> list[str]:
     override = os.getenv("PYTEST_BIN")
     if override:
         return shlex.split(override)
+    script_python = os.getenv("AGENT_TEST_PYTHON")
+    if script_python:
+        return [script_python, "-m", "pytest"]
     pytest_bin = shutil.which("pytest")
     if pytest_bin:
         return [pytest_bin]

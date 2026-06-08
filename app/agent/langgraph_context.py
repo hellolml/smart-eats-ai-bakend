@@ -219,8 +219,9 @@ def build_model_messages(
     messages: list[Any],
     summary: str | None = None,
     memories: list[dict[str, Any]] | None = None,
+    runtime_context_prompt: str | None = None,
 ) -> list[Any]:
-    parts = [system_prompt.strip() or "You are a helpful assistant."]
+    stable_system = system_prompt.strip() or "You are a helpful assistant."
     memory_lines = []
     for item in memories or []:
         content = str(item.get("content") or "").strip()
@@ -230,10 +231,12 @@ def build_model_messages(
         kind = item.get("kind")
         confidence = item.get("confidence")
         memory_lines.append(f"- id={memory_id} kind={kind} confidence={confidence}: {content}")
-    if memory_lines:
-        parts.append("<long_term_memories>\n" + "\n".join(memory_lines) + "\n</long_term_memories>")
 
-    model_messages: list[Any] = [SystemMessage(content="\n\n".join(parts))]
+    model_messages: list[Any] = [SystemMessage(content=stable_system)]
+    if runtime_context_prompt and runtime_context_prompt.strip():
+        model_messages.append(SystemMessage(content=runtime_context_prompt.strip()))
+    if memory_lines:
+        model_messages.append(SystemMessage(content="<long_term_memories>\n" + "\n".join(memory_lines) + "\n</long_term_memories>"))
     if summary and summary.strip():
         model_messages.append(
             SystemMessage(

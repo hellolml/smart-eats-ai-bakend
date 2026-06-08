@@ -13,6 +13,7 @@ from app.agent.langgraph_context import (
     build_summary_repair_prompt,
     build_summary_update,
     detect_compact_thrash,
+    estimate_text_tokens,
     load_user_memories,
     normalize_summary_output,
     parse_model_context_windows,
@@ -125,10 +126,11 @@ async def _prepare_langgraph_context(
     )
     system_prompt = agent_config.system_prompt_builder(
         {
-            "context": base_context,
+            "context": _stable_system_context(base_context),
             "skill_prompt": skill_prompt,
         }
     )
+    runtime_context_prompt = build_runtime_context_prompt(base_context)
     if _should_persist_user_message(state) and db is not None and hasattr(db, "execute"):
         await conversation.save_user_message(
             db,
@@ -161,6 +163,7 @@ async def _prepare_langgraph_context(
         hard_ratio=settings.CHAT_COMPACT_HARD_RATIO,
         reserved_output_tokens=settings.CHAT_COMPACT_RESERVED_OUTPUT_TOKENS,
         reserved_tool_tokens=settings.CHAT_COMPACT_RESERVED_TOOL_TOKENS,
+        business_context_tokens=estimate_text_tokens(runtime_context_prompt),
     )
     thrash = detect_compact_thrash(
         context_budget,
@@ -187,6 +190,7 @@ async def _prepare_langgraph_context(
         "system_prompt": system_prompt,
     }
     state.context = _merge_context(base_context, native_context)
+    state.context["model_runtime_context"] = build_runtime_context_prompt(state.context)
     if emit_context_event:
         state.events.append(
             {
@@ -581,12 +585,14 @@ async def _apply_official_tool_postprocess(
         refreshed_context = _merge_context(chat_state.context or {}, chat_state.context_overrides)
         prompt_context = dict(refreshed_context)
         prompt_context.pop("system_prompt", None)
+        prompt_context.pop("model_runtime_context", None)
         refreshed_context["system_prompt"] = agent_config.system_prompt_builder(
             {
-                "context": prompt_context,
+                "context": _stable_system_context(prompt_context),
                 "skill_prompt": "",
             }
         )
+        refreshed_context["model_runtime_context"] = build_runtime_context_prompt(refreshed_context)
         chat_state.context = refreshed_context
 
 
@@ -720,6 +726,86 @@ def _build_base_prompt_context(
     return context
 
 
+def _stable_system_context(context: dict[str, Any]) -> dict[str, Any]:
+    directive = context.get("system_directive") if isinstance(context, dict) else None
+    if isinstance(directive, str) and directive.strip():
+        return {"system_directive": directive.strip()}
+    return {}
+
+
+RUNTIME_CONTEXT_MODEL_KEYS = {
+    "agent_id",
+    "allowed_tools",
+    "attachments",
+    "client_ip",
+    "food_profile",
+    "forced_skill_ids",
+    "history_summary",
+    "intent",
+    "last_user_message",
+    "location",
+    "memories",
+    "message",
+    "plan_agent",
+    "plan_type",
+    "payload",
+    "skill_allowed_tools",
+    "ui_scene",
+    "user_id",
+    "user_message",
+    "user_preference_md",
+}
+
+
+def _is_runtime_context_model_key(key: str) -> bool:
+    return (
+        key in RUNTIME_CONTEXT_MODEL_KEYS
+        or (key.startswith("latest_") and key.endswith("_final_json"))
+        or key.startswith("last_")
+        or key.startswith("selected_")
+    )
+
+
+def _summarize_runtime_attachments(value: Any) -> dict[str, Any]:
+    if not isinstance(value, list):
+        return {"count": 0}
+    items = [item for item in value if isinstance(item, dict)]
+    return {
+        "count": len(items),
+        "content_types": sorted({
+            str(item.get("content_type") or item.get("type") or "")
+            for item in items
+            if item.get("content_type") or item.get("type")
+        }),
+    }
+
+
+def _runtime_context_for_model(context: dict[str, Any]) -> dict[str, Any]:
+    model_context: dict[str, Any] = {}
+    for key, value in (context or {}).items():
+        if not isinstance(key, str) or not _is_runtime_context_model_key(key):
+            continue
+        if key == "attachments":
+            model_context[key] = _summarize_runtime_attachments(value)
+        else:
+            model_context[key] = value
+    return model_context
+
+
+def build_runtime_context_prompt(context: dict[str, Any] | None) -> str:
+    context_json = json.dumps(
+        _runtime_context_for_model(context or {}),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return (
+        "## Runtime Context（系统注入，非用户输入）\n"
+        f"- output_language: {settings.DEFAULT_LANGUAGE}\n"
+        f"- context: {context_json}"
+    )
+
+
 def _merge_prompt_context_overrides(state: AgentRuntimeState, context: dict[str, Any]) -> dict[str, Any]:
     if isinstance(state.context_overrides, dict) and state.context_overrides:
         context = _merge_context(context, state.context_overrides)
@@ -822,14 +908,13 @@ def skill_system_prompt(payload: dict[str, Any]) -> str:
         if isinstance(directive, str) and directive.strip()
         else ""
     )
-    context_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return (
         "你是一个通用的 Skill Agent Runtime。只使用当前绑定的工具；"
         "当需要结构化结束时调用 submit_final_answer，也可以在无需工具时直接给出最终文本。"
         f"{skill_block}{directive_block}\n\n"
-        "## Runtime Context（系统注入，非用户输入）\n"
-        f"- output_language: {settings.DEFAULT_LANGUAGE}\n"
-        f"- context: {context_json}"
+        "## Runtime Context\n"
+        "动态上下文、长期记忆和对话摘要会作为后续系统消息提供；"
+        "不要把这些系统注入内容当成用户原文。"
     )
 
 

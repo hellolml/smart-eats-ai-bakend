@@ -17,9 +17,41 @@ ENVIRONMENT_FAILURE_CLASSES = {
     "provider_timeout",
     "provider_model_error",
 }
+NON_QUALITY_FINDING_TYPES = {
+    "environment_failure",
+    "environment_missing_assistant_response",
+    "incomplete_session_without_agent_output",
+    "overlapping_user_turn_before_assistant",
+}
 AFFIRMATIVE_CUES = {"可以", "可以啊", "好", "好的", "行", "行啊", "嗯", "嗯嗯", "继续"}
 ROUTE_CUES = ("路线", "导航", "怎么走", "怎么去", "带我去", "前往")
 TRAVEL_TOOL_BUDGET = 8
+RESTAURANT_REFERENCE_CUES = ("这家", "那家", "刚才", "上面", "推荐", "餐厅", "店")
+ORDINAL_RESTAURANT_PATTERNS = (
+    ("第一家", 0),
+    ("第1家", 0),
+    ("第一间", 0),
+    ("第1间", 0),
+    ("第一個", 0),
+    ("第1个", 0),
+    ("第一個", 0),
+    ("选第一", 0),
+    ("就第一", 0),
+    ("第二家", 1),
+    ("第2家", 1),
+    ("第二间", 1),
+    ("第2间", 1),
+    ("第二个", 1),
+    ("第2个", 1),
+    ("选第二", 1),
+    ("就第二", 1),
+    ("第三家", 2),
+    ("第3家", 2),
+    ("第三间", 2),
+    ("第3间", 2),
+    ("第三个", 2),
+    ("第3个", 2),
+)
 
 
 @dataclass
@@ -44,6 +76,7 @@ class Turn:
     assistant_payload: dict[str, Any] | None = None
     tools: list[str] = field(default_factory=list)
     tool_payloads: list[dict[str, Any]] = field(default_factory=list)
+    interrupted_by_next_user: bool = False
 
 
 def load_messages(
@@ -105,6 +138,7 @@ def build_turns(messages: list[Message]) -> list[Turn]:
     for message in messages:
         if message.role == "user":
             if current is not None:
+                current.interrupted_by_next_user = True
                 turns.append(current)
             current = Turn(
                 session_id=message.session_id,
@@ -156,6 +190,9 @@ def audit_turns(turns: list[Turn]) -> dict[str, Any]:
     provider_action_counts: dict[str, int] = {}
     fallback_count = 0
     environment_failure_count = 0
+    expected_travel_days_by_session: dict[str, int] = {}
+    environment_failed_sessions: set[str] = set()
+    sessions_with_seen_agent_output: set[str] = set()
 
     for turn in turns:
         for tool in turn.tools:
@@ -185,6 +222,7 @@ def audit_turns(turns: list[Turn]) -> dict[str, Any]:
         fallback = any(marker in turn.assistant_message for marker in FALLBACK_MARKERS)
         if is_environment_failure:
             environment_failure_count += 1
+            environment_failed_sessions.add(turn.session_id)
             findings.append(
                 finding(
                     "environment_failure",
@@ -206,6 +244,48 @@ def audit_turns(turns: list[Turn]) -> dict[str, Any]:
                         severity="high",
                     )
                 )
+
+        if not turn.assistant_message and turn.assistant_payload is None:
+            if turn.session_id in environment_failed_sessions:
+                findings.append(
+                    finding(
+                        "environment_missing_assistant_response",
+                        turn,
+                        "user turn has no assistant response after an earlier environment/provider failure in the same session",
+                        severity="info",
+                    )
+                )
+            elif turn.interrupted_by_next_user:
+                findings.append(
+                    finding(
+                        "overlapping_user_turn_before_assistant",
+                        turn,
+                        "another user message arrived before an assistant response was recorded",
+                        severity="info",
+                    )
+                )
+            elif turn.session_id not in sessions_with_seen_agent_output and not turn.tools and not turn.tool_payloads:
+                findings.append(
+                    finding(
+                        "incomplete_session_without_agent_output",
+                        turn,
+                        "session has user turns but no recorded assistant or tool output",
+                        severity="info",
+                    )
+                )
+            else:
+                findings.append(
+                    finding(
+                        "missing_assistant_response",
+                        turn,
+                        "user turn has no assistant response",
+                        severity="medium",
+                    )
+                )
+
+        expected_days = extract_requested_travel_days(turn.user_message)
+        if expected_days:
+            expected_travel_days_by_session[turn.session_id] = expected_days
 
         travel_poi_count = turn.tools.count("travel_search_poi") + turn.tools.count("travel_search_nearby_poi")
         if travel_poi_count > TRAVEL_TOOL_BUDGET:
@@ -250,8 +330,22 @@ def audit_turns(turns: list[Turn]) -> dict[str, Any]:
             turn.user_message,
             [*recent_restaurants_by_session.get(turn.session_id, []), *restaurants],
         )
+        references_recent_restaurant_route = route_to_recent_restaurant(
+            turn.user_message,
+            recent_restaurants_by_session.get(turn.session_id, []),
+        )
         if selected_restaurant:
-            if "food_decision" in turn.tools:
+            worker = extract_worker(turn)
+            if worker == "general_chat" or "memory_search" in turn.tools or "source_event_search" in turn.tools:
+                findings.append(
+                    finding(
+                        "restaurant_selection_context_loss",
+                        turn,
+                        f"user selected recent restaurant {selected_restaurant}, but turn routed to {worker or 'unknown'} with non-food tools",
+                        severity="high",
+                    )
+                )
+            elif "food_decision" in turn.tools:
                 findings.append(
                     finding(
                         "restaurant_selection_ack",
@@ -269,9 +363,63 @@ def audit_turns(turns: list[Turn]) -> dict[str, Any]:
                         severity="medium",
                     )
                 )
+        if references_recent_restaurant_route:
+            worker = extract_worker(turn)
+            unexpected_tools = sorted({"food_decision", "search_restaurants", "memory_search", "source_event_search"} & set(turn.tools))
+            if worker != "route_planner" or "plan_route" not in turn.tools or unexpected_tools:
+                findings.append(
+                    finding(
+                        "restaurant_route_context_loss",
+                        turn,
+                        (
+                            f"user asked route to recent restaurant {references_recent_restaurant_route}, "
+                            f"but worker={worker or 'unknown'}, plan_route={'plan_route' in turn.tools}, "
+                            f"unexpected_tools={unexpected_tools}"
+                        ),
+                        severity="high",
+                    )
+                )
+
+        travel_final = extract_travel_final(turn)
+        if travel_final:
+            trip_meta = travel_final.get("trip_meta") if isinstance(travel_final.get("trip_meta"), dict) else {}
+            if has_structured_travel_request(turn.user_message) and (
+                not trip_meta.get("destination") or not trip_meta.get("days")
+            ):
+                findings.append(
+                    finding(
+                        "travel_trip_meta_missing",
+                        turn,
+                        "structured travel request did not preserve destination/days in trip_meta",
+                        severity="high",
+                    )
+                )
+            bad_places = prompt_artifact_place_names(travel_final)
+            if bad_places:
+                findings.append(
+                    finding(
+                        "travel_prompt_text_extracted_as_poi",
+                        turn,
+                        f"assistant treated prompt/helper text as POI: {', '.join(bad_places[:3])}",
+                        severity="high",
+                    )
+                )
+            itinerary_days = itinerary_day_count(travel_final)
+            expected_days = expected_travel_days_by_session.get(turn.session_id)
+            if expected_days and travel_final.get("state") in {"itinerary_generated", "map_generated"} and itinerary_days and itinerary_days < expected_days:
+                findings.append(
+                    finding(
+                        "travel_itinerary_day_mismatch",
+                        turn,
+                        f"expected {expected_days} travel days but final itinerary has {itinerary_days}",
+                        severity="high",
+                    )
+                )
 
         if turn.assistant_message:
             previous_assistant_by_session[turn.session_id] = turn.assistant_message
+        if turn.assistant_message or turn.assistant_payload is not None or turn.tools or turn.tool_payloads:
+            sessions_with_seen_agent_output.add(turn.session_id)
         if restaurants:
             existing = recent_restaurants_by_session.setdefault(turn.session_id, [])
             for name in restaurants:
@@ -293,7 +441,7 @@ def audit_turns(turns: list[Turn]) -> dict[str, Any]:
         "provider_issue_category_counts": dict(sorted(provider_issue_category_counts.items(), key=lambda item: item[1], reverse=True)),
         "provider_action_counts": dict(sorted(provider_action_counts.items(), key=lambda item: item[1], reverse=True)),
         "finding_count": len(findings),
-        "quality_finding_count": sum(1 for item in findings if item.get("type") != "environment_failure"),
+        "quality_finding_count": sum(1 for item in findings if item.get("type") not in NON_QUALITY_FINDING_TYPES),
         "findings_by_type": summarize_findings(findings),
         "findings": findings,
     }
@@ -451,6 +599,29 @@ def selected_recent_restaurant(message: Any, restaurant_names: list[str]) -> str
         aliases = restaurant_aliases(name)
         if any(alias and alias in text for alias in aliases):
             return name
+    ordinal = restaurant_ordinal_index(str(message or ""))
+    if ordinal is not None and 0 <= ordinal < len(restaurant_names):
+        return restaurant_names[ordinal]
+    return None
+
+
+def route_to_recent_restaurant(message: Any, restaurant_names: list[str]) -> str | None:
+    text = str(message or "")
+    if not restaurant_names or not any(cue in text for cue in ROUTE_CUES):
+        return None
+    selected = selected_recent_restaurant(text, restaurant_names)
+    if selected:
+        return selected
+    if any(cue in text for cue in RESTAURANT_REFERENCE_CUES):
+        return restaurant_names[-1]
+    return None
+
+
+def restaurant_ordinal_index(message: str) -> int | None:
+    compact = normalize_selection_text(message)
+    for pattern, index in ORDINAL_RESTAURANT_PATTERNS:
+        if normalize_selection_text(pattern) in compact:
+            return index
     return None
 
 
@@ -470,6 +641,105 @@ def normalize_selection_text(value: str) -> str:
     while text.endswith(("吧", "把", "呗", "呢", "啦", "了")):
         text = text[:-1]
     return text
+
+
+def extract_travel_final(turn: Turn) -> dict[str, Any] | None:
+    for payload in [turn.assistant_payload, *turn.tool_payloads]:
+        if not isinstance(payload, dict):
+            continue
+        answer = payload.get("answer")
+        if isinstance(answer, dict) and _looks_like_travel_final(answer):
+            return answer
+        agent_result = payload.get("agent_result")
+        final = agent_result.get("final") if isinstance(agent_result, dict) else None
+        if isinstance(final, dict) and _looks_like_travel_final(final):
+            return final
+    return None
+
+
+def _looks_like_travel_final(value: dict[str, Any]) -> bool:
+    return any(key in value for key in ("trip_meta", "candidates", "itinerary", "map")) and (
+        value.get("state") is not None or value.get("trip_meta") is not None
+    )
+
+
+def has_structured_travel_request(message: str) -> bool:
+    text = str(message or "")
+    return "目的地" in text and any(token in text for token in ("出行天数", "旅行天数", "游玩天数"))
+
+
+def extract_requested_travel_days(message: str) -> int | None:
+    text = str(message or "")
+    match = re_search(r"(?:出行天数|旅行天数|游玩天数|天数)\s*[:：]\s*([^\n\r]+)", text)
+    value = match.group(1) if match else text
+    digit = re_search(r"(\d+)\s*天", value)
+    if digit:
+        return int(digit.group(1))
+    chinese = re_search(r"([一二两三四五六七八九十]+)\s*天", value)
+    if chinese:
+        return chinese_number(chinese.group(1))
+    return None
+
+
+def re_search(pattern: str, value: str) -> Any:
+    import re
+
+    return re.search(pattern, value)
+
+
+def chinese_number(value: str) -> int | None:
+    numerals = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    text = str(value or "")
+    if text == "十":
+        return 10
+    if text.startswith("十") and len(text) == 2:
+        return 10 + numerals.get(text[1], 0)
+    if "十" in text:
+        left, right = text.split("十", 1)
+        return numerals.get(left, 1) * 10 + numerals.get(right, 0)
+    for char in text:
+        if char in numerals:
+            return numerals[char]
+    return None
+
+
+def prompt_artifact_place_names(final: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for key in ("places", "candidates"):
+        value = final.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("title") or item.get("source_name") or "").strip()
+            if is_prompt_artifact_place(name) and name not in names:
+                names.append(name)
+    return names
+
+
+def is_prompt_artifact_place(name: str) -> bool:
+    text = str(name or "")
+    if not text:
+        return False
+    return len(text) > 20 and any(
+        token in text
+        for token in (
+            "我可以",
+            "您可以",
+            "你可以",
+            "有什么特别想去",
+            "请补充",
+            "上传攻略截图",
+            "高德验证POI",
+        )
+    )
+
+
+def itinerary_day_count(final: dict[str, Any]) -> int:
+    itinerary = final.get("itinerary")
+    days = itinerary.get("days") if isinstance(itinerary, dict) else None
+    return len(days) if isinstance(days, list) else 0
 
 
 def finding(

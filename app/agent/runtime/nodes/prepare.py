@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 from typing import Any
+
+from langchain_core.runnables import RunnableConfig
 
 
 def make_prepare_node(*, db: Any, redis_client: Any, agent_config: Any):
-    async def prepare_node(state: dict[str, Any], store: Any = None, config: Any = None) -> dict[str, Any]:
+    async def prepare_node(state: dict[str, Any], store: Any = None, config: RunnableConfig | None = None) -> dict[str, Any]:
         from app.agent.runtime import builder as runtime_builder
 
         runtime_db = runtime_builder._runtime_dependency(config, runtime_builder._RUNTIME_CONFIG_DB_KEY, db)

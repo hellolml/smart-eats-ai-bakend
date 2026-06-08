@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -29,6 +27,15 @@ def _user_id(runtime_context: dict[str, Any]) -> str:
     return user_id
 
 
+def _runtime_unavailable(ctx: dict[str, Any]) -> str | None:
+    if ctx.get("langgraph_store") is None:
+        return "store_unavailable"
+    user_id = ctx.get("user_id")
+    if not isinstance(user_id, str) or not user_id:
+        return "user_id_unavailable"
+    return None
+
+
 class MemorySearchArgs(BaseModel):
     query: str = Field(..., description="Search query for long-term user memories.")
     top_k: int | None = Field(default=None, description="Maximum number of memories to return.")
@@ -41,6 +48,9 @@ async def _memory_search(
     runtime_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     ctx = runtime_context or {}
+    unavailable = _runtime_unavailable(ctx)
+    if unavailable:
+        return [{"error": unavailable}]
     return await load_user_memories(
         _store(ctx),
         user_id=_user_id(ctx),
@@ -72,6 +82,9 @@ async def _memory_write(
     runtime_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ctx = runtime_context or {}
+    unavailable = _runtime_unavailable(ctx)
+    if unavailable:
+        return {"error": unavailable}
     return await write_user_memory(
         _store(ctx),
         user_id=_user_id(ctx),
@@ -103,6 +116,9 @@ async def _memory_update(
     runtime_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ctx = runtime_context or {}
+    unavailable = _runtime_unavailable(ctx)
+    if unavailable:
+        return {"error": unavailable}
     return await update_user_memory(
         _store(ctx),
         user_id=_user_id(ctx),
@@ -130,6 +146,9 @@ async def _memory_forget(
     runtime_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ctx = runtime_context or {}
+    unavailable = _runtime_unavailable(ctx)
+    if unavailable:
+        return {"error": unavailable}
     return await forget_user_memory(
         _store(ctx),
         user_id=_user_id(ctx),
@@ -160,7 +179,9 @@ async def _source_event_search(
     ctx = runtime_context or {}
     session_id = ctx.get("session_id")
     if not isinstance(session_id, str) or not session_id:
-        raise RuntimeError("session_id unavailable")
+        return [{"error": "session_id_unavailable"}]
+    if ctx.get("langgraph_store") is None:
+        return [{"error": "store_unavailable"}]
     return await search_source_events(
         _store(ctx),
         thread_id=session_id,
