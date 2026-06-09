@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { History, Plus, Send, Square } from 'lucide-react';
+import { Clock3, Plus, Send, Square } from 'lucide-react';
 import { Header } from '../components/Layout';
 import { ImagePreviewModal, ImageThumb } from '../components/ImageThumb';
 import type { AgentMode, Message, PendingImage, PlanInfo } from '../types';
@@ -41,11 +41,11 @@ export function AgentScreen(props: {
         title={isTravel ? '旅行计划助手' : '吃点啥助手'}
         subtitle="AI 可能会出错，请核对重要信息。"
         onBack={props.onBack}
-        right={!isTravel ? (
+        right={(
           <button onClick={props.onHistory} className="grid h-9 w-9 place-items-center rounded-full active:scale-95" aria-label="历史会话">
-            <History size={19} />
+            <Clock3 size={19} />
           </button>
-        ) : undefined}
+        )}
       />
       <div className="flex-1 space-y-4 overflow-y-auto px-5 pb-40 no-scrollbar">
         {props.messages.map((message) => (

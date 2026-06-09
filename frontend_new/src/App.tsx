@@ -912,10 +912,11 @@ export default function App() {
           <Page active={screen === 'chatHistory'}>
             <ChatHistoryScreen
               active={screen === 'chatHistory'}
+              mode={mode}
               onBack={() => go('agent')}
               onAuthExpired={() => handleAuthFailure(new ApiError('登录状态已失效，请重新登录', { status: 401 }))}
               openSession={({ session, mode: nextMode, messages: loadedMessages }) => {
-                setMode('eat');
+                setMode(nextMode);
                 setActiveSessionId(session.session_id);
                 setDraftPlan(null);
                 clearPendingImages();

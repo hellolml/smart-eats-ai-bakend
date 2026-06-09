@@ -10,6 +10,7 @@ type HistorySession = ChatSessionSummary;
 
 export function ChatHistoryScreen(props: {
   active: boolean;
+  mode: AgentMode;
   onBack: () => void;
   openSession: (payload: { session: HistorySession; mode: AgentMode; messages: Message[] }) => void;
   onAuthExpired: () => void;
@@ -24,6 +25,8 @@ export function ChatHistoryScreen(props: {
   const [openingId, setOpeningId] = React.useState('');
   const [deletingId, setDeletingId] = React.useState('');
   const limit = 20;
+  const scene = props.mode === 'travel' ? 'travel_planner' : 'eat';
+  const title = props.mode === 'travel' ? '旅行历史' : '美食历史';
 
   React.useEffect(() => {
     onAuthExpiredRef.current = props.onAuthExpired;
@@ -34,7 +37,7 @@ export function ChatHistoryScreen(props: {
     if (!props.active) return;
     setLoading(true);
     try {
-      const result = await appApi.chat.listSessions({ limit, offset: nextOffset, q: query.trim() || undefined, scene: 'eat' });
+      const result = await appApi.chat.listSessions({ limit, offset: nextOffset, q: query.trim() || undefined, scene });
       setSessions((prev) => append ? [...prev, ...result.sessions] : result.sessions);
       setOffset(result.offset + result.sessions.length);
       setHasMore(result.sessions.length >= result.limit);
@@ -47,7 +50,7 @@ export function ChatHistoryScreen(props: {
     } finally {
       setLoading(false);
     }
-  }, [query, props.active]);
+  }, [query, props.active, scene]);
 
   React.useEffect(() => {
     if (!props.active) return;
@@ -67,7 +70,7 @@ export function ChatHistoryScreen(props: {
         }));
       openLoadedSessionRef.current({
         session,
-        mode: 'eat',
+        mode: props.mode,
         messages: mapped.length ? mapped : [message('assistant', '这次会话暂时没有可展示的消息。')]
       });
     } catch (error) {
@@ -103,7 +106,7 @@ export function ChatHistoryScreen(props: {
 
   return (
     <>
-      <Header title="历史会话" subtitle="查看、切换或删除你的 Agent 对话" onBack={props.onBack} />
+      <Header title={title} subtitle="查看、切换或删除你的 Agent 对话" onBack={props.onBack} />
       <div className="shrink-0 px-5 pb-3">
         <label className="flex h-11 items-center gap-2 rounded-2xl bg-gray-50 px-3 text-sm text-gray-500">
           <Search size={17} />
@@ -125,7 +128,7 @@ export function ChatHistoryScreen(props: {
             <div>
               <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gray-50 text-gray-500"><MessageCircle size={24} /></div>
               <p className="mt-4 text-sm font-black">暂无历史会话</p>
-              <p className="mt-1 text-xs text-gray-400">新的旅行和美食对话会出现在这里。</p>
+              <p className="mt-1 text-xs text-gray-400">{props.mode === 'travel' ? '新的旅行计划对话会出现在这里。' : '新的美食对话会出现在这里。'}</p>
             </div>
           </div>
         ) : (
@@ -178,8 +181,10 @@ export function ChatHistoryScreen(props: {
   );
 }
 
-function sceneLabel(_session: HistorySession) {
-  return '美食';
+function sceneLabel(session: HistorySession) {
+  if (session.scene === 'travel_planner') return '旅行';
+  if (session.scene === 'eat') return '美食';
+  return '会话';
 }
 
 function relativeTime(value: string) {
