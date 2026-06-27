@@ -103,6 +103,8 @@ class JsonReporter:
             trials = []
             for t in task_result.trials:
                 failure_class = self._classify_failure(t.trace.error_reason, t.trace.error, t.threshold_failures)
+                if failure_class == "none" and t.outcome_failures:
+                    failure_class = "outcome"
                 trial_data = {
                     "case_id": t.case_id,
                     "trial_number": t.trial_number,

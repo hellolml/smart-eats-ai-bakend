@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,7 @@ def verify_outcomes(case: EvalCase, trace: EvalTrace) -> list[OutcomeVerificatio
         _verify_schema_state(expectations.get("expected_final_state"), trace),
         _verify_tool_result_shape(expectations.get("expected_tool_result_shape"), trace),
         _verify_side_effect_guard(expectations.get("forbidden_db_effects"), trace),
+        _verify_business_outcome(expectations.get("business_outcome"), case, trace),
         _verify_db_effect_contract(expectations.get("expected_db_effects"), trace),
     ]
     return [item for item in results if item is not None]
@@ -133,6 +135,146 @@ def _verify_db_effect_contract(expected: Any, trace: EvalTrace) -> OutcomeVerifi
             "trace_run_id": trace.run_id,
         },
     )
+
+
+def _verify_business_outcome(expected: Any, case: EvalCase, trace: EvalTrace) -> OutcomeVerificationResult | None:
+    if not isinstance(expected, dict):
+        return None
+
+    final_json = trace.final_json if isinstance(trace.final_json, dict) else {}
+    text = trace.searchable_text
+    failures: list[dict[str, Any]] = []
+    total_checks = 0
+
+    def check(condition: bool, failure: dict[str, Any]) -> None:
+        nonlocal total_checks
+        total_checks += 1
+        if not condition:
+            failures.append(failure)
+
+    for field_name in expected.get("required_final_fields", []):
+        check(
+            bool(_get_path(final_json, str(field_name))),
+            {"field": field_name, "reason": "missing_final_field"},
+        )
+
+    allowed_states = expected.get("allowed_states")
+    if allowed_states:
+        actual_state = _infer_business_state(final_json, case.scene.value)
+        check(
+            actual_state in set(str(item) for item in allowed_states),
+            {
+                "field": "state",
+                "expected": allowed_states,
+                "actual": actual_state,
+                "reason": "unexpected_travel_state" if case.scene.value == "travel_planner" else "unexpected_state",
+            },
+        )
+
+    recommendation_type = expected.get("recommendation_type")
+    if recommendation_type:
+        actual_types = {str(rec.get("type")) for rec in trace.recommendations if isinstance(rec, dict) and rec.get("type")}
+        check(
+            str(recommendation_type) in actual_types,
+            {
+                "field": "recommendations.type",
+                "expected": recommendation_type,
+                "actual": sorted(actual_types),
+                "reason": "recommendation_type_mismatch",
+            },
+        )
+
+    for field_name in expected.get("required_fields", []):
+        check(
+            any(bool(_get_path(rec, str(field_name))) for rec in trace.recommendations if isinstance(rec, dict)),
+            {"field": f"recommendations.{field_name}", "reason": "missing_recommendation_field"},
+        )
+
+    for keyword in expected.get("must_contain", []):
+        check(
+            str(keyword) in text,
+            {"keyword": keyword, "reason": "missing_required_text"},
+        )
+
+    if "max_price" in expected:
+        max_price = _to_float(expected.get("max_price"))
+        observed_prices = _extract_prices(trace)
+        check(
+            max_price is not None and bool(observed_prices) and min(observed_prices) <= max_price,
+            {
+                "field": "price",
+                "expected_max": expected.get("max_price"),
+                "actual": observed_prices,
+                "reason": "price_exceeds_max_or_missing",
+            },
+        )
+
+    if total_checks == 0:
+        return OutcomeVerificationResult(
+            verifier="business_outcome_verifier",
+            score=1.0,
+            passed=True,
+            details={"scene": case.scene.value, "checked_fields": []},
+        )
+
+    score = max(0.0, 1.0 - len(failures) / total_checks)
+    return OutcomeVerificationResult(
+        verifier="business_outcome_verifier",
+        score=score,
+        passed=not failures,
+        failures=failures,
+        details={"scene": case.scene.value, "checks": total_checks},
+    )
+
+
+def _infer_business_state(final_json: dict[str, Any], scene: str) -> str | None:
+    state = final_json.get("state")
+    if state:
+        return str(state)
+    if scene == "travel_planner":
+        if final_json.get("map"):
+            return "map_generated"
+        if final_json.get("itinerary"):
+            return "itinerary_generated"
+        if final_json.get("candidates") or final_json.get("places"):
+            return "candidates_ready"
+    return None
+
+
+def _get_path(value: Any, path: str) -> Any:
+    current = value
+    for part in path.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return None
+    return current
+
+
+def _extract_prices(trace: EvalTrace) -> list[float]:
+    prices: list[float] = []
+    for rec in trace.recommendations:
+        if not isinstance(rec, dict):
+            continue
+        for key in ("price", "avg_price", "cost", "budget"):
+            value = _to_float(rec.get(key))
+            if value is not None:
+                prices.append(value)
+    for match in re.finditer(r"(?:人均|约|￥|¥)?\s*(\d+(?:\.\d+)?)\s*(?:元|块)?", trace.searchable_text):
+        value = _to_float(match.group(1))
+        if value is not None:
+            prices.append(value)
+    return prices
+
+
+def _to_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        match = re.search(r"\d+(?:\.\d+)?", value)
+        if match:
+            return float(match.group(0))
+    return None
 
 
 def _contains_key(value: Any, key: str) -> bool:

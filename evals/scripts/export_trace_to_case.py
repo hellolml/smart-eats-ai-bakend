@@ -23,6 +23,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--priority", default="p1", choices=["p0", "p1", "p2"], help="Eval case priority")
     parser.add_argument("--category", default="regression", help="Eval case category")
     parser.add_argument("--owner", default=None, help="Owner/reviewer id")
+    parser.add_argument(
+        "--review-status",
+        default="draft",
+        choices=["draft", "reviewing", "approved", "rejected", "needs_changes", "active", "archived"],
+        help="Initial dataset case review status",
+    )
     parser.add_argument("--eval-database-url", default=None, help="Evaluation database URL")
     return parser.parse_args()
 
@@ -45,7 +51,7 @@ async def main_async() -> int:
                 priority=args.priority,
                 category=args.category,
                 owner=args.owner,
-                review_status="draft",
+                review_status=args.review_status,
             )
             if item is None:
                 print(f"trace not found: {args.run_id}", file=sys.stderr)

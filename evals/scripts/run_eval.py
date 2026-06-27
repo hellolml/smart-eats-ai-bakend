@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="./eval_results", help="Output directory")
     parser.add_argument("--dataset-dir", default="./evals/datasets", help="Dataset directory")
     parser.add_argument("--runner", choices=["live", "fixture"], default="live", help="Evaluation runner")
-    parser.add_argument("--suite", choices=["quick", "full", "live-smoke"], default="full", help="Evaluation suite")
+    parser.add_argument("--suite", default="full", help="Evaluation suite or persisted dataset name")
     parser.add_argument("--fixture-path", default="./evals/datasets/fixture_traces.json", help="Fixture trace file")
     parser.add_argument("--case-ids", default=None, help="Comma-separated case IDs to filter")
     parser.add_argument("--categories", default=None, help="Comma-separated categories to filter")
@@ -70,6 +70,7 @@ def main() -> None:
         include_llm_judge=args.include_llm_judge,
         outcome_verify=args.outcome_verify,
         dataset_version=args.dataset_version,
+        eval_database_url=args.eval_database_url,
     )
 
     harness = EvalHarness(config)

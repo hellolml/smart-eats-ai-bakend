@@ -40,7 +40,9 @@ evaluators:
       - answer_relevance
       - actionability
       - hallucination_control
-      - constraint_adherence_explained
+      - constraint_adherence
+      - tool_call_reasonableness
+      - safety_compliance
 
 datasets:
   - suite: "quick"

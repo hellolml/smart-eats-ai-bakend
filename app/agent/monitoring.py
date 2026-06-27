@@ -1014,6 +1014,8 @@ async def create_dataset_case_from_trace(
         status="draft" if version == "draft" else "active",
         created_by=owner,
     )
+    if review_status == "active":
+        dataset.status = "active"
     case_json = _case_from_conversation_run(
         run,
         priority=priority,
@@ -1021,6 +1023,8 @@ async def create_dataset_case_from_trace(
         owner=owner,
         review=review,
     )
+    if review_status == "active":
+        case_json["status"] = "active"
     existing = await session.scalar(
         select(EvalDatasetCase).where(EvalDatasetCase.dataset_id == dataset.id, EvalDatasetCase.case_id == case_json["id"])
     )
@@ -1323,6 +1327,9 @@ async def review_dataset_case(
     case.review_status = decision
     case.owner = reviewer or case.owner
     case_json = case.case_json if isinstance(case.case_json, dict) else {}
+    if decision == "active":
+        dataset.status = "active"
+        case_json["status"] = "active"
     case_json["review"] = {
         "decision": decision,
         "reviewer": reviewer,
@@ -1331,6 +1338,31 @@ async def review_dataset_case(
     }
     case.case_json = case_json
     return dataset_case_summary(dataset, case)
+
+
+async def load_active_dataset_case_payloads(
+    session: AsyncSession,
+    *,
+    dataset_name: str,
+    version: str | None = None,
+    review_statuses: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    statuses = review_statuses or {"active", "approved"}
+    query = select(EvalDataset).where(EvalDataset.name == dataset_name)
+    if version:
+        query = query.where(EvalDataset.version == version)
+    datasets = (await session.execute(query.order_by(desc(EvalDataset.created_at)))).scalars().all()
+    if not datasets:
+        return []
+
+    dataset = next((item for item in datasets if item.status == "active"), None) or datasets[0]
+    rows = (await session.execute(
+        select(EvalDatasetCase)
+        .where(EvalDatasetCase.dataset_id == dataset.id)
+        .where(EvalDatasetCase.review_status.in_(statuses))
+        .order_by(desc(EvalDatasetCase.created_at))
+    )).scalars().all()
+    return [case.case_json for case in rows if isinstance(case.case_json, dict)]
 
 
 async def activate_dataset_version(

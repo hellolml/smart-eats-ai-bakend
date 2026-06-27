@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 
@@ -10,10 +12,12 @@ from evals.adapters.agent_runner import AgentRunner
 from evals.adapters.sse_adapter import SSEAdapter
 from evals.adapters.trace import EvalTrace, StepTrace
 from evals.datasets.eval_case import Category, EvalCase, Scene
+from evals.evaluators.deepeval_judge_evaluator import DeepEvalJudgeEvaluator
 from evals.evaluators.constraint_evaluator import ConstraintEvaluator
 from evals.evaluators.efficiency_evaluator import EfficiencyEvaluator
 from evals.evaluators.intent_evaluator import IntentEvaluator
 from evals.evaluators.safety_evaluator import SafetyEvaluator
+from evals.outcomes import verify_outcomes
 from evals.reporters.reporters import JsonReporter
 from evals.runners.harness import EvalHarness, HarnessConfig, TaskResult, TrialResult, EvalReport
 from evals.scripts.check_thresholds import check_thresholds
@@ -374,6 +378,155 @@ def test_thresholds_block_p0_and_safety_scoped_failures():
     assert "p0:unsafe-p0" in failure_metrics
     assert "category:safety:safety_score" in failure_metrics
     assert "category:safety:no_leak" in failure_metrics
+
+
+def test_business_outcome_verifier_checks_eat_out_recommendations():
+    case = EvalCase(
+        id="food-outcome",
+        category=Category.NORMAL,
+        scene=Scene.EAT_OUT,
+        task="静安寺附近火锅，人均100",
+        expectations={
+            "business_outcome": {
+                "recommendation_type": "restaurant",
+                "required_fields": ["title", "reason", "price"],
+                "must_contain": ["火锅", "静安寺"],
+                "max_price": 100,
+            }
+        },
+    )
+    trace = EvalTrace(
+        run_id="r1",
+        case_id=case.id,
+        trial_number=0,
+        final_json={
+            "recommendations": [{
+                "type": "restaurant",
+                "title": "静安寺火锅",
+                "reason": "步行可达，人均约88元",
+                "price": 88,
+            }]
+        },
+    )
+
+    results = verify_outcomes(case, trace)
+
+    business = next(result for result in results if result.verifier == "business_outcome_verifier")
+    assert business.passed
+    assert business.score == 1.0
+
+
+def test_business_outcome_verifier_flags_route_and_travel_failures():
+    route_case = EvalCase(
+        id="route-outcome",
+        category=Category.NORMAL,
+        scene=Scene.ROUTE,
+        task="从静安寺到外滩怎么走",
+        expectations={"business_outcome": {"required_final_fields": ["route", "duration_minutes"]}},
+    )
+    travel_case = EvalCase(
+        id="travel-outcome",
+        category=Category.NORMAL,
+        scene=Scene.TRAVEL,
+        task="成都两日游",
+        expectations={"business_outcome": {"allowed_states": ["candidates_ready", "itinerary_generated"]}},
+    )
+
+    route_result = verify_outcomes(route_case, EvalTrace(
+        run_id="r1",
+        case_id=route_case.id,
+        trial_number=0,
+        final_json={"recommendations": [{"type": "note", "title": "建议坐地铁"}]},
+    ))[0]
+    travel_result = verify_outcomes(travel_case, EvalTrace(
+        run_id="r2",
+        case_id=travel_case.id,
+        trial_number=0,
+        final_json={"state": "fallback", "recommendations": []},
+    ))[0]
+
+    assert not route_result.passed
+    assert route_result.failures[0]["reason"] == "missing_final_field"
+    assert not travel_result.passed
+    assert travel_result.failures[0]["reason"] == "unexpected_travel_state"
+
+
+def test_deepeval_judge_outputs_each_rubric_dimension(monkeypatch):
+    monkeypatch.setenv("DEEPEVAL_JUDGE_ENABLED", "true")
+
+    class FakeGEval:
+        def __init__(self, name, criteria, evaluation_params, threshold):
+            self.name = name
+            self.criteria = criteria
+            self.evaluation_params = evaluation_params
+            self.threshold = threshold
+            self.score = None
+            self.reason = None
+
+        def measure(self, test_case):
+            self.score = 0.8 if self.name != "hallucination_control" else 0.9
+            self.reason = f"{self.name} ok"
+
+    class FakeLLMTestCase:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_metrics = types.ModuleType("deepeval.metrics")
+    fake_metrics.GEval = FakeGEval
+    fake_test_case = types.ModuleType("deepeval.test_case")
+    fake_test_case.LLMTestCase = FakeLLMTestCase
+    fake_test_case.SingleTurnParams = types.SimpleNamespace(
+        INPUT="input",
+        ACTUAL_OUTPUT="actual_output",
+        EXPECTED_OUTPUT="expected_output",
+    )
+    monkeypatch.setitem(sys.modules, "deepeval", types.ModuleType("deepeval"))
+    monkeypatch.setitem(sys.modules, "deepeval.metrics", fake_metrics)
+    monkeypatch.setitem(sys.modules, "deepeval.test_case", fake_test_case)
+
+    trace = EvalTrace(
+        run_id="r1",
+        case_id="judge-case",
+        trial_number=0,
+        final_json={"raw_text": "推荐静安寺火锅，人均88元。"},
+    )
+    case = EvalCase(
+        id="judge-case",
+        category=Category.NORMAL,
+        scene=Scene.EAT_OUT,
+        task="静安寺附近火锅",
+        expectations={"output": {"must_contain": ["火锅"]}},
+    )
+
+    scores = DeepEvalJudgeEvaluator().evaluate(case, trace)
+
+    expected_dims = {
+        "answer_relevance",
+        "actionability",
+        "hallucination_control",
+        "constraint_adherence",
+        "tool_call_reasonableness",
+        "safety_compliance",
+    }
+    assert expected_dims.issubset(scores)
+    assert scores["llm_judge_skipped"] == 0.0
+    assert set(trace.judge_scores) == expected_dims
+    assert all(trace.judge_reasons[dim].endswith("ok") for dim in expected_dims)
+    assert trace.judge_skipped_reason is None
+
+
+def test_deepeval_judge_skipped_does_not_emit_quality_scores(monkeypatch):
+    monkeypatch.setenv("DEEPEVAL_JUDGE_ENABLED", "false")
+
+    trace = EvalTrace(run_id="r1", case_id="judge-skip", trial_number=0)
+    scores = DeepEvalJudgeEvaluator().evaluate(
+        EvalCase(id="judge-skip", category=Category.NORMAL, scene=Scene.CHAT, task="你好"),
+        trace,
+    )
+
+    assert scores == {"llm_judge_skipped": 1.0}
+    assert trace.judge_scores == {}
+    assert trace.judge_skipped_reason
 
 
 @pytest.mark.asyncio

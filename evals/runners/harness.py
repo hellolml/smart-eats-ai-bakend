@@ -113,6 +113,7 @@ class HarnessConfig:
     include_llm_judge: bool = False
     outcome_verify: bool = False
     dataset_version: str | None = None
+    eval_database_url: str | None = None
     thresholds: dict[str, float] = field(default_factory=lambda: {
         "task_success": 0.80,
         "intent_accuracy": 0.90,
@@ -180,7 +181,7 @@ class EvalHarness:
 
         # 加载用例
         if cases is None:
-            cases = self._load_cases(suite=self.config.suite)
+            cases = await self._load_cases_for_run(suite=self.config.suite)
 
         # 筛选
         if case_ids:
@@ -301,6 +302,58 @@ class EvalHarness:
         )
 
         return report
+
+    async def _load_cases_for_run(self, suite: str | None = None) -> list[EvalCase]:
+        suite_name = suite or self.config.suite
+        static_suites = {"quick", "full", "live-smoke"}
+        cases = self._load_cases(suite=suite_name) if suite_name in static_suites else []
+        should_load_persisted = suite_name not in static_suites or bool(self.config.eval_database_url)
+        persisted = await self._load_persisted_cases(suite_name) if should_load_persisted else []
+        if persisted:
+            seen = {case.id for case in cases}
+            cases.extend(case for case in persisted if case.id not in seen)
+        if not cases:
+            raise ValueError(f"No eval cases loaded for suite={suite_name}")
+        return cases
+
+    async def _load_persisted_cases(self, dataset_name: str) -> list[EvalCase]:
+        try:
+            from app.agent.monitoring import load_active_dataset_case_payloads
+            from evals.persistence.postgres import EvalPersistenceStore, resolve_eval_database_url
+
+            database_url = resolve_eval_database_url(self.config.eval_database_url)
+            if not database_url:
+                return []
+            store = EvalPersistenceStore(database_url)
+            try:
+                await store.init_schema()
+                async with store.session() as session:
+                    payloads = await load_active_dataset_case_payloads(
+                        session,
+                        dataset_name=dataset_name,
+                        version=self.config.dataset_version,
+                    )
+                return [self._eval_case_from_persisted_payload(payload) for payload in payloads]
+            finally:
+                await store.close()
+        except Exception as exc:
+            logger.warning("Failed to load persisted eval dataset %s: %s", dataset_name, exc)
+            return []
+
+    def _eval_case_from_persisted_payload(self, payload: dict[str, Any]) -> EvalCase:
+        allowed = {
+            "id",
+            "category",
+            "scene",
+            "task",
+            "initial_context",
+            "expectations",
+            "scoring",
+            "tags",
+            "priority",
+            "difficulty",
+        }
+        return EvalCase.from_dict({key: value for key, value in payload.items() if key in allowed})
 
     def _evaluate_case(self, case: EvalCase, trace: EvalTrace) -> dict[str, float]:
         """对一次试验执行所有评测器"""
@@ -492,6 +545,7 @@ class EvalHarness:
             "by_error_reason": {},
             "by_case": {},
             "by_metric": {},
+            "by_outcome_verifier": {},
             "by_scene": {},
             "by_category": {},
             "by_tool": {},
@@ -502,7 +556,7 @@ class EvalHarness:
             case = task_result.case
             case_failed = False
             for trial in task_result.trials:
-                trial_failed = trial.weighted_score < 0.5
+                trial_failed = trial.weighted_score < 0.5 or bool(trial.outcome_failures)
                 if trial_failed:
                     case_failed = True
                 failure_class = self._classify_failure(
@@ -525,6 +579,9 @@ class EvalHarness:
                     metric = failure.get("metric")
                     if metric:
                         summary["by_metric"][metric] = summary["by_metric"].get(metric, 0) + 1
+                for failure in trial.outcome_failures:
+                    verifier = failure.get("verifier") or "unknown"
+                    summary["by_outcome_verifier"][verifier] = summary["by_outcome_verifier"].get(verifier, 0) + 1
             if case_failed or task_result.success_rate < 1.0:
                 summary["by_case"][case.id] = {
                     "success_rate": task_result.success_rate,

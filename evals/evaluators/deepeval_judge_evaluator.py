@@ -6,7 +6,7 @@ import os
 from evals.adapters.trace import EvalTrace
 from evals.datasets.eval_case import EvalCase
 from evals.evaluators.base import BaseEvaluator
-from evals.rubric import get_rubric_version
+from evals.rubric import get_dimension_description, get_dimension_rubric, get_rubric_dimensions, get_rubric_version
 
 
 class DeepEvalJudgeEvaluator(BaseEvaluator):
@@ -19,6 +19,7 @@ class DeepEvalJudgeEvaluator(BaseEvaluator):
     def __init__(self, threshold: float = 0.7):
         self.threshold = threshold
         self.rubric_version = get_rubric_version()
+        self.dimensions = get_rubric_dimensions()
 
     @property
     def name(self) -> str:
@@ -41,39 +42,41 @@ class DeepEvalJudgeEvaluator(BaseEvaluator):
             actual_output=trace.searchable_text,
             expected_output=str(case.expectations),
         )
-        metric = GEval(
-            name="SmartEatsQuality",
-            criteria=(
-                "Evaluate whether the Smart-Eats agent answer is relevant, actionable, "
-                "does not hallucinate unsupported facts, and follows the expected constraints."
-            ),
-            evaluation_params=[
-                SingleTurnParams.ACTUAL_OUTPUT,
-                SingleTurnParams.EXPECTED_OUTPUT,
-            ],
-            threshold=self.threshold,
-        )
+        params = [
+            getattr(SingleTurnParams, "INPUT", None),
+            getattr(SingleTurnParams, "ACTUAL_OUTPUT", None),
+            getattr(SingleTurnParams, "EXPECTED_OUTPUT", None),
+        ]
+        evaluation_params = [item for item in params if item is not None]
+
+        scores: dict[str, float] = {}
+        reasons: dict[str, str] = {}
         try:
-            metric.measure(test_case)
+            for dimension in self.dimensions:
+                metric = GEval(
+                    name=dimension,
+                    criteria=self._criteria_for_dimension(dimension),
+                    evaluation_params=evaluation_params,
+                    threshold=self.threshold,
+                )
+                metric.measure(test_case)
+                scores[dimension] = min(1.0, max(0.0, float(metric.score or 0.0)))
+                reasons[dimension] = str(getattr(metric, "reason", "") or "")
         except Exception as exc:
             trace.judge_skipped_reason = f"deepeval measure failed: {exc}"
             return {"llm_judge_skipped": 1.0}
 
-        score = float(metric.score or 0.0)
-        reason = str(getattr(metric, "reason", "") or "")
-        scores = {
-            "answer_relevance": score,
-            "actionability": score,
-            "hallucination_control": score,
-            "constraint_adherence_explained": score,
-            "llm_judge_skipped": 0.0,
-        }
+        scores["llm_judge_skipped"] = 0.0
         trace.judge_scores = {k: v for k, v in scores.items() if k != "llm_judge_skipped"}
-        trace.judge_reasons = {
-            "answer_relevance": reason,
-            "actionability": reason,
-            "hallucination_control": reason,
-            "constraint_adherence_explained": reason,
-        }
+        trace.judge_reasons = reasons
         trace.judge_skipped_reason = None
         return scores
+
+    def _criteria_for_dimension(self, dimension: str) -> str:
+        return (
+            f"Evaluate only the Smart-Eats answer dimension `{dimension}`.\n"
+            f"Description: {get_dimension_description(dimension)}\n"
+            f"Rubric:\n{get_dimension_rubric(dimension)}\n"
+            "Return a score from 0 to 1 where higher is better. "
+            "If there is insufficient information, assign a conservative score and explain why."
+        )
